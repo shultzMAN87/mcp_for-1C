@@ -41,6 +41,11 @@ COPY mcp-metadata-graph/server_v3_watch_tools.py /app/server_v3_watch_tools.py
 COPY mcp-metadata-graph-neo4j/indexer.py      /app/mcp_metadata_indexer.py
 COPY mcp-metadata-graph-neo4j/metadata_xml.py /app/metadata_xml.py
 COPY mcp-metadata-graph-neo4j/graph_writer.py /app/graph_writer.py
+# PERF-5: прогресс-лог долгих этапов. Импортируется из graph_writer,
+# bsl_parser и bsl_resolver — без этой строки индексер падает на импорте
+# при старте. Та же грабля, что с graph_state.py в Заходе 2 и с
+# query_parser.py в Заходе 3: новый модуль появился, COPY забыли.
+COPY mcp-metadata-graph-neo4j/progress_log.py /app/progress_log.py
 COPY mcp-metadata-graph-neo4j/bsl_parser.py    /app/bsl_parser.py
 COPY mcp-metadata-graph-neo4j/bsl_resolver.py /app/bsl_resolver.py
 COPY mcp-metadata-graph-neo4j/incremental.py  /app/incremental.py

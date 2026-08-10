@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -75,6 +76,8 @@ from bsl_parser import (
     collect_local_names,
 )
 
+
+from progress_log import ProgressLogger, human_sec
 
 log = logging.getLogger(__name__)
 
@@ -1242,6 +1245,9 @@ def build_call_graph(modules: list[ParsedModule], index: Index) -> dict:
     Возвращает dict с module_nodes / callable_nodes / parameter_nodes /
     callsite_nodes / type_nodes / edges / stats.
     """
+    _t_start = time.monotonic()
+    n_procs_total = sum(len(m.procedures) for m in modules)
+
     module_nodes: list[dict] = []
     callable_nodes: list[dict] = []
     parameter_nodes: list[dict] = []
@@ -1322,6 +1328,15 @@ def build_call_graph(modules: list[ParsedModule], index: Index) -> dict:
                     "props": {"position": prm.position},
                 })
 
+    # PERF-5. До Захода 4 build_call_graph не писал в лог ничего до самого
+    # конца. На малой конфигурации это тридцать секунд и незаметно; на
+    # боевой — десятки минут, в течение которых снаружи нельзя отличить
+    # работу от зависания, и диагностика сводится к `docker stats`.
+    log.info("build_call_graph: скелет собран — модулей %d, callable %d, "
+             "параметров %d (за %s)",
+             len(module_nodes), len(callable_nodes), len(parameter_nodes),
+             human_sec(time.monotonic() - _t_start))
+
     # Дозаполняем индекс свежими callable'ами (см. комментарий в 4.6.2).
     fresh_callable_ids = {n["id"] for n in callable_nodes}
     if not index.callable_ids.issuperset(fresh_callable_ids):
@@ -1335,25 +1350,59 @@ def build_call_graph(modules: list[ParsedModule], index: Index) -> dict:
     iteration = 0
     while True:
         iteration += 1
+        _t_iter = time.monotonic()
+
+        # PERF-5: прогресс внутри одного прохода — по процедурам. Один проход
+        # на боевой конфигурации это 230 тысяч процедур и 723 тысячи
+        # callsite'ов, и таких проходов до MAX_ITERATIONS штук.
+        iter_prog = ProgressLogger(
+            log, f"резолв, итерация {iteration}", total=n_procs_total,
+            every_sec=20.0, unit="проц",
+        )
         pass_result = _resolve_pass(
             modules, index, params_by_callable,
             param_types, return_types,
+            progress=iter_prog,
         )
 
         # Монотонно вливаем свежие факты в реестры.
         changed = False
+        n_new_param = 0
+        n_new_return = 0
         for param_id, t in pass_result["param_facts"]:
             if _merge_type_fact(param_types, param_id, t):
                 changed = True
+                n_new_param += 1
         for callable_id, t in pass_result["return_facts"]:
             if _merge_type_fact(return_types, callable_id, t):
                 changed = True
+                n_new_return += 1
+
+        log.info(
+            "build_call_graph: итерация %d/%d за %s — callsites %d "
+            "(resolved %d, unresolved %d); новых типов: параметров %d, "
+            "возвратов %d; реестры: param_types %d, return_types %d",
+            iteration, MAX_ITERATIONS, human_sec(time.monotonic() - _t_iter),
+            len(pass_result["callsite_nodes"]),
+            pass_result["stats_resolved"], pass_result["stats_unresolved"],
+            n_new_param, n_new_return, len(param_types), len(return_types),
+        )
 
         if not changed:
             break
+        # Предупреждаем НА ПОДХОДЕ к пределу, а не по факту его достижения:
+        # по факту делать уже нечего, а за две итерации до — видно, что
+        # реестры не сходятся, и прогон можно не досиживать.
+        if iteration == MAX_ITERATIONS - 1:
+            log.warning(
+                "build_call_graph: следующая итерация последняя "
+                "(MAX_ITERATIONS=%d), а реестры типов ещё растут. Если "
+                "остановка произойдёт по пределу — вывод типов недонасыщен.",
+                MAX_ITERATIONS,
+            )
         if iteration >= MAX_ITERATIONS:
-            log.info("build_call_graph: фикс-пойнт остановлен по MAX_ITERATIONS=%d "
-                     "(реестры ещё росли — возможна недонасыщенность)", MAX_ITERATIONS)
+            log.warning("build_call_graph: фикс-пойнт остановлен по MAX_ITERATIONS=%d "
+                        "(реестры ещё росли — возможна недонасыщенность)", MAX_ITERATIONS)
             break
 
     # ─── 4. Финал: :Type-узлы + :INFERRED_TYPE-рёбра (этап D) ────────
@@ -1416,6 +1465,11 @@ def build_call_graph(modules: list[ParsedModule], index: Index) -> dict:
         "fixpoint_iterations": iteration,
     }
 
+    log.info("build_call_graph: готово за %s — итераций %d, рёбер %d, "
+             "покрытие %.2f%%",
+             human_sec(time.monotonic() - _t_start), iteration, len(edges),
+             stats["resolve_coverage_pct"])
+
     return {
         "module_nodes":    module_nodes,
         "callable_nodes":  callable_nodes,
@@ -1433,6 +1487,7 @@ def _resolve_pass(
     params_by_callable: dict[str, list],
     param_types: dict[str, TypeRef],
     return_types: dict[str, TypeRef],
+    progress=None,
 ) -> dict:
     """
     Один полный проход резолва (внутренность фикс-пойнта).
@@ -1622,6 +1677,15 @@ def _resolve_pass(
                         "dst":   candidate,
                         "props": {},
                     })
+
+            # PERF-5: шаг прогресса — по процедуре, а не по модулю. Модулей
+            # 14 тысяч, процедур 230 тысяч, и на модуле с сотней процедур
+            # шаг по модулю даёт рваную картину.
+            if progress is not None:
+                progress.step(
+                    extra=f"разрешено {stats_resolved}, пробелов "
+                          f"{stats_unresolved - stats_non_config}"
+                )
 
     return {
         "callsite_nodes":   callsite_nodes,

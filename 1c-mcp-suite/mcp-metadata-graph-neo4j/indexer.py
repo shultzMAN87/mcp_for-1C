@@ -22,10 +22,23 @@ Env:
   NEO4J_URL                 http://neo4j:7474
   NEO4J_USER                neo4j
   NEO4J_PASSWORD            (обязательна, дефолта нет)
-  METADATA_FORCE_REINDEX    false                игнорировать оба fingerprint'а
+  METADATA_FORCE_REINDEX    false                игнорировать ОБА fingerprint'а
+  METADATA_FORCE_XML        false                форс только фазы 1 (CFG-3)
+  METADATA_FORCE_BSL        false                форс только фазы 2 (CFG-3)
+  METADATA_FINGERPRINT_STRICT false              fingerprint по содержимому (PERF-3)
   METADATA_CONFIG_NAME      Конфигурация        имя для узла :Configuration
   METADATA_SKIP_BSL         false                пропустить фазу 2 (R&D-режим)
   METADATA_BSL_LOG_LEVEL    (наследует)          отдельный log level для BSL-фазы
+
+CFG-3. Раздельный форс по фазам. Правка в парсере BSL требует переиндексации
+только слоя 2, но METADATA_FORCE_REINDEX гнал обе фазы и заодно переписывал
+слой 1 — на боевой конфигурации это 28 минут впустую. Обход существовал и им
+пользовались: удалить узел :Fingerprint {kind:'bsl_source'} запросом к базе и
+запустить без форса. То, что штатный сценарий делался ручным запросом к
+графу, — само по себе диагноз.
+
+PERF-3. Fingerprint по (путь, размер, mtime) вместо sha256 содержимого; см.
+graph_writer. Обход дерева теперь один на оба расширения, а не два.
 """
 from __future__ import annotations
 
@@ -39,10 +52,12 @@ from pathlib import Path
 # Импорты соседних модулей.
 from metadata_xml import walk_workspace, build_graph
 from graph_writer import (
+    FP_MODE_CONTENT, FP_MODE_STAT,
     Neo4j, clear_code_layer, clear_metadata_layer,
-    fingerprint_get, fingerprint_workspace_files, fingerprint_write,
-    write_code_graph, write_graph,
+    fingerprint_get_meta, fingerprint_matches, fingerprint_workspace_multi,
+    fingerprint_write, write_code_graph, write_graph,
 )
+from progress_log import human_bytes, human_sec
 from bsl_parser import walk_workspace_bsl
 from bsl_resolver import build_call_graph, build_index_from_neo4j
 
@@ -225,19 +240,29 @@ def main() -> int:
     neo4j_pwd = os.environ.get("NEO4J_PASSWORD") or os.environ.get("NEO4J_PASS")
     if not neo4j_pwd:
         raise SystemExit("NEO4J_PASSWORD не задан — индексация не запускается (SEC-2)")
-    force     = _env_bool("METADATA_FORCE_REINDEX", False)
+    # CFG-3: METADATA_FORCE_REINDEX сохранён как «обе фазы» для совместимости
+    # с уже написанными скриптами и с docker-compose; поверх него — два
+    # отдельных флага.
+    force_all = _env_bool("METADATA_FORCE_REINDEX", False)
+    force_xml = force_all or _env_bool("METADATA_FORCE_XML", False)
+    force_bsl = force_all or _env_bool("METADATA_FORCE_BSL", False)
+    strict_fp = _env_bool("METADATA_FINGERPRINT_STRICT", False)
     skip_bsl  = _env_bool("METADATA_SKIP_BSL", False)
     cfg_name  = os.environ.get("METADATA_CONFIG_NAME", "Конфигурация")
     bsl_log_level = os.environ.get("METADATA_BSL_LOG_LEVEL", "").strip().upper()
     if bsl_log_level:
         log_bsl.setLevel(bsl_log_level)
 
+    t_total = time.time()
+
     log.info("=" * 60)
     log.info("Индексер метаданных 1С (v3.1, двухфазный)")
     log.info("=" * 60)
     log.info("Источник:        %s", src_dir)
     log.info("Neo4j:           %s", neo4j_url)
-    log.info("METADATA_FORCE_REINDEX: %s", force)
+    log.info("METADATA_FORCE_REINDEX: %s (XML: %s, BSL: %s)",
+             force_all, force_xml, force_bsl)
+    log.info("METADATA_FINGERPRINT_STRICT: %s", strict_fp)
     # Имя переменной в подписи полное: короткое `SKIP_BSL` в логе
     # провоцировало передавать `-e SKIP_BSL=true`, что не работает —
     # проверено на боевом прогоне, где фаза 2 запустилась вопреки намерению.
@@ -256,43 +281,68 @@ def main() -> int:
     neo.wait(timeout=120)
     log.info("  ✓ доступен")
 
-    # ─ Считаем оба fingerprint'а ────────────────────────────
+    # ─ Считаем оба fingerprint'а за один обход дерева (PERF-3) ──────
     log.info("Считаем fingerprint workspace…")
-    t0 = time.time()
-    fp_xml_new = fingerprint_workspace_files(src_dir, ".xml")
-    fp_bsl_new = fingerprint_workspace_files(src_dir, ".bsl")
-    log.info("  ✓ xml=%s…, bsl=%s… (за %.2f с)",
-             fp_xml_new[:8], fp_bsl_new[:8], time.time() - t0)
+    digests, fp_meta = fingerprint_workspace_multi(
+        src_dir, (".xml", ".bsl"), strict=strict_fp,
+    )
+    fp_mode = fp_meta["mode"]
+    fp_xml_new = digests[".xml"]
+    fp_bsl_new = digests[".bsl"]
+    log.info(
+        "  ✓ режим=%s, файлов %d (xml %d, bsl %d), %s, за %s",
+        fp_mode, fp_meta["files"],
+        fp_meta["by_suffix"].get(".xml", 0), fp_meta["by_suffix"].get(".bsl", 0),
+        human_bytes(fp_meta["bytes"]), human_sec(fp_meta["elapsed_sec"]),
+    )
+    log.info("  ✓ xml=%s…, bsl=%s…", fp_xml_new[:8], fp_bsl_new[:8])
+    if fp_mode == FP_MODE_STAT:
+        # PERF-3, обратная сторона режима: копирование выгрузки утилитой,
+        # сохраняющей mtime, останется незамеченным. Свежайший mtime в логе
+        # даёт зацепку — если он старше самой правки, ищите здесь.
+        log.info("  ✓ самый свежий mtime в выгрузке: %s",
+                 time.strftime("%Y-%m-%d %H:%M:%S",
+                               time.localtime(fp_meta["newest_mtime"]))
+                 if fp_meta["newest_mtime"] else "—")
+        log.info("  При сомнениях (копия выгрузки, переключение ветки): "
+                 "METADATA_FINGERPRINT_STRICT=true")
 
-    fp_xml_old = fingerprint_get(neo, "metadata_xml")
-    fp_bsl_old = fingerprint_get(neo, "bsl_source")
+    fp_xml_old = fingerprint_get_meta(neo, "metadata_xml")
+    fp_bsl_old = fingerprint_get_meta(neo, "bsl_source")
 
-    xml_needs_reindex = (fp_xml_old != fp_xml_new) or force
-    bsl_needs_reindex = (fp_bsl_old != fp_bsl_new) or force
+    xml_same, xml_why = fingerprint_matches(fp_xml_old, fp_xml_new, fp_mode)
+    bsl_same, bsl_why = fingerprint_matches(fp_bsl_old, fp_bsl_new, fp_mode)
+
+    xml_needs_reindex = (not xml_same) or force_xml
+    bsl_needs_reindex = (not bsl_same) or force_bsl
 
     if not xml_needs_reindex and not bsl_needs_reindex:
         log.info("Оба fingerprint совпали — данные актуальны, выход.")
-        log.info("Для принудительной переиндексации: METADATA_FORCE_REINDEX=true")
+        log.info("Для принудительной переиндексации: METADATA_FORCE_REINDEX=true "
+                 "(обе фазы), METADATA_FORCE_XML / METADATA_FORCE_BSL (по одной)")
         return 0
 
     # ─ Фаза 1 (XML) ─────────────────────────────────────────
     if xml_needs_reindex:
-        if force and fp_xml_old == fp_xml_new:
-            log.info("XML-fingerprint совпал, но FORCE_REINDEX=true — переиндексация")
-        elif fp_xml_old:
-            log.info("XML-fingerprint изменился (%s… → %s…) — переиндексация",
-                     fp_xml_old[:8], fp_xml_new[:8])
+        if xml_same:
+            log.info("Фаза 1: %s, но форс включён — переиндексация", xml_why)
         else:
-            log.info("XML-fingerprint отсутствует — первая индексация")
+            log.info("Фаза 1: %s — переиндексация", xml_why)
         rc = run_xml_phase(neo, src_dir, cfg_name)
         if rc != 0:
             return rc
         # После clear_metadata_layer Module-узлы исчезли — фаза 2 ОБЯЗАНА пройти.
+        # Это не «заодно», а обязательство: см. PLAN_4_6_2.md «Грабля 3».
+        # CFG-3 не отменяет его — METADATA_FORCE_XML в одиночку всё равно
+        # тянет за собой фазу 2, иначе граф останется без слоя кода.
+        if not bsl_needs_reindex:
+            log_bsl.info("Фаза 2 запускается принудительно: переиндексация XML "
+                         "снесла :Module-узлы, без неё слой кода останется пустым")
         bsl_needs_reindex = True
-        fingerprint_write(neo, fp_xml_new, "metadata_xml")
-        log.info("  xml fingerprint сохранён")
+        fingerprint_write(neo, fp_xml_new, "metadata_xml", mode=fp_mode)
+        log.info("  xml fingerprint сохранён (режим %s)", fp_mode)
     else:
-        log.info("XML-fingerprint совпал — фаза 1 пропущена")
+        log.info("Фаза 1 пропущена: %s", xml_why)
 
     # ─ Фаза 2 (BSL) ─────────────────────────────────────────
     if skip_bsl:
@@ -300,23 +350,22 @@ def main() -> int:
         return 0
 
     if bsl_needs_reindex:
-        if force and fp_bsl_old == fp_bsl_new:
-            log_bsl.info("BSL-fingerprint совпал, но FORCE_REINDEX=true — переиндексация")
-        elif fp_bsl_old:
-            log_bsl.info("BSL-fingerprint изменился (%s… → %s…) — переиндексация",
-                         fp_bsl_old[:8], fp_bsl_new[:8])
+        if bsl_same and force_bsl:
+            log_bsl.info("Фаза 2: %s, но форс включён — переиндексация", bsl_why)
+        elif bsl_same:
+            log_bsl.info("Фаза 2: %s", bsl_why)
         else:
-            log_bsl.info("BSL-fingerprint отсутствует — первая индексация")
+            log_bsl.info("Фаза 2: %s — переиндексация", bsl_why)
         rc = run_bsl_phase(neo, src_dir)
         if rc != 0:
             return rc
-        fingerprint_write(neo, fp_bsl_new, "bsl_source")
-        log_bsl.info("  bsl fingerprint сохранён")
+        fingerprint_write(neo, fp_bsl_new, "bsl_source", mode=fp_mode)
+        log_bsl.info("  bsl fingerprint сохранён (режим %s)", fp_mode)
     else:
-        log_bsl.info("BSL-fingerprint совпал — фаза 2 пропущена")
+        log_bsl.info("Фаза 2 пропущена: %s", bsl_why)
 
     log.info("=" * 60)
-    log.info("✓ Готово!")
+    log.info("✓ Готово! Полный прогон занял %s", human_sec(time.time() - t_total))
     log.info("=" * 60)
     return 0
 

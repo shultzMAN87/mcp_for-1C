@@ -616,8 +616,16 @@ def build_graph(objects: list[MetaObject]) -> dict:
     edges = []
     unresolved_targets: Counter = Counter()
 
-    def add_edge(rel, src_id, dst_id, **props):
-        edges.append({"rel": rel, "src": src_id, "dst": dst_id, "props": props or {}})
+    def add_edge(rel, src_id, dst_id, _src_label=None, **props):
+        # PERF-4: `_src_label` — метка узла-источника. Нужна writer'у, чтобы
+        # подставить MATCH с меткой, а значит, с индексом. Задаётся только
+        # там, где у одного типа ребра источники разных типов (:HAS_ATTRIBUTE
+        # идёт и от :MetadataObject, и от :TabularSection). Подчёркивание в
+        # имени — чтобы не столкнуться с именем свойства ребра из **props.
+        e = {"rel": rel, "src": src_id, "dst": dst_id, "props": props or {}}
+        if _src_label:
+            e["src_label"] = _src_label
+        edges.append(e)
 
     def type_id(t: TypeRef) -> str:
         # Стабильный id для узла типа
@@ -660,7 +668,8 @@ def build_graph(objects: list[MetaObject]) -> dict:
                 "indexing": a.indexing,
                 "parent":  meta_id,
             })
-            add_edge("HAS_ATTRIBUTE", meta_id, a_id, role=a.role)
+            add_edge("HAS_ATTRIBUTE", meta_id, a_id,
+                     _src_label="MetadataObject", role=a.role)
             for t in a.types:
                 resolve_type(t, a_id)
 
@@ -683,7 +692,8 @@ def build_graph(objects: list[MetaObject]) -> dict:
                     "role":    "attribute",
                     "parent":  ts_id,
                 })
-                add_edge("HAS_ATTRIBUTE", ts_id, a_id, role="attribute")
+                add_edge("HAS_ATTRIBUTE", ts_id, a_id,
+                         _src_label="TabularSection", role="attribute")
                 for t in a.types:
                     resolve_type(t, a_id)
 

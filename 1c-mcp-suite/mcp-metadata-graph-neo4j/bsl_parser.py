@@ -63,6 +63,8 @@ from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
 
+from progress_log import ProgressLogger
+
 log = logging.getLogger(__name__)
 
 
@@ -1148,7 +1150,17 @@ def walk_workspace_bsl(
     modules_info = modules_info or {}
     modules: list[ParsedModule] = []
 
-    for bsl_path in sorted(root.rglob("*.bsl")):
+    # PERF-5: на боевой конфигурации это 14 тысяч модулей и 6,6 минуты
+    # без единой строки в логе. Список файлов и так материализуется
+    # сортировкой, поэтому общее число известно заранее — можно показывать
+    # проценты и ETA, а не голый счётчик.
+    paths = sorted(root.rglob("*.bsl"))
+    prog = ProgressLogger(log, "разбор BSL", total=len(paths),
+                          every_sec=20.0, unit="файл") if len(paths) >= 500 else None
+
+    for bsl_path in paths:
+        if prog:
+            prog.step()
         rel = bsl_path.relative_to(root).as_posix()
         classified = classify_bsl_path(rel)
         if not classified:
@@ -1186,4 +1198,6 @@ def walk_workspace_bsl(
             log.warning("Ошибка парсинга %s: %s", rel, e)
             continue
 
+    if prog:
+        prog.done(extra=f"модулей в разборе {len(modules)}")
     return modules

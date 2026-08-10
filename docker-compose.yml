@@ -133,6 +133,19 @@ services:
       # `docker compose up` не передавался, потому что переменной не было в
       # этой секции. Теперь передаётся, а `run --rm -e` продолжает работать.
       - METADATA_FORCE_REINDEX=${METADATA_FORCE_REINDEX:-false}
+      # CFG-3: раздельный форс по фазам. METADATA_FORCE_REINDEX гонит обе,
+      # и правка в парсере BSL заодно переписывала слой 1 — на боевой
+      # конфигурации это 28 минут впустую. Обход существовал (удалить узел
+      # :Fingerprint {kind:'bsl_source'} запросом к Neo4j), но штатный
+      # сценарий не должен требовать ручного запроса к графу.
+      - METADATA_FORCE_XML=${METADATA_FORCE_XML:-false}
+      - METADATA_FORCE_BSL=${METADATA_FORCE_BSL:-false}
+      # PERF-3: fingerprint считается по (путь, размер, mtime). Прежний
+      # подсчёт по содержимому — 56 410 файлов и 1,2 ГБ — занимал 12 минут
+      # ПРИ КАЖДОМ старте, включая старты, где не менялось ничего.
+      # Строгий режим включать при сомнениях: копия выгрузки с сохранённым
+      # mtime, переключение ветки, любое «а точно ли оно увидело правку».
+      - METADATA_FINGERPRINT_STRICT=${METADATA_FINGERPRINT_STRICT:-false}
     depends_on:
       neo4j:
         condition: service_healthy

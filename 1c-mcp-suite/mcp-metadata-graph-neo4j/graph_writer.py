@@ -28,11 +28,14 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Iterable, Optional
+
+from progress_log import ProgressLogger, human_sec
 
 log = logging.getLogger(__name__)
 
@@ -172,6 +175,29 @@ def ensure_schema(neo: Neo4j) -> None:
 # ─── Fingerprint ──────────────────────────────────────────────────────────
 
 
+# PERF-3. Два режима подсчёта fingerprint'а.
+#
+#   FP_MODE_STAT    — по кортежу (путь, размер, mtime_ns). Режим по умолчанию.
+#   FP_MODE_CONTENT — по sha256 содержимого. Прежнее поведение, включается
+#                     флагом METADATA_FINGERPRINT_STRICT=true.
+#
+# Почему сменился умолчательный режим. На боевой выгрузке 56 410 файлов и
+# 1,2 ГБ, и честная сумма по содержимому считалась 12 минут ПРИ КАЖДОМ
+# запуске индексера — включая запуски, где не менялось ничего. Узкое место
+# не в самом хешировании, а в файловых операциях: около 26 мс на файл на
+# виндовом bind-mount. Открывать и читать гигабайт ради ответа на вопрос
+# «изменилось ли хоть что-нибудь» — избыточно: (размер, mtime) отвечает на
+# него столь же надёжно в 99% случаев и стоит одного stat на файл.
+#
+# Оставшийся 1% — копирование выгрузки утилитой, сохраняющей mtime, при
+# котором содержимое отличается, а размер совпал. Ровно для него и оставлен
+# строгий режим. Способ подсчёта пишется в лог и в свойство `mode` узла
+# :Fingerprint, чтобы «почему не переиндексировалось» имело ответ в логе, а
+# не в чьей-то памяти.
+FP_MODE_STAT = "stat"
+FP_MODE_CONTENT = "content"
+
+
 def _sha256_file(p: Path, chunk: int = 65536) -> str:
     h = hashlib.sha256()
     with p.open("rb") as f:
@@ -183,25 +209,119 @@ def _sha256_file(p: Path, chunk: int = 65536) -> str:
     return h.hexdigest()
 
 
-def fingerprint_workspace_files(root: Path, suffix: str) -> str:
+def _iter_files(root: Path):
     """
-    sha256 от отсортированного списка `(relpath, sha256(content))` всех файлов
-    с указанным расширением (например, `.xml` или `.bsl`).
+    Рекурсивный обход `root` через os.scandir, отдаёт (relpath_posix, DirEntry).
 
-    Используется для отдельных fingerprint'ов на слой 1 (XML) и слой 2 (BSL).
+    Почему не `Path.rglob`: rglob создаёт объект Path на каждый элемент и не
+    переиспользует результат stat, который ядро уже отдало при чтении
+    каталога. На 56 тысячах файлов разница заметна. `DirEntry.stat()`
+    кеширован внутри самого DirEntry — второй вызов бесплатен.
+
+    Симлинки не разыменовываются: выгрузка 1С их не содержит, а переход по
+    ним даёт риск зациклиться.
     """
-    items = []
-    suffix = suffix if suffix.startswith(".") else "." + suffix
-    for p in sorted(root.rglob(f"*{suffix}")):
-        rel = p.relative_to(root).as_posix()
-        items.append(f"{rel}\t{_sha256_file(p)}")
-    h = hashlib.sha256("\n".join(items).encode("utf-8"))
-    return h.hexdigest()
+    root_str = str(root)
+    stack = [(root_str, "")]
+    while stack:
+        current, prefix = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                entries = list(it)
+        except OSError as e:            # нет прав, каталог исчез на ходу
+            log.warning("fingerprint: каталог недоступен, пропускаем: %s (%s)",
+                        current, e)
+            continue
+        for entry in entries:
+            rel = f"{prefix}{entry.name}"
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append((entry.path, rel + "/"))
+                elif entry.is_file(follow_symlinks=False):
+                    yield rel, entry
+            except OSError:             # файл исчез между scandir и stat
+                continue
 
 
-def fingerprint_workspace(root: Path) -> str:
-    """Backward-compat: sha256 от всех XML. См. fingerprint_workspace_files."""
-    return fingerprint_workspace_files(root, ".xml")
+def fingerprint_workspace_multi(
+    root: Path,
+    suffixes: Iterable[str] = (".xml", ".bsl"),
+    strict: bool = False,
+) -> tuple[dict[str, str], dict]:
+    """
+    Считает fingerprint'ы сразу по нескольким расширениям за ОДИН обход дерева.
+
+    Раньше индексер вызывал `fingerprint_workspace_files` дважды — по .xml и
+    по .bsl, — то есть дважды обходил те же 56 тысяч файлов. Здесь обход
+    один, файлы раскладываются по расширениям на лету.
+
+    Возвращает `({suffix: hexdigest}, meta)`, где meta содержит:
+      mode          — FP_MODE_STAT | FP_MODE_CONTENT
+      files         — сколько файлов вошло в подсчёт (по всем расширениям)
+      bytes         — суммарный размер этих файлов
+      elapsed_sec   — сколько занял подсчёт
+      by_suffix     — {suffix: количество файлов}
+      newest_mtime  — максимальный mtime среди учтённых файлов (для диагностики
+                      случая «скопировали выгрузку, mtime у всех одинаковый»)
+    """
+    t0 = time.monotonic()
+    norm = [(s if s.startswith(".") else "." + s).lower() for s in suffixes]
+    items: dict[str, list[str]] = {s: [] for s in norm}
+    total_bytes = 0
+    newest_mtime = 0.0
+
+    for rel, entry in _iter_files(root):
+        low = rel.lower()
+        for suf in norm:
+            if low.endswith(suf):
+                try:
+                    st = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                total_bytes += st.st_size
+                newest_mtime = max(newest_mtime, st.st_mtime)
+                if strict:
+                    items[suf].append(f"{rel}\t{_sha256_file(Path(entry.path))}")
+                else:
+                    # st_mtime_ns, а не st_mtime: float-секунды на некоторых
+                    # ФС теряют точность до 2 с, и правка, сделанная быстрее,
+                    # осталась бы незамеченной.
+                    items[suf].append(f"{rel}\t{st.st_size}\t{st.st_mtime_ns}")
+                break
+
+    mode = FP_MODE_CONTENT if strict else FP_MODE_STAT
+    digests = {}
+    for suf, lines in items.items():
+        lines.sort()
+        h = hashlib.sha256("\n".join(lines).encode("utf-8"))
+        digests[suf] = h.hexdigest()
+
+    meta = {
+        "mode":         mode,
+        "files":        sum(len(v) for v in items.values()),
+        "bytes":        total_bytes,
+        "elapsed_sec":  time.monotonic() - t0,
+        "by_suffix":    {s: len(v) for s, v in items.items()},
+        "newest_mtime": newest_mtime,
+    }
+    return digests, meta
+
+
+def fingerprint_workspace_files(root: Path, suffix: str, strict: bool = False) -> str:
+    """
+    Fingerprint по одному расширению. Обёртка над `fingerprint_workspace_multi`.
+
+    Сигнатура сохранена ради существующих вызовов; `strict=True` возвращает
+    прежнее поведение (sha256 по содержимому).
+    """
+    digests, _ = fingerprint_workspace_multi(root, [suffix], strict=strict)
+    key = suffix if suffix.startswith(".") else "." + suffix
+    return digests[key.lower()]
+
+
+def fingerprint_workspace(root: Path, strict: bool = False) -> str:
+    """Backward-compat: fingerprint по всем XML. См. fingerprint_workspace_files."""
+    return fingerprint_workspace_files(root, ".xml", strict=strict)
 
 
 def fingerprint_get(neo: Neo4j, kind: str = "metadata_xml") -> Optional[str]:
@@ -212,13 +332,57 @@ def fingerprint_get(neo: Neo4j, kind: str = "metadata_xml") -> Optional[str]:
     return rows[0]["v"] if rows else None
 
 
-def fingerprint_write(neo: Neo4j, value: str, kind: str = "metadata_xml") -> None:
+def fingerprint_get_meta(neo: Neo4j, kind: str = "metadata_xml") -> Optional[dict]:
+    """
+    Читает fingerprint вместе со способом подсчёта.
+
+    Возвращает `{"value": str, "mode": str}` или None, если узла нет.
+    У узлов, записанных до PERF-3, свойства `mode` нет — считаем их
+    посчитанными по содержимому, потому что так и было.
+    """
+    rows = neo.rows(
+        "MATCH (n:Fingerprint {kind: $kind}) RETURN n.value AS v, n.mode AS m",
+        {"kind": kind},
+    )
+    if not rows:
+        return None
+    return {"value": rows[0]["v"], "mode": rows[0]["m"] or FP_MODE_CONTENT}
+
+
+def fingerprint_matches(
+    old: Optional[dict], new_value: str, new_mode: str,
+) -> tuple[bool, str]:
+    """
+    Сравнивает сохранённый fingerprint с новым. Возвращает (совпал, причина).
+
+    Значения, посчитанные разными способами, несравнимы: сумма по содержимому
+    и сумма по (размер, mtime) — разные величины, и их несовпадение ничего не
+    говорит об изменении файлов. Поэтому смена режима трактуется как «не
+    совпал» с отдельной формулировкой: одна переиндексация после смены
+    METADATA_FINGERPRINT_STRICT ожидаема и не является дефектом.
+    """
+    if old is None:
+        return False, "fingerprint отсутствует — первая индексация"
+    if old.get("mode") != new_mode:
+        return False, (
+            f"способ подсчёта fingerprint сменился ({old.get('mode')} → {new_mode}) — "
+            f"значения несравнимы, переиндексация один раз ожидаема"
+        )
+    if old.get("value") != new_value:
+        return False, (
+            f"fingerprint изменился ({(old.get('value') or '')[:8]}… → {new_value[:8]}…)"
+        )
+    return True, "fingerprint совпал"
+
+
+def fingerprint_write(neo: Neo4j, value: str, kind: str = "metadata_xml",
+                      mode: str = FP_MODE_CONTENT) -> None:
     neo.query(
         """
         MERGE (n:Fingerprint {kind: $kind})
-        SET n.value = $value, n.updated_at = timestamp()
+        SET n.value = $value, n.mode = $mode, n.updated_at = timestamp()
         """,
-        {"kind": kind, "value": value},
+        {"kind": kind, "value": value, "mode": mode},
     )
 
 
@@ -292,6 +456,19 @@ def _chunks(seq, size):
         yield buf
 
 
+# PERF-5. Порог, ниже которого писатель узлов молчит. На малой конфигурации
+# (69 объектов) прогресс-строки только зашумляют лог; на боевой этап записи
+# идёт минутами, и без них снаружи не отличить работу от зависания.
+PROGRESS_MIN_ITEMS = 5000
+
+
+def _node_progress(label: str, total: int, enabled: bool = True):
+    if not enabled or total < PROGRESS_MIN_ITEMS:
+        return None
+    return ProgressLogger(log, label, total=total, every_sec=20.0,
+                          check_every=1, unit="узл")
+
+
 def _safe_label(s: str) -> str:
     """Очищаем kind_eng для использования как метки Neo4j (буквы/цифры/_)."""
     out = []
@@ -301,7 +478,8 @@ def _safe_label(s: str) -> str:
     return "".join(out) or "MetadataObject"
 
 
-def write_meta_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int:
+def write_meta_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500,
+                     log_progress: bool = True) -> int:
     """
     Узлы метаобъектов. Двойная метка :MetadataObject + :<KindEng> (Catalog,
     Document, ...). Дополнительная метка :KindRu (Справочник, Документ) для
@@ -313,6 +491,7 @@ def write_meta_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int:
     for n in nodes:
         by_kind.setdefault(n["kind_eng"], []).append(n)
 
+    prog = _node_progress("узлы :MetadataObject", len(nodes), log_progress)
     total = 0
     for kind_eng, group in by_kind.items():
         label_eng = _safe_label(kind_eng)
@@ -375,10 +554,15 @@ def write_meta_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int:
                 })
             neo.query(cypher, {"rows": rows})
             total += len(rows)
+            if prog:
+                prog.step(len(rows))
+    if prog:
+        prog.done()
     return total
 
 
-def write_attribute_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int:
+def write_attribute_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500,
+                          log_progress: bool = True) -> int:
     cypher = (
         "UNWIND $rows AS r "
         "MERGE (n:Attribute {id: r.id}) "
@@ -386,6 +570,7 @@ def write_attribute_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> in
         "    n.role = r.role, n.is_master = r.is_master, "
         "    n.indexing = r.indexing, n.parent = r.parent"
     )
+    prog = _node_progress("узлы :Attribute", len(nodes), log_progress)
     total = 0
     for chunk in _chunks(nodes, batch):
         rows = [{
@@ -399,6 +584,10 @@ def write_attribute_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> in
         } for n in chunk]
         neo.query(cypher, {"rows": rows})
         total += len(rows)
+        if prog:
+            prog.step(len(rows))
+    if prog:
+        prog.done()
     return total
 
 
@@ -469,13 +658,35 @@ def write_type_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int:
 
 # Карта rel-имени → Cypher для создания ребра. APOC недоступен, поэтому
 # на каждый тип ребра — свой запрос с фиксированным именем.
-EDGE_QUERIES: dict[str, str] = {
-    "HAS_ATTRIBUTE": (
-        "UNWIND $rows AS r "
-        "MATCH (a {id: r.src}), (b:Attribute {id: r.dst}) "
-        "MERGE (a)-[e:HAS_ATTRIBUTE]->(b) "
-        "SET e.role = r.role"
-    ),
+EDGE_QUERIES: dict[str, Any] = {
+    # PERF-4. Значением может быть либо строка (один запрос на тип ребра),
+    # либо словарь `метка источника → запрос`. Второе нужно там, где ребро
+    # выходит из узлов с разными метками.
+    #
+    # История дефекта. Здесь стояло `MATCH (a {id: r.src})` — без метки,
+    # намеренно, потому что :HAS_ATTRIBUTE идёт и от :MetadataObject, и от
+    # :TabularSection. Но все констрейнты в схеме привязаны к меткам, а
+    # значит, и все индексы по `id`. Матч без метки индекс использовать не
+    # может и вырождается в полный перебор узлов на КАЖДУЮ строку UNWIND.
+    #
+    # Цена на боевой конфигурации: 42 762 ребра :HAS_ATTRIBUTE (треть слоя 1)
+    # против 71 219 узлов в базе. Слой 1 писался 28 минут — 110 элементов в
+    # секунду, при том что слой 2 на той же Neo4j пишется со скоростью около
+    # 5 100. Разница в сорок раз объясняется целиком этой строкой.
+    "HAS_ATTRIBUTE": {
+        "MetadataObject": (
+            "UNWIND $rows AS r "
+            "MATCH (a:MetadataObject {id: r.src}), (b:Attribute {id: r.dst}) "
+            "MERGE (a)-[e:HAS_ATTRIBUTE]->(b) "
+            "SET e.role = r.role"
+        ),
+        "TabularSection": (
+            "UNWIND $rows AS r "
+            "MATCH (a:TabularSection {id: r.src}), (b:Attribute {id: r.dst}) "
+            "MERGE (a)-[e:HAS_ATTRIBUTE]->(b) "
+            "SET e.role = r.role"
+        ),
+    },
     "HAS_TABULAR_SECTION": (
         "UNWIND $rows AS r "
         "MATCH (a:MetadataObject {id: r.src}), (b:TabularSection {id: r.dst}) "
@@ -572,18 +783,62 @@ EDGE_QUERIES: dict[str, str] = {
 }
 
 
-def write_edges(neo: Neo4j, edges: list[dict], batch: int = 500) -> dict[str, int]:
-    """Запись всех рёбер. Возвращает счётчик по типам."""
-    by_rel: dict[str, list[dict]] = {}
+# PERF-4. Когда у ребра несколько вариантов запроса, а `src_label` на ребре
+# не проставлен (старый вызывающий код), метку приходится выводить из id.
+# Единственный такой случай сейчас — :HAS_ATTRIBUTE, где id реквизита ТЧ
+# строится как "<объект>.TS.<имя ТЧ>.<имя реквизита>" (см. metadata_xml).
+def _infer_src_label(rel: str, src_id: str, variants: dict) -> str:
+    if rel == "HAS_ATTRIBUTE":
+        return "TabularSection" if ".TS." in (src_id or "") else "MetadataObject"
+    return next(iter(variants))
+
+
+def write_edges(neo: Neo4j, edges: list[dict], batch: int = 500,
+                log_progress: bool = True) -> dict[str, int]:
+    """
+    Запись всех рёбер. Возвращает счётчик по типам рёбер.
+
+    Группировка идёт по паре (тип ребра, метка источника): у типов с
+    несколькими вариантами запроса — по одному UNWIND-запросу на метку,
+    см. EDGE_QUERIES и PERF-4. Счётчик в ответе по-прежнему сводится к типу
+    ребра, чтобы вызывающий код и тесты не заметили разницы.
+    """
+    by_key: dict[tuple[str, str], list[dict]] = {}
+    unknown: dict[str, int] = {}
+    inferred_labels = 0
+
     for e in edges:
-        by_rel.setdefault(e["rel"], []).append(e)
+        rel = e["rel"]
+        q = EDGE_QUERIES.get(rel)
+        if q is None:
+            unknown[rel] = unknown.get(rel, 0) + 1
+            continue
+        if isinstance(q, dict):
+            label = e.get("src_label") or ""
+            if label not in q:
+                label = _infer_src_label(rel, e.get("src", ""), q)
+                inferred_labels += 1
+        else:
+            label = ""
+        by_key.setdefault((rel, label), []).append(e)
+
+    for rel, n in unknown.items():
+        log.warning("Неизвестный тип ребра, пропускаем: %s (%d шт)", rel, n)
+    if inferred_labels:
+        log.debug("write_edges: метка источника выведена из id для %d рёбер",
+                  inferred_labels)
 
     counters: dict[str, int] = {}
-    for rel, group in by_rel.items():
-        cypher = EDGE_QUERIES.get(rel)
-        if cypher is None:
-            log.warning("Неизвестный тип ребра, пропускаем: %s (%d шт)", rel, len(group))
-            continue
+    for (rel, label), group in by_key.items():
+        q = EDGE_QUERIES[rel]
+        cypher = q[label] if isinstance(q, dict) else q
+        name = f"{rel}:{label}" if label else rel
+
+        prog = ProgressLogger(
+            log, f"рёбра {name}", total=len(group), every_sec=20.0,
+            check_every=1, unit="реб",
+        ) if log_progress else None
+
         for chunk in _chunks(group, batch):
             rows = []
             for e in chunk:
@@ -591,7 +846,15 @@ def write_edges(neo: Neo4j, edges: list[dict], batch: int = 500) -> dict[str, in
                 row.update(e.get("props") or {})
                 rows.append(row)
             neo.query(cypher, {"rows": rows})
-        counters[rel] = len(group)
+            if prog:
+                prog.step(len(rows))
+
+        if prog:
+            # Финальную строку печатаем только на заметных группах, иначе
+            # лог малой конфигурации утонет в отчётах о десяти рёбрах.
+            if len(group) >= 5000 or prog.elapsed >= 5.0:
+                prog.done()
+        counters[rel] = counters.get(rel, 0) + len(group)
     return counters
 
 
@@ -687,7 +950,8 @@ def write_module_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int:
     return total
 
 
-def write_callable_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int:
+def write_callable_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500,
+                         log_progress: bool = True) -> int:
     """
     :Callable-узлы. Двойная метка :Callable:Procedure / :Callable:Function
     задаётся через поле `kind` ('Procedure' | 'Function').
@@ -695,6 +959,8 @@ def write_callable_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int
     by_kind: dict[str, list[dict]] = {}
     for n in nodes:
         by_kind.setdefault(n["kind"], []).append(n)
+
+    prog = _node_progress("узлы :Callable", len(nodes), log_progress)
 
     total = 0
     for kind, group in by_kind.items():
@@ -730,10 +996,15 @@ def write_callable_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int
             } for n in chunk]
             neo.query(cypher, {"rows": rows})
             total += len(rows)
+            if prog:
+                prog.step(len(rows))
+    if prog:
+        prog.done()
     return total
 
 
-def write_parameter_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int:
+def write_parameter_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500,
+                          log_progress: bool = True) -> int:
     cypher = (
         "UNWIND $rows AS r "
         "MERGE (n:Parameter {id: r.id}) "
@@ -744,6 +1015,7 @@ def write_parameter_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> in
         "    n.default_value  = r.default_value, "
         "    n.callable_id    = r.callable_id"
     )
+    prog = _node_progress("узлы :Parameter", len(nodes), log_progress)
     total = 0
     for chunk in _chunks(nodes, batch):
         rows = [{
@@ -757,10 +1029,15 @@ def write_parameter_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> in
         } for n in chunk]
         neo.query(cypher, {"rows": rows})
         total += len(rows)
+        if prog:
+            prog.step(len(rows))
+    if prog:
+        prog.done()
     return total
 
 
-def write_callsite_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int:
+def write_callsite_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500,
+                         log_progress: bool = True) -> int:
     """
     :CallSite-узлы.
 
@@ -779,6 +1056,7 @@ def write_callsite_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int
         "    n.resolved    = r.resolved, "
         "    n.reason      = r.reason"
     )
+    prog = _node_progress("узлы :CallSite", len(nodes), log_progress)
     total = 0
     for chunk in _chunks(nodes, batch):
         rows = [{
@@ -793,6 +1071,10 @@ def write_callsite_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int
         } for n in chunk]
         neo.query(cypher, {"rows": rows})
         total += len(rows)
+        if prog:
+            prog.step(len(rows))
+    if prog:
+        prog.done()
     return total
 
 
@@ -819,18 +1101,32 @@ def write_code_graph(neo: Neo4j, code_graph: dict) -> dict:
     """
     ensure_schema(neo)
 
-    n_module    = write_module_nodes(neo, code_graph.get("module_nodes", []))
-    n_callable  = write_callable_nodes(neo, code_graph.get("callable_nodes", []))
-    n_parameter = write_parameter_nodes(neo, code_graph.get("parameter_nodes", []))
-    n_callsite  = write_callsite_nodes(neo, code_graph.get("callsite_nodes", []))
+    def _timed(name: str, fn, nodes: list) -> int:
+        t = time.monotonic()
+        n = fn(neo, nodes)
+        log.info("  %s: %d за %s", name, n, human_sec(time.monotonic() - t))
+        return n
+
+    n_module    = _timed(":Module",    write_module_nodes,
+                         code_graph.get("module_nodes", []))
+    n_callable  = _timed(":Callable",  write_callable_nodes,
+                         code_graph.get("callable_nodes", []))
+    n_parameter = _timed(":Parameter", write_parameter_nodes,
+                         code_graph.get("parameter_nodes", []))
+    n_callsite  = _timed(":CallSite",  write_callsite_nodes,
+                         code_graph.get("callsite_nodes", []))
     # 4.6.4: :Type-узлы слоя 2. MERGE по id — если узел уже есть из слоя 1
     # (XML-фаза пишет ссылочные типы реквизитов), он переиспользуется, а не
     # дублируется. Недостающие типы (например CatalogObject, которого слой 1
     # мог не писать) — досоздаются. Должны быть записаны ДО write_edges, т.к.
     # :INFERRED_TYPE матчит (:Parameter)-(:Type).
-    n_type      = write_type_nodes(neo, code_graph.get("type_nodes", []))
+    n_type      = _timed(":Type",      write_type_nodes,
+                         code_graph.get("type_nodes", []))
 
+    t_edges = time.monotonic()
     edge_counters = write_edges(neo, code_graph.get("edges", []))
+    log.info("  рёбра: %d за %s", len(code_graph.get("edges", [])),
+             human_sec(time.monotonic() - t_edges))
 
     return {
         "nodes_written": {
@@ -921,14 +1217,25 @@ def write_graph(neo: Neo4j, graph: dict, config_name: str = "Конфигура�
 
     ensure_schema(neo)
 
-    write_type_nodes(neo, graph["type_nodes"])
-    write_meta_nodes(neo, graph["meta_nodes"])
-    write_attribute_nodes(neo, graph["attr_nodes"])
-    write_tabular_section_nodes(neo, graph["ts_nodes"])
-    write_form_nodes(neo, graph["form_nodes"])
-    write_enum_value_nodes(neo, graph["enum_value_nodes"])
+    # PERF-5: этап записи слоя 1 на боевой конфигурации шёл 28 минут одной
+    # немой строкой. Тайминг по каждому виду узлов — это то, чем PERF-4 был
+    # найден: видно не «медленно вообще», а какой именно кусок медленный.
+    def _timed(name: str, fn, nodes: list) -> None:
+        t = time.monotonic()
+        fn(neo, nodes)
+        log.info("  %s: %d за %s", name, len(nodes), human_sec(time.monotonic() - t))
 
+    _timed(":Type",           write_type_nodes,            graph["type_nodes"])
+    _timed(":MetadataObject", write_meta_nodes,            graph["meta_nodes"])
+    _timed(":Attribute",      write_attribute_nodes,       graph["attr_nodes"])
+    _timed(":TabularSection", write_tabular_section_nodes, graph["ts_nodes"])
+    _timed(":Form",           write_form_nodes,            graph["form_nodes"])
+    _timed(":EnumValue",      write_enum_value_nodes,      graph["enum_value_nodes"])
+
+    t_edges = time.monotonic()
     edge_counters = write_edges(neo, graph["edges"])
+    log.info("  рёбра: %d за %s", len(graph["edges"]),
+             human_sec(time.monotonic() - t_edges))
 
     write_configuration_node(neo, config_name, stats)
 
