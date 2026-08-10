@@ -1,22 +1,16 @@
+# ── Секреты и локальная конфигурация ─────────────────────────────────
+# .env.* закрывает и .env.local, и .env.prod, и .env.backup — такие файлы
+# заводятся на автомате и утекают легче всего. Шаблоны возвращаем явно:
+# они должны быть в репозитории, чтобы после клонирования было с чего
+# начинать.
 .env
-__pycache__/
-*.pyc
-*.pyo
-.DS_Store
-*.swp
-.pytest_cache/
-
-# STD-1: чужой корпус стандартов, забирается scripts/fetch_v8std.py.
-# В git не кладём: он CC0, но это чужие данные и 20+ МБ, а версия
-# фиксируется в v8std-data/FETCH.json.
-/v8std-data/
-
-# SEC-1: конфиги с секретами не коммитим
+.env.*
+!.env.example
 .cursor/mcp.json
-.env.local
 *.lic
 
-# Выгрузка конфигурации 1С — не наш код
+# ── Данные, которых не должно быть в репозитории ─────────────────────
+# Выгрузка конфигурации 1С — не наш код.
 /workspace/*
 !/workspace/.gitkeep
 !/workspace/AGENTS.md
@@ -26,3 +20,21 @@ __pycache__/
 /platform-help-data/*
 !/platform-help-data/.gitkeep
 !/platform-help-data/README*
+
+# Чужой корпус стандартов (STD-1), забирается scripts/fetch_v8std.py.
+# Лицензия CC0, но это чужие данные и 10+ МБ, а версия и так фиксируется
+# в v8std-data/FETCH.json.
+/v8std-data/
+
+# ── Локальные окружения и артефакты ──────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+.pytest_cache/
+.idea/
+.vscode/
+.DS_Store
+*.swp
