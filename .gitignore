@@ -1,0 +1,28 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+*.swp
+.pytest_cache/
+
+# STD-1: чужой корпус стандартов, забирается scripts/fetch_v8std.py.
+# В git не кладём: он CC0, но это чужие данные и 20+ МБ, а версия
+# фиксируется в v8std-data/FETCH.json.
+/v8std-data/
+
+# SEC-1: конфиги с секретами не коммитим
+.cursor/mcp.json
+.env.local
+*.lic
+
+# Выгрузка конфигурации 1С — не наш код
+/workspace/*
+!/workspace/.gitkeep
+!/workspace/AGENTS.md
+
+# Справка платформы — проприетарные файлы 1С, 40+ МБ.
+# Берутся из bin\conf установленной платформы, см. README.
+/platform-help-data/*
+!/platform-help-data/.gitkeep
+!/platform-help-data/README*

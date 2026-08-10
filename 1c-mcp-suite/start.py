@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""
+Точка входа для запуска MCP-серверов (Streamable HTTP, TR-1).
+
+ВАЖНО: этот скрипт рассчитан на запуск ВНУТРИ Docker-контейнера,
+собранного через Dockerfile.python / Dockerfile.embeddings.
+Контейнер копирует файлы вида mcp-metadata-graph/server.py в /app/mcp_metadata_graph.py
+(с подчёркиваниями), что и делает их импортируемыми Python-модулями.
+
+Локально, без Docker, импорт сломается — это by design. Используйте docker compose.
+"""
+import os
+import sys
+from pathlib import Path
+
+import uvicorn
+
+# Все серверы, собираемые из Dockerfile.python. bsl-checker здесь не значится:
+# у него свой образ (Dockerfile.bsl) и своя точка входа.
+SERVERS = {
+    "metadata-graph":   ("mcp_metadata_graph",  8001),
+    "platform-help":    ("mcp_platform_help",   8003),
+    "query-builder":    ("mcp_query_builder",   8009),
+}
+
+def _check_docker_environment() -> None:
+    """Защита от запуска вне Docker — даём понятную ошибку вместо ImportError."""
+    here = Path(__file__).resolve().parent
+    if str(here) != "/app":
+        sys.stderr.write(
+            "ОШИБКА: start.py рассчитан на запуск ВНУТРИ Docker-контейнера.\n"
+            "Файлы серверов копируются в /app с переименованием через Dockerfile,\n"
+            "и без этого импорт по имени модуля невозможен.\n\n"
+            "Используйте: docker compose up <service>\n"
+        )
+        sys.exit(2)
+
+
+def _wrap_tools_with_metrics(mcp_obj, server_name: str) -> None:
+    """Оборачивает все tools декоратором track из mcp_metrics."""
+    os.environ.setdefault("MCP_SERVER_NAME", server_name)
+    try:
+        from mcp_metrics import track
+    except Exception as e:
+        sys.stderr.write(f"[metrics] mcp_metrics недоступен: {e}\n")
+        return
+
+    try:
+        tools = getattr(mcp_obj._tool_manager, "_tools", {})
+        wrapped = 0
+        for tool in tools.values():
+            if getattr(tool.fn, "__wrapped_by_track__", False):
+                continue
+            tool.fn = track(tool.fn)
+            try:
+                tool.fn.__wrapped_by_track__ = True
+            except (AttributeError, TypeError):
+                pass
+            wrapped += 1
+        print(f"[metrics] {server_name}: обёрнуто инструментов: {wrapped}", flush=True)
+    except Exception as e:
+        sys.stderr.write(f"[metrics] не удалось обернуть tools: {e}\n")
+
+
+def _start_metrics_dashboard_async() -> None:
+    """Поднимает HTTP-дашборд метрик в отдельном потоке."""
+    if os.environ.get("METRICS_DASHBOARD", "true").lower() not in ("true", "1", "yes"):
+        return
+    try:
+        import threading
+        from mcp_metrics import get_dashboard_app
+    except Exception as e:
+        sys.stderr.write(f"[metrics] dashboard недоступен: {e}\n")
+        return
+
+    dash_port = int(os.environ.get("METRICS_PORT", "9000"))
+
+    def _run():
+        try:
+            app = get_dashboard_app()
+            uvicorn.run(app, host="0.0.0.0", port=dash_port, log_level="warning")
+        except Exception as e:
+            sys.stderr.write(f"[metrics] dashboard упал: {e}\n")
+
+    threading.Thread(target=_run, daemon=True, name="metrics-dashboard").start()
+    print(f"[metrics] dashboard: http://0.0.0.0:{dash_port}")
+
+
+def main():
+    _check_docker_environment()
+
+    known = SERVERS
+
+    if len(sys.argv) < 2 or sys.argv[1] not in known:
+        print(f"Usage: python start.py <{'|'.join(known.keys())}>")
+        for name, (module, port) in known.items():
+            print(f"  {name:16s} -> port {port}")
+        sys.exit(1)
+
+    name = sys.argv[1]
+    module, default_port = known[name]
+    port = int(os.environ.get("MCP_PORT", default_port))
+
+    print(f"Starting {name} on port {port}...", flush=True)
+    mod = __import__(module)
+
+    for init_func in ("_load_all", "_load_builtin_reference", "_load_templates", "_load_builtin"):
+        if hasattr(mod, init_func):
+            getattr(mod, init_func)()
+
+    mcp_obj = mod.mcp
+
+    # TOOL-1 / TOOL-2 / SEC-5: приводим набор инструментов к целевому
+    # ДО обёртки метриками, иначе обернём то, что сейчас удалим.
+    try:
+        from mcp_tool_filter import apply_profile
+        apply_profile(mcp_obj, name)
+    except Exception as e:
+        sys.stderr.write(f"[tool-filter] не удалось применить профиль: {e}\n")
+
+    _wrap_tools_with_metrics(mcp_obj, name)
+    _start_metrics_dashboard_async()
+
+    # TR-1: Streamable HTTP вместо SSE. Аутентификация (SEC-3/TR-3) и
+    # DNS rebinding protection (TR-4) настраиваются внутри mcp_http.
+    from mcp_http import run as run_http
+
+    run_http(mcp_obj, server_name=name, port=port)
+
+
+if __name__ == "__main__":
+    main()

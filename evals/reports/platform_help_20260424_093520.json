@@ -1,0 +1,1403 @@
+{
+  "meta": {
+    "dataset": "/app/evals/datasets/platform_help.jsonl",
+    "endpoint": "http://mcp-platform-help:8003/sse",
+    "started_at": "2026-04-24T09:34:54.603627+00:00",
+    "finished_at": "2026-04-24T09:35:20.607752+00:00",
+    "duration_s": 26.004125,
+    "examples_total": 10
+  },
+  "summary": {
+    "total": 10,
+    "hard_passed": 10,
+    "hard_pass_rate": 1.0,
+    "soft_total": 8,
+    "soft_passed": 7,
+    "soft_pass_rate": 0.875,
+    "examples_with_mrr": 8,
+    "recall_at_1": 0.75,
+    "recall_at_5": 1.0,
+    "recall_at_10": 1.0,
+    "mrr": 0.875,
+    "latency_ms": {
+      "min": 114.52572400003191,
+      "median": 154.54604150011164,
+      "p95": 13282.284520799873,
+      "max": 23659.917047999897
+    },
+    "search_type_dist": {
+      "hybrid": 8,
+      "unknown": 2
+    },
+    "transport_errors": 0,
+    "tool_errors": 0
+  },
+  "examples": [
+    {
+      "id": "ph-001",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "разделить строку",
+        "limit": 10
+      },
+      "notes": "типовая задача: разрезать строку по разделителю",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 23659.917047999897,
+      "search_type": "hybrid",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 10
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": true,
+          "detail": {
+            "k": 5,
+            "values": [
+              "СтрРазделить",
+              "StrSplit"
+            ],
+            "match_rank": 1,
+            "matched_name": "стрразделить",
+            "hits_examined": 5
+          },
+          "match_rank": 1
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": true,
+          "detail": {
+            "k": 5,
+            "kinds": [
+              "method"
+            ],
+            "first_match_rank": 1,
+            "observed_kinds": [
+              "method",
+              "method",
+              "method",
+              "property",
+              "method"
+            ]
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": 1,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [
+          {
+            "score": 0.625,
+            "chunk_type": "card",
+            "kind": "method",
+            "name_ru": "СтрРазделить",
+            "name_en": "StrSplit",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.СтрРазделить (Global context.StrSplit)",
+            "since_version": "8.3.6",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "Массив . Массив со строками, которые получились в результате разделения исходной строки",
+            "text": "[метод] Глобальный контекст.СтрРазделить (Global context.StrSplit)\nИмена: СтрРазделить StrSplit Глобальный контекст.СтрРазделить Global context.StrSplit\nСлова: Стр Разделить Str Split\nРазделяет строку на части по указанным символам-разделителям.\nВозвращает: Массив . Массив со строками, которые получились в результате разделения исходной строки\nДоступность: Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер.\nдоступен с 8.3.6",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog4838/StrSplit4532.html"
+          },
+          {
+            "score": 0.5,
+            "chunk_type": "syntax",
+            "kind": "method",
+            "name_ru": "ЗаписатьСтроку",
+            "name_en": "WriteLine",
+            "parent_ru": "ЗаписьТекста",
+            "parent_en": "TextWriter",
+            "full_name": "ЗаписьТекста.ЗаписатьСтроку (TextWriter.WriteLine)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Тонкий клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "",
+            "text": "[синтаксис] ЗаписьТекста.ЗаписатьСтроку / TextWriter.WriteLine\nЗаписатьСтроку(<Строка>, <Разделитель>)",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog63/catalog598/TextWriter/methods/WriteLine1429.html"
+          },
+          {
+            "score": 0.381,
+            "chunk_type": "syntax",
+            "kind": "method",
+            "name_ru": "Разделить",
+            "name_en": "Split",
+            "parent_ru": "ЧтениеДанных",
+            "parent_en": "DataReader",
+            "full_name": "ЧтениеДанных.Разделить (DataReader.Split)",
+            "since_version": "8.3.9",
+            "deprecated": false,
+            "availability": "Тонкий клиент, сервер, толстый клиент, внешнее соединение.",
+            "returns": "Массив . Массив значений типа РезультатЧтенияДанных",
+            "text": "[синтаксис] ЧтениеДанных.Разделить / DataReader.Split\n1. Вариант синтаксиса: Разделение по двоичному разделителю:\n   Разделить()\n2. Вариант синтаксиса: По двоичному разделителю:\n   Разделить(<Разделитель>)\n3. Вариант синтаксиса: Разделение по строковому разделителю:\n   Разделить(<КодировкаТекста>)\n4. Вариант синтаксиса: По строковому разделителю:\n   Разделить(<Разделитель>)\n5. Вариант синтаксиса: Разделение по набору смешанных разделетелей:\n   Разделить(<КодировкаТекста>)\n6. Вариант синтаксиса: По набору смешанных разделителей:\n   Разделить(<Разделители>)",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog63/catalog2375/DataReader/methods/Split5086.html"
+          },
+          {
+            "score": 0.3333,
+            "chunk_type": "card",
+            "kind": "property",
+            "name_ru": "РазделительСтрок",
+            "name_en": "LineSplitter",
+            "parent_ru": "ЗаписьДанных",
+            "parent_en": "DataWriter",
+            "full_name": "ЗаписьДанных.РазделительСтрок (DataWriter.LineSplitter)",
+            "since_version": "8.3.9",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, сервер, толстый клиент, внешнее соединение.",
+            "returns": "",
+            "text": "[свойство] ЗаписьДанных.РазделительСтрок (DataWriter.LineSplitter)\nИмена: РазделительСтрок LineSplitter ЗаписьДанных.РазделительСтрок DataWriter.LineSplitter\nСлова: Разделитель Строк Line Splitter\nТип: Строка . Разделитель строк по-умолчанию. Это свойство влияет на поведение метода ЗаписатьСтроку .\nДоступность: Тонкий клиент, веб-клиент, сервер, толстый клиент, внешнее соединение.\nдоступен с 8.3.9",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog63/catalog2375/DataWriter/properties/LineSplitter10943.html"
+          },
+          {
+            "score": 0.2803,
+            "chunk_type": "card",
+            "kind": "method",
+            "name_ru": "Разделить",
+            "name_en": "Split",
+            "parent_ru": "ЧтениеДанных",
+            "parent_en": "DataReader",
+            "full_name": "ЧтениеДанных.Разделить (DataReader.Split)",
+            "since_version": "8.3.9",
+            "deprecated": false,
+            "availability": "Тонкий клиент, сервер, толстый клиент, внешнее соединение.",
+            "returns": "Массив . Массив значений типа РезультатЧтенияДанных",
+            "text": "[метод] ЧтениеДанных.Разделить (DataReader.Split)\nИмена: Разделить Split ЧтениеДанных.Разделить DataReader.Split\nРазделить данные по двоичному разделителю. Разделяет остаток данных по двоичному разделителю. Разделить данные по строковому разделителю. Разделяет остаток данных по строковому разделителю. Разделить данные по набору смешанных разделителей. Разделяет остаток данных по набору смешанных разделителей. Разделяет остаток данных по заданным разделителям.\nВозвращает: Массив . Массив значений типа РезультатЧтенияДанных\nДоступность: Тонкий клиент, сервер, толстый клиент, внешнее соединение.\nдоступен с 8.3.9",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog63/catalog2375/DataReader/methods/Split5086.html"
+          }
+        ],
+        "search_type": "hybrid"
+      }
+    },
+    {
+      "id": "ph-002",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "длина строки",
+        "limit": 10
+      },
+      "notes": "базовая строковая функция",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 136.2136359998658,
+      "search_type": "hybrid",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 10
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": true,
+          "detail": {
+            "k": 5,
+            "values": [
+              "СтрДлина",
+              "StrLen"
+            ],
+            "match_rank": 2,
+            "matched_name": "стрдлина",
+            "hits_examined": 5
+          },
+          "match_rank": 2
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": true,
+          "detail": {
+            "k": 5,
+            "kinds": [
+              "method"
+            ],
+            "first_match_rank": 2,
+            "observed_kinds": [
+              "property",
+              "method",
+              "object_type",
+              "property",
+              "property"
+            ]
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": 2,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [
+          {
+            "score": 0.8333,
+            "chunk_type": "card",
+            "kind": "property",
+            "name_ru": "Длина",
+            "name_en": "Length",
+            "parent_ru": "КвалификаторыСтроки",
+            "parent_en": "StringQualifiers",
+            "full_name": "КвалификаторыСтроки.Длина (StringQualifiers.Length)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "",
+            "text": "[свойство] КвалификаторыСтроки.Длина (StringQualifiers.Length)\nИмена: Длина Length КвалификаторыСтроки.Длина StringQualifiers.Length\nТип: Число . Содержит длину строки в символах. Строка неограниченной длины имеет длину строки, равную 0.\nДоступность: Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер.\nдоступен с 8.0",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog63/catalog316/StringQualifiers/properties/Length1378.html"
+          },
+          {
+            "score": 0.5909,
+            "chunk_type": "card",
+            "kind": "method",
+            "name_ru": "СтрДлина",
+            "name_en": "StrLen",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.СтрДлина (Global context.StrLen)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер. Внимание: Данный метод не поддерживается при работе через COM-соединение",
+            "returns": "Число . Длина строки",
+            "text": "[метод] Глобальный контекст.СтрДлина (Global context.StrLen)\nИмена: СтрДлина StrLen Глобальный контекст.СтрДлина Global context.StrLen\nСлова: Стр Длина Str Len\nПолучает количество символов в строке.\nВозвращает: Число . Длина строки\nДоступность: Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер. Внимание: Данный метод не поддерживается при работе через COM-соединение\nдоступен с 8.0",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog4838/StrLen912.html"
+          },
+          {
+            "score": 0.4762,
+            "chunk_type": "params",
+            "kind": "object_type",
+            "name_ru": "По умолчанию",
+            "name_en": "",
+            "parent_ru": "КвалификаторыСтроки",
+            "parent_en": "StringQualifiers",
+            "full_name": "КвалификаторыСтроки.По умолчанию (StringQualifiers)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "",
+            "returns": "",
+            "text": "[параметры] КвалификаторыСтроки.По умолчанию (StringQualifiers)\n— ДлинаСтроки (необязательный) — Число: Допустимая длина строки. Если параметр не указан, то строка по длине не ограничивается. Значение по умолчанию: 0.\n— ДопустимаяДлина (необязательный) — ДопустимаяДлина: Вариант ограничения длины строки, если задана длина строки, отличная от 0. Значение по умолчанию: Переменная .",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog63/catalog316/StringQualifiers/ctors/ctor17.html"
+          },
+          {
+            "score": 0.3611,
+            "chunk_type": "card",
+            "kind": "property",
+            "name_ru": "Переменная",
+            "name_en": "Variable",
+            "parent_ru": "ДопустимаяДлина",
+            "parent_en": "AllowedLength",
+            "full_name": "ДопустимаяДлина.Переменная (AllowedLength.Variable)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "",
+            "returns": "",
+            "text": "[свойство] ДопустимаяДлина.Переменная (AllowedLength.Variable)\nИмена: Переменная Variable ДопустимаяДлина.Переменная AllowedLength.Variable\nСтрока имеет переменную длину. Если длина присваиваемой строки будет меньше установленной, то строка не будет дополняться пробелами до необходимой длины. Если длина присваиваемой строки будет больше установленной, строка будет обрезаться.\nдоступен с 8.0",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog2/catalog2088/AllowedLength/properties/Variable1502.html"
+          },
+          {
+            "score": 0.25,
+            "chunk_type": "card",
+            "kind": "property",
+            "name_ru": "Размер",
+            "name_en": "Length",
+            "parent_ru": "КомментарийHTML",
+            "parent_en": "HTMLComment",
+            "full_name": "КомментарийHTML.Размер (HTMLComment.Length)",
+            "since_version": "8.2",
+            "deprecated": false,
+            "availability": "Мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "",
+            "text": "[свойство] КомментарийHTML.Размер (HTMLComment.Length)\nИмена: Размер Length КомментарийHTML.Размер HTMLComment.Length\nТип: Число . Длина символьных данных.\nДоступность: Мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер.\nдоступен с 8.2",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog63/catalog1781/HTMLComment/properties/Length8967.html"
+          }
+        ],
+        "search_type": "hybrid"
+      }
+    },
+    {
+      "id": "ph-003",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "заменить подстроку в строке",
+        "limit": 10
+      },
+      "notes": "замена подстроки — частый сценарий",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 153.379655000208,
+      "search_type": "hybrid",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 10
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": true,
+          "detail": {
+            "k": 5,
+            "values": [
+              "СтрЗаменить",
+              "StrReplace"
+            ],
+            "match_rank": 2,
+            "matched_name": "стрзаменить",
+            "hits_examined": 5
+          },
+          "match_rank": 2
+        }
+      ],
+      "soft": [],
+      "mrr_rank": 2,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [
+          {
+            "score": 0.6667,
+            "chunk_type": "card",
+            "kind": "method",
+            "name_ru": "СтрЗаменитьПоРегулярномуВыражению",
+            "name_en": "StrReplaceByRegularExpression",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.СтрЗаменитьПоРегулярномуВыражению (Global context.StrReplaceByRegularExpression)",
+            "since_version": "8.3.23",
+            "deprecated": false,
+            "availability": "Сервер, толстый клиент, внешнее соединение.",
+            "returns": "Строка . Строка, полученная в результате замены",
+            "text": "[метод] Глобальный контекст.СтрЗаменитьПоРегулярномуВыражению (Global context.StrReplaceByRegularExpression)\nИмена: СтрЗаменитьПоРегулярномуВыражению StrReplaceByRegularExpression Глобальный контекст.СтрЗаменитьПоРегулярномуВыражению Global context.StrReplaceByRegularExpression\nСлова: Стр Заменить По Регулярному Выражению Str Replace By Regular Expression\nНаходит в исходной строке все вхождения регулярного выражения и заменяет их на подстроку замены.\nВозвращает: Строка . Строка, полученная в результате замены\nДоступность: Сервер, толстый клиент, внешнее соединение.\nдоступен с 8.3.23",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog4838/StrReplaceByRegularExpression6383.html"
+          },
+          {
+            "score": 0.5833,
+            "chunk_type": "card",
+            "kind": "method",
+            "name_ru": "СтрЗаменить",
+            "name_en": "StrReplace",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.СтрЗаменить (Global context.StrReplace)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер. Внимание: Данный метод не поддерживается при работе через COM-соединение",
+            "returns": "Строка . Строка, полученная в результате замены",
+            "text": "[метод] Глобальный контекст.СтрЗаменить (Global context.StrReplace)\nИмена: СтрЗаменить StrReplace Глобальный контекст.СтрЗаменить Global context.StrReplace\nСлова: Стр Заменить Str Replace\nНаходит в исходной строке все вхождения подстроки поиска и заменяет ее на подстроку замены.\nВозвращает: Строка . Строка, полученная в результате замены\nДоступность: Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер. Внимание: Данный метод не поддерживается при работе через COM-соединение\nдоступен с 8.0",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog4838/StrReplace925.html"
+          },
+          {
+            "score": 0.5,
+            "chunk_type": "params",
+            "kind": "method",
+            "name_ru": "СтрЗаменить",
+            "name_en": "StrReplace",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.СтрЗаменить (Global context.StrReplace)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер. Внимание: Данный метод не поддерживается при работе через COM-соединение",
+            "returns": "Строка . Строка, полученная в результате замены",
+            "text": "[параметры] Глобальный контекст.СтрЗаменить (Global context.StrReplace)\n— Строка (обязательный) — Строка: Исходная строка.\n— ПодстрокаПоиска (обязательный) — Строка: Искомая подстрока.\n— ПодстрокаЗамены (обязательный) — Строка: Подстрока, на которую будет заменена подстрока поиска.",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog4838/StrReplace925.html"
+          },
+          {
+            "score": 0.3333,
+            "chunk_type": "syntax",
+            "kind": "method",
+            "name_ru": "СтрЗаменить",
+            "name_en": "StrReplace",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.СтрЗаменить (Global context.StrReplace)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер. Внимание: Данный метод не поддерживается при работе через COM-соединение",
+            "returns": "Строка . Строка, полученная в результате замены",
+            "text": "[синтаксис] Глобальный контекст.СтрЗаменить / Global context.StrReplace\nСтрЗаменить(<Строка>, <ПодстрокаПоиска>, <ПодстрокаЗамены>)",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog4838/StrReplace925.html"
+          },
+          {
+            "score": 0.25,
+            "chunk_type": "card",
+            "kind": "property",
+            "name_ru": "Содержит",
+            "name_en": "Contains",
+            "parent_ru": "ВидСравненияКомпоновкиДанных",
+            "parent_en": "DataCompositionComparisonType",
+            "full_name": "ВидСравненияКомпоновкиДанных.Содержит (DataCompositionComparisonType.Contains)",
+            "since_version": "8.1",
+            "deprecated": false,
+            "availability": "",
+            "returns": "",
+            "text": "[свойство] ВидСравненияКомпоновкиДанных.Содержит (DataCompositionComparisonType.Contains)\nИмена: Содержит Contains ВидСравненияКомпоновкиДанных.Содержит DataCompositionComparisonType.Contains\nСравниваемое значение содержит подстроку, заданную в условии сравнения.\nдоступен с 8.1",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog2/catalog1073/DataCompositionComparisonType/properties/Contains5072.html"
+          }
+        ],
+        "search_type": "hybrid"
+      }
+    },
+    {
+      "id": "ph-004",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "начало дня от даты",
+        "limit": 10
+      },
+      "notes": "усечение времени до 00:00",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 155.71242800001528,
+      "search_type": "hybrid",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 10
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": true,
+          "detail": {
+            "k": 5,
+            "values": [
+              "НачалоДня",
+              "BegOfDay"
+            ],
+            "match_rank": 1,
+            "matched_name": "началодня",
+            "hits_examined": 5
+          },
+          "match_rank": 1
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": true,
+          "detail": {
+            "k": 5,
+            "kinds": [
+              "method"
+            ],
+            "first_match_rank": 1,
+            "observed_kinds": [
+              "method",
+              "property",
+              "method",
+              "method",
+              "object_type"
+            ]
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": 1,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [
+          {
+            "score": 0.8333,
+            "chunk_type": "card",
+            "kind": "method",
+            "name_ru": "НачалоДня",
+            "name_en": "BegOfDay",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.НачалоДня (Global context.BegOfDay)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер. Внимание: Данный метод не поддерживается при работе через COM-соединение",
+            "returns": "Дата . Дата и время начала дня",
+            "text": "[метод] Глобальный контекст.НачалоДня (Global context.BegOfDay)\nИмена: НачалоДня BegOfDay Глобальный контекст.НачалоДня Global context.BegOfDay\nСлова: Начало Дня Beg Of Day\nОпределяет дату и время начала дня для указанной даты.\nВозвращает: Дата . Дата и время начала дня\nДоступность: Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер. Внимание: Данный метод не поддерживается при работе через COM-соединение\nдоступен с 8.0",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog4840/BegOfDay950.html"
+          },
+          {
+            "score": 0.5,
+            "chunk_type": "card",
+            "kind": "property",
+            "name_ru": "РабочаяДата",
+            "name_en": "WorkingDate",
+            "parent_ru": "ВариантГраницыИнтервала",
+            "parent_en": "IntervalBoundVariant",
+            "full_name": "ВариантГраницыИнтервала.РабочаяДата (IntervalBoundVariant.WorkingDate)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "",
+            "returns": "",
+            "text": "[свойство] ВариантГраницыИнтервала.РабочаяДата (IntervalBoundVariant.WorkingDate)\nИмена: РабочаяДата WorkingDate ВариантГраницыИнтервала.РабочаяДата IntervalBoundVariant.WorkingDate\nСлова: Рабочая Дата Working Date\nНачало интервала задается датой началом дня рабочей даты, конец интервала - концом дня рабочей даты.\nдоступен с 8.0",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog2/catalog2088/IntervalBoundVariant/properties/WorkingDate1139.html"
+          },
+          {
+            "score": 0.3333,
+            "chunk_type": "syntax",
+            "kind": "method",
+            "name_ru": "НачалоДня",
+            "name_en": "BegOfDay",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.НачалоДня (Global context.BegOfDay)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер. Внимание: Данный метод не поддерживается при работе через COM-соединение",
+            "returns": "Дата . Дата и время начала дня",
+            "text": "[синтаксис] Глобальный контекст.НачалоДня / Global context.BegOfDay\nНачалоДня(<Дата>)",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog4840/BegOfDay950.html"
+          },
+          {
+            "score": 0.25,
+            "chunk_type": "params",
+            "kind": "method",
+            "name_ru": "НачалоДня",
+            "name_en": "BegOfDay",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.НачалоДня (Global context.BegOfDay)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер. Внимание: Данный метод не поддерживается при работе через COM-соединение",
+            "returns": "Дата . Дата и время начала дня",
+            "text": "[параметры] Глобальный контекст.НачалоДня (Global context.BegOfDay)\n— Дата (обязательный) — Дата: Исходная дата.",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog4840/BegOfDay950.html"
+          },
+          {
+            "score": 0.25,
+            "chunk_type": "description",
+            "kind": "object_type",
+            "name_ru": "ДоступноеПолеКомпоновкиДанных",
+            "name_en": "DataCompositionAvailableField",
+            "parent_ru": "",
+            "parent_en": "",
+            "full_name": "ДоступноеПолеКомпоновкиДанных (DataCompositionAvailableField)",
+            "since_version": "8.1",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "",
+            "text": "[описание ч.3] ДоступноеПолеКомпоновкиДанных (DataCompositionAvailableField)\nДля получения параметров:DataParameters (ПараметрыДанных) - префикс для полей-параметров. Для получения дат:BeginDates (ДатыНачала) - префикс полей для получения начальных дат от родительского поля, BegOfDay (НачалоДня) - содержит начало дня от родительского поля, BegOfWeek (НачалоНедели) - содержит начало недели от родительского поля, BegOfTenDays (НачалоДекады) - содержит начало декады от родительского поля, BegOfMonth (НачалоМесяца) - содержит начало месяца от родительского поля, BegOfQuarter (НачалоКвартала) - содержит начало квартала от родительского поля, BegOfHalfYear (НачалоПолугодия) - содержит начало полугодия от родительского поля, BegOfYear (НачалоГода) - содержит начало года от родительского поля, BegOfMinute (НачалоМинуты) - содержит начало минуты от родительского поля, BegOfHour (НачалоЧаса) - содержит начало часа от родительского поля. EndDates (ДатыКонца) - префикс полей для получения конечных дат от родительского поля.",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog63/catalog1064/catalog1077/DataCompositionAvailableField.html"
+          }
+        ],
+        "search_type": "hybrid"
+      }
+    },
+    {
+      "id": "ph-005",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "разница между двумя датами в секундах",
+        "limit": 10
+      },
+      "notes": "запрос размытый, hard-совпадения ожидать не стоит — только страховочный non_empty",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 146.8333249999887,
+      "search_type": "hybrid",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 10
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 10,
+            "values": [
+              "РазностьДат",
+              "DateDiff",
+              "ТекущаяДата",
+              "CurrentDate"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 10
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "results": [
+          {
+            "score": 0.5,
+            "chunk_type": "card",
+            "kind": "property",
+            "name_ru": "ЕвклидоваМетрикаВКвадрате",
+            "name_en": "SquaredEuclidean",
+            "parent_ru": "ТипМерыРасстоянияАнализаДанных",
+            "parent_en": "DataAnalysisDistanceMetricType",
+            "full_name": "ТипМерыРасстоянияАнализаДанных.ЕвклидоваМетрикаВКвадрате (DataAnalysisDistanceMetricType.SquaredEuclidean)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "",
+            "returns": "",
+            "text": "[свойство] ТипМерыРасстоянияАнализаДанных.ЕвклидоваМетрикаВКвадрате (DataAnalysisDistanceMetricType.SquaredEuclidean)\nИмена: ЕвклидоваМетрикаВКвадрате SquaredEuclidean ТипМерыРасстоянияАнализаДанных.ЕвклидоваМетрикаВКвадрате DataAnalysisDistanceMetricType.SquaredEuclidean\nСлова: Евклидова Метрика В Квадрате Squared Euclidean\nРасстояние между двумя объектами вычисляется по формуле: D = sum( Wi * (Xi - Yi)^2), где Xi, Yi - значения атрибутов объектов, Wi - весовой коэффициент. i - номер атрибута, от 1 до n, где n - число атрибутов.\nдоступен с 8.0",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog2/catalog783/DataAnalysisDistanceMetricType/properties/SquaredEuclidean3571.html"
+          },
+          {
+            "score": 0.5,
+            "chunk_type": "syntax",
+            "kind": "method",
+            "name_ru": "Дата",
+            "name_en": "Date",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.Дата (Global context.Date)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер. Внимание: Данный метод не поддерживается при работе через COM-соединение",
+            "returns": "Дата",
+            "text": "[синтаксис] Глобальный контекст.Дата / Global context.Date\n1. Вариант синтаксиса: По строке:\n   Дата(<Значение>)\n2. Вариант синтаксиса: По составляющим:\n   Дата(<Год>, <Месяц>, <День>, <Час>, <Минута>, <Секунда>)",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog4841/Date961.html"
+          },
+          {
+            "score": 0.3333,
+            "chunk_type": "card",
+            "kind": "object_type",
+            "name_ru": "СвязьДендрограммы",
+            "name_en": "DendrogramLink",
+            "parent_ru": "",
+            "parent_en": "",
+            "full_name": "СвязьДендрограммы (DendrogramLink)",
+            "since_version": "8.1",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, сервер, толстый клиент, внешнее соединение.",
+            "returns": "",
+            "text": "[тип] СвязьДендрограммы (DendrogramLink)\nИмена: СвязьДендрограммы DendrogramLink\nСлова: Связь Дендрограммы Dendrogram Link\nСвязь между двумя элементами дендрограммы.\nДоступность: Тонкий клиент, веб-клиент, сервер, толстый клиент, внешнее соединение.\nдоступен с 8.1",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog63/catalog815/DendrogramLink.html"
+          },
+          {
+            "score": 0.3333,
+            "chunk_type": "params",
+            "kind": "method",
+            "name_ru": "Секунда",
+            "name_en": "Second",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.Секунда (Global context.Second)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер. Внимание: Данный метод не поддерживается при работе через COM-соединение",
+            "returns": "Число . Секунда в указанной дате",
+            "text": "[параметры] Глобальный контекст.Секунда (Global context.Second)\n— Дата (обязательный) — Дата: Исходная дата.",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog4840/Second947.html"
+          },
+          {
+            "score": 0.25,
+            "chunk_type": "example",
+            "kind": "method",
+            "name_ru": "Сравнить",
+            "name_en": "Compare",
+            "parent_ru": "МоментВремениСУточнениемПериода",
+            "parent_en": "PointInTimeWithPeriodAdjustment",
+            "full_name": "МоментВремениСУточнениемПериода.Сравнить (PointInTimeWithPeriodAdjustment.Compare)",
+            "since_version": "8.3.9",
+            "deprecated": false,
+            "availability": "Сервер, толстый клиент, внешнее соединение.",
+            "returns": "Число . Возвращает Число :-1 - если первый момент времени с уточнением периода меньше второго момента времени с уточнением периода, 0 - если первый момент времени с уточнением периода равен второму моменту времени с уточнением периода, 1 - если первый момент времени с уточнением периода больше второго момента времени с уточнением периода",
+            "text": "[пример] МоментВремениСУточнениемПериода.Сравнить (PointInTimeWithPeriodAdjustment.Compare)\nМомент1 = Новый МоментВремениСУточнениемПериода(Док1.Дата, 0, Док1); Момент2 = Новый МоментВремениСУточнениемПериода(Док2.Дата, 0, Док2); Если Момент1.Сравнить(Момент2) = -1 Тогда Момент1 = Момент2; КонецЕсли;",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog125/catalog177/PointInTimeWithPeriodAdjustment/methods/Compare5377.html"
+          }
+        ],
+        "search_type": "hybrid"
+      }
+    },
+    {
+      "id": "ph-006",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "зафиксировать транзакцию",
+        "limit": 10
+      },
+      "notes": "управление транзакциями",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 125.60666100011986,
+      "search_type": "hybrid",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 10
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": true,
+          "detail": {
+            "k": 5,
+            "values": [
+              "ЗафиксироватьТранзакцию",
+              "CommitTransaction"
+            ],
+            "match_rank": 1,
+            "matched_name": "зафиксироватьтранзакцию",
+            "hits_examined": 5
+          },
+          "match_rank": 1
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": true,
+          "detail": {
+            "k": 10,
+            "kinds": [
+              "method"
+            ],
+            "first_match_rank": 1,
+            "observed_kinds": [
+              "method",
+              "method",
+              "method",
+              "method",
+              "method",
+              "property",
+              "method",
+              "method",
+              "property",
+              "method"
+            ]
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": 1,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [
+          {
+            "score": 1.0,
+            "chunk_type": "card",
+            "kind": "method",
+            "name_ru": "ЗафиксироватьТранзакцию",
+            "name_en": "CommitTransaction",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.ЗафиксироватьТранзакцию (Global context.CommitTransaction)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "",
+            "text": "[метод] Глобальный контекст.ЗафиксироватьТранзакцию (Global context.CommitTransaction)\nИмена: ЗафиксироватьТранзакцию CommitTransaction Глобальный контекст.ЗафиксироватьТранзакцию Global context.CommitTransaction\nСлова: Зафиксировать Транзакцию Commit Transaction\nЗавершает успешную транзакцию. Все изменения, внесенные в информационную базу в процессе транзакции, будут записаны.\nДоступность: Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.\nдоступен с 8.0",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog8/CommitTransaction10.html"
+          },
+          {
+            "score": 0.3333,
+            "chunk_type": "syntax",
+            "kind": "method",
+            "name_ru": "ЗафиксироватьТранзакцию",
+            "name_en": "CommitTransaction",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.ЗафиксироватьТранзакцию (Global context.CommitTransaction)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "",
+            "text": "[синтаксис] Глобальный контекст.ЗафиксироватьТранзакцию / Global context.CommitTransaction\nЗафиксироватьТранзакцию()",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog8/CommitTransaction10.html"
+          },
+          {
+            "score": 0.3333,
+            "chunk_type": "card",
+            "kind": "method",
+            "name_ru": "ЗафиксироватьТранзакцию",
+            "name_en": "CommitTransaction",
+            "parent_ru": "ВнешнийИсточникДанныхМенеджер.<Имя внешнего источника>",
+            "parent_en": "ExternalDataSourceManager.<External source name>",
+            "full_name": "ВнешнийИсточникДанныхМенеджер.<Имя внешнего источника>.ЗафиксироватьТранзакцию (ExternalDataSourceManager.<External source name>.CommitTransaction)",
+            "since_version": "8.3.5",
+            "deprecated": false,
+            "availability": "Сервер, толстый клиент, внешнее соединение.",
+            "returns": "",
+            "text": "[метод] ВнешнийИсточникДанныхМенеджер.<Имя внешнего источника>.ЗафиксироватьТранзакцию (ExternalDataSourceManager.<External source name>.CommitTransaction)\nИмена: ЗафиксироватьТранзакцию CommitTransaction ВнешнийИсточникДанныхМенеджер.<Имя внешнего источника>.ЗафиксироватьТранзакцию ExternalDataSourceManager.<External source name>.CommitTransaction\nСлова: Зафиксировать Транзакцию Commit Transaction\nЗавершает успешную транзакцию. Все изменения, внесенные в базу данных внешнего источника данных в процессе транзакции, будут записаны.\nДоступность: Сервер, толстый клиент, внешнее соединение.\nдоступен с 8.3.5",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog125/catalog1972/object1982/methods/CommitTransaction4543.html"
+          },
+          {
+            "score": 0.3095,
+            "chunk_type": "card",
+            "kind": "method",
+            "name_ru": "НачатьТранзакцию",
+            "name_en": "BeginTransaction",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.НачатьТранзакцию (Global context.BeginTransaction)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "",
+            "text": "[метод] Глобальный контекст.НачатьТранзакцию (Global context.BeginTransaction)\nИмена: НачатьТранзакцию BeginTransaction Глобальный контекст.НачатьТранзакцию Global context.BeginTransaction\nСлова: Начать Транзакцию Begin Transaction\nОткрывает транзакцию. Транзакция предназначена для записи в информационную базу согласованных изменений. Все изменения, внесенные в информационную базу после начала транзакции, будут затем либо целиком записаны, либо целиком отменены.\nДоступность: Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.\nдоступен с 8.0",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog8/BeginTransaction9.html"
+          },
+          {
+            "score": 0.25,
+            "chunk_type": "example",
+            "kind": "method",
+            "name_ru": "ЗафиксироватьТранзакцию",
+            "name_en": "CommitTransaction",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.ЗафиксироватьТранзакцию (Global context.CommitTransaction)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "",
+            "text": "[пример] Глобальный контекст.ЗафиксироватьТранзакцию (Global context.CommitTransaction)\nЗафиксироватьТранзакцию();",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/Global context/methods/catalog8/CommitTransaction10.html"
+          }
+        ],
+        "search_type": "hybrid"
+      }
+    },
+    {
+      "id": "ph-007",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "как записать объект справочника",
+        "limit": 10,
+        "kind": "method"
+      },
+      "notes": "проверяем, что фильтр kind=method работает и возвращает методы записи",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 568.3581089999734,
+      "search_type": "hybrid",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 10
+          },
+          "match_rank": null
+        },
+        {
+          "type": "results_count_at_least",
+          "passed": true,
+          "detail": {
+            "min": 3,
+            "actual": 10
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "full_name_contains",
+          "passed": true,
+          "detail": {
+            "k": 10,
+            "substr": "Записать",
+            "match_rank": 1,
+            "matched_full_name": "СправочникОбъект.<Имя справочника>.Записать (CatalogObject.<Catalog name>.Write)"
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "results": [
+          {
+            "score": 0.8333,
+            "chunk_type": "example",
+            "kind": "method",
+            "name_ru": "Записать",
+            "name_en": "Write",
+            "parent_ru": "СправочникОбъект.<Имя справочника>",
+            "parent_en": "CatalogObject.<Catalog name>",
+            "full_name": "СправочникОбъект.<Имя справочника>.Записать (CatalogObject.<Catalog name>.Write)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "",
+            "text": "[пример] СправочникОбъект.<Имя справочника>.Записать (CatalogObject.<Catalog name>.Write)\nПопытка Объект.Записать(); Исключение Предупреждение(\"Не удалось записать объект \"\"\" + Объект + \"\"\"! |\" + ОписаниеОшибки(), 60); КонецПопытки;",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog125/catalog126/object130/methods/Write268.html"
+          },
+          {
+            "score": 0.625,
+            "chunk_type": "card",
+            "kind": "method",
+            "name_ru": "Записать",
+            "name_en": "Write",
+            "parent_ru": "СправочникОбъект.<Имя справочника>",
+            "parent_en": "CatalogObject.<Catalog name>",
+            "full_name": "СправочникОбъект.<Имя справочника>.Записать (CatalogObject.<Catalog name>.Write)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "",
+            "text": "[метод] СправочникОбъект.<Имя справочника>.Записать (CatalogObject.<Catalog name>.Write)\nИмена: Записать Write СправочникОбъект.<Имя справочника>.Записать CatalogObject.<Catalog name>.Write\nЗаписывает элемент справочника в базу данных.\nДоступность: Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.\nдоступен с 8.0",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog125/catalog126/object130/methods/Write268.html"
+          },
+          {
+            "score": 0.4103,
+            "chunk_type": "example",
+            "kind": "method",
+            "name_ru": "ПолучитьОбъект",
+            "name_en": "GetObject",
+            "parent_ru": "СправочникСсылка.<Имя справочника>",
+            "parent_en": "CatalogRef.<Catalog name>",
+            "full_name": "СправочникСсылка.<Имя справочника>.ПолучитьОбъект (CatalogRef.<Catalog name>.GetObject)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "СправочникОбъект. < Имя справочника >, Неопределено . Неопределено - объекта в базе нет (например, при обмене данными или после непосредственного удаления объекта, на который есть ссылки)",
+            "text": "[пример] СправочникСсылка.<Имя справочника>.ПолучитьОбъект (CatalogRef.<Catalog name>.GetObject)\nТипыНоменклатуры = Перечисления.ТипыНоменклатуры; Если ТоварСсылка.ТипНоменклатуры = ТипыНоменклатуры.ПустаяСсылка() Тогда Объект = ТоварСсылка.ПолучитьОбъект(); Объект.ТипНоменклатуры = ТипыНоменклатуры.Товар; Попытка Объект.Записать(); Исключение Предупреждение(НСтр(\"ru = 'Не удалось записать объект';\" + \" en = 'Can't write the object'\") + \" '\" + Объект + '\"! |\"+ ОписаниеОшибки(),60); КонецПопытки; КонецЕсли;",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog125/catalog126/object129/methods/GetObject264.html"
+          },
+          {
+            "score": 0.3409,
+            "chunk_type": "card",
+            "kind": "method",
+            "name_ru": "Записать",
+            "name_en": "Write",
+            "parent_ru": "Расширение формы клиентского приложения для справочника",
+            "parent_en": "Client application form extension for catalogs",
+            "full_name": "Расширение формы клиентского приложения для справочника.Записать (Client application form extension for catalogs.Write)",
+            "since_version": "8.2",
+            "deprecated": false,
+            "availability": "Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "Булево . Истина - успешно записан; Ложь - в противном случае",
+            "text": "[метод] Расширение формы клиентского приложения для справочника.Записать (Client application form extension for catalogs.Write)\nИмена: Записать Write Расширение формы клиентского приложения для справочника.Записать Client application form extension for catalogs.Write\nЗаписывает объект.\nВозвращает: Булево . Истина - успешно записан; Ложь - в противном случае\nДоступность: Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер.\nдоступен с 8.2",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog1649/catalog1890/Client application form extension for catalogs/methods/Write3875.html"
+          },
+          {
+            "score": 0.2857,
+            "chunk_type": "card",
+            "kind": "method",
+            "name_ru": "ЗаписатьВФорме",
+            "name_en": "WriteInForm",
+            "parent_ru": "Расширение формы элемента справочника",
+            "parent_en": "Catalog item form extension",
+            "full_name": "Расширение формы элемента справочника.ЗаписатьВФорме (Catalog item form extension.WriteInForm)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Толстый клиент.",
+            "returns": "Булево . Истина - объект записан; Ложь - в противном случае",
+            "text": "[метод] Расширение формы элемента справочника.ЗаписатьВФорме (Catalog item form extension.WriteInForm)\nИмена: ЗаписатьВФорме WriteInForm Расширение формы элемента справочника.ЗаписатьВФорме Catalog item form extension.WriteInForm\nСлова: Записать В Форме Write In Form\nЗаписывает объект, редактируемый в данный момент в форме.\nВозвращает: Булево . Истина - объект записан; Ложь - в противном случае\nДоступность: Толстый клиент.\nдоступен с 8.0",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog125/catalog126/Catalog item form extension/methods/WriteInForm323.html"
+          }
+        ],
+        "search_type": "hybrid"
+      }
+    },
+    {
+      "id": "ph-008",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "таблица значений",
+        "limit": 10
+      },
+      "notes": "должен найти сам тип ТаблицаЗначений как object_type",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 114.52572400003191,
+      "search_type": "hybrid",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 10
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": true,
+          "detail": {
+            "k": 5,
+            "values": [
+              "ТаблицаЗначений",
+              "ValueTable"
+            ],
+            "match_rank": 1,
+            "matched_name": "таблицазначений",
+            "hits_examined": 5
+          },
+          "match_rank": 1
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": true,
+          "detail": {
+            "k": 5,
+            "kinds": [
+              "object_type",
+              "category"
+            ],
+            "first_match_rank": 1,
+            "observed_kinds": [
+              "object_type",
+              "object_type",
+              "method",
+              "method",
+              "method"
+            ]
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": 1,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [
+          {
+            "score": 0.8333,
+            "chunk_type": "card",
+            "kind": "object_type",
+            "name_ru": "ТаблицаЗначений",
+            "name_en": "ValueTable",
+            "parent_ru": "",
+            "parent_en": "",
+            "full_name": "ТаблицаЗначений (ValueTable)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер. Возможен обмен с сервером. Сериализуется. Данный объект может быть сериализован в/из XDTO. Тип XDTO, соответствующий данному объекту, определяется в пространстве имен {http://v8.1c.ru/8.1/data/core}. Имя типа XDTO: ValueTable.",
+            "returns": "",
+            "text": "[тип] ТаблицаЗначений (ValueTable)\nИмена: ТаблицаЗначений ValueTable\nСлова: Таблица Значений Value Table\nТаблица значений предназначена для хранения значений в табличном виде. Все основные операции с таблицей производятся именно через этот объект. Он позволяет манипулировать строками таблицы значений и предоставляет доступ к коллекции колонок. Колонки могут быть различных типов (в том числе множественных).\nДоступность: Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер. Возможен обмен с сервером. Сериализуется. Данный объект может быть сериализован в/из XDTO. Тип XDTO, соответствующий данному объекту, определяется в пространстве имен {http://v8.1c.ru/8.1/data/core}. Имя типа XDTO: ValueTable.\nдоступен с 8.0",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog234/catalog236/ValueTable.html"
+          },
+          {
+            "score": 0.5667,
+            "chunk_type": "card",
+            "kind": "object_type",
+            "name_ru": "Таблица значений",
+            "name_en": "",
+            "parent_ru": "",
+            "parent_en": "",
+            "full_name": "Таблица значений",
+            "since_version": "",
+            "deprecated": false,
+            "availability": "",
+            "returns": "",
+            "text": "[тип] Таблица значений\nИмена: Таблица значений\nСлова: Таблица значений",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog234/catalog236.html"
+          },
+          {
+            "score": 0.3333,
+            "chunk_type": "card",
+            "kind": "method",
+            "name_ru": "Количество",
+            "name_en": "Count",
+            "parent_ru": "ТаблицаЗначений",
+            "parent_en": "ValueTable",
+            "full_name": "ТаблицаЗначений.Количество (ValueTable.Count)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "Число",
+            "text": "[метод] ТаблицаЗначений.Количество (ValueTable.Count)\nИмена: Количество Count ТаблицаЗначений.Количество ValueTable.Count\nПолучает количество строк таблицы значений.\nВозвращает: Число\nДоступность: Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.\nдоступен с 8.0",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog234/catalog236/ValueTable/methods/Count109.html"
+          },
+          {
+            "score": 0.25,
+            "chunk_type": "params",
+            "kind": "method",
+            "name_ru": "Загрузить",
+            "name_en": "Load",
+            "parent_ru": "ДанныеФормыКоллекция",
+            "parent_en": "FormDataCollection",
+            "full_name": "ДанныеФормыКоллекция.Загрузить (FormDataCollection.Load)",
+            "since_version": "8.2",
+            "deprecated": false,
+            "availability": "Сервер, мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "",
+            "text": "[параметры] ДанныеФормыКоллекция.Загрузить (FormDataCollection.Load)\n— Таблица (необязательный) — ТаблицаЗначений: Таблица значений, откуда загружается табличная часть.",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog1649/catalog1614/FormDataCollection/methods/Load3852.html"
+          },
+          {
+            "score": 0.25,
+            "chunk_type": "card",
+            "kind": "method",
+            "name_ru": "Итог",
+            "name_en": "Total",
+            "parent_ru": "ТаблицаЗначений",
+            "parent_en": "ValueTable",
+            "full_name": "ТаблицаЗначений.Итог (ValueTable.Total)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "availability": "Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "Число , Неопределено . Сумма значений по всем строкам указанной колонки",
+            "text": "[метод] ТаблицаЗначений.Итог (ValueTable.Total)\nИмена: Итог Total ТаблицаЗначений.Итог ValueTable.Total\nСуммирует значения всех строк в указанной колонке. Если в колонке установлен тип и он единственный, то при суммировании будет предприниматься попытка преобразования значения к типу Число . Если колонке не присвоены типы, то в процессе суммирования будут принимать участие только значения, имеющие тип Число , значения других типов будут игнорироваться. Если в колонке несколько типов и среди них есть тип Число , то в процессе суммирования будут принимать участие только значения, имеющие тип Число , значения других типов будут игнорироваться. Если в колонке несколько типов и среди них нет типа Число , то результатом будет значение Неопределено .\nВозвращает: Число , Неопределено . Сумма значений по всем строкам указанной колонки\nДоступность: Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.\nдоступен с 8.0",
+            "hbk_file": "shcntx_ru.hbk",
+            "file_path": "objects/catalog234/catalog236/ValueTable/methods/Total652.html"
+          }
+        ],
+        "search_type": "hybrid"
+      }
+    },
+    {
+      "id": "ph-009",
+      "tool": "platform_help_lookup",
+      "args": {
+        "name": "НайтиПоНаименованию",
+        "limit": 10
+      },
+      "notes": "lookup по имени RU — должно быть несколько карточек (Catalog, Document и т.д.)",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 598.5114319998956,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 6
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": true,
+          "detail": {
+            "k": 10,
+            "values": [
+              "НайтиПоНаименованию",
+              "FindByDescription"
+            ],
+            "match_rank": 1,
+            "matched_name": "найтипонаименованию",
+            "hits_examined": 6
+          },
+          "match_rank": 1
+        }
+      ],
+      "soft": [
+        {
+          "type": "results_count_at_least",
+          "passed": true,
+          "detail": {
+            "min": 2,
+            "actual": 6
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": 1,
+      "mrr_max_k": 10,
+      "response_preview": {
+        "results": [
+          {
+            "kind": "method",
+            "name_ru": "НайтиПоНаименованию",
+            "name_en": "FindByDescription",
+            "parent_ru": "СправочникМенеджер.<Имя справочника>",
+            "parent_en": "CatalogManager.<Catalog name>",
+            "full_name": "СправочникМенеджер.<Имя справочника>.НайтиПоНаименованию (CatalogManager.<Catalog name>.FindByDescription)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "deprecated_version": "",
+            "availability": "Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "СправочникСсылка. < Имя справочника >, Неопределено . Ссылка на найденный элемент справочника. Если не существует ни одного элемента с требуемым наименованием, то будет возвращена пустая ссылка. Если для справочника наименование не задано (длина = 0) и поиск выполняется по полному соответствию, то будет возвращено Неопределено",
+            "text": "[метод] СправочникМенеджер.<Имя справочника>.НайтиПоНаименованию (CatalogManager.<Catalog name>.FindByDescription)\nИмена: НайтиПоНаименованию FindByDescription СправочникМенеджер.<Имя справочника>.НайтиПоНаименованию CatalogManager.<Catalog name>.FindByDescription\nСлова: Найти По Наименованию Find By Description\nОсуществляет поиск элемента по его наименованию.\nВозвращает: СправочникСсылка. < Имя справочника >, Неопределено . Ссылка на найденный элемент справочника. Если не существует ни одного элемента с требуемым наименованием, то будет возвращена пустая ссылка. Если для справочника наименование не задано (длина = 0) и поиск выполняется по полному соответствию, то будет возвращено Неопределено\nДоступность: Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.\nдоступен с 8.0",
+            "file_path": "objects/catalog125/catalog126/object128/methods/FindByDescription251.html"
+          },
+          {
+            "kind": "method",
+            "name_ru": "НайтиПоНаименованию",
+            "name_en": "FindByDescription",
+            "parent_ru": "ПланВидовРасчетаМенеджер.<Имя плана видов расчета>",
+            "parent_en": "ChartOfCalculationTypesManager.<Chart of calculation types name>",
+            "full_name": "ПланВидовРасчетаМенеджер.<Имя плана видов расчета>.НайтиПоНаименованию (ChartOfCalculationTypesManager.<Chart of calculation types name>.FindByDescription)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "deprecated_version": "",
+            "availability": "Сервер, толстый клиент, внешнее соединение.",
+            "returns": "ПланВидовРасчетаСсылка. < Имя плана видов расчета >, Неопределено . Ссылка на найденный вид расчета. Если объект с заданным наименованием не найден, возвращает пустую ссылку на вид расчета. Если наименование не задано (длина = 0) и поиск выполняется по полному соответствию, то будет возвращено Неопределено",
+            "text": "[метод] ПланВидовРасчетаМенеджер.<Имя плана видов расчета>.НайтиПоНаименованию (ChartOfCalculationTypesManager.<Chart of calculation types name>.FindByDescription)\nИмена: НайтиПоНаименованию FindByDescription ПланВидовРасчетаМенеджер.<Имя плана видов расчета>.НайтиПоНаименованию ChartOfCalculationTypesManager.<Chart of calculation types name>.FindByDescription\nСлова: Найти По Наименованию Find By Description\nОсуществляет поиск вида расчета по наименованию.\nВозвращает: ПланВидовРасчетаСсылка. < Имя плана видов расчета >, Неопределено . Ссылка на найденный вид расчета. Если объект с заданным наименованием не найден, возвращает пустую ссылку на вид расчета. Если наименование не задано (длина = 0) и поиск выполняется по полному соответствию, то будет возвращено Неопределено\nДоступность: Сервер, толстый клиент, внешнее соединение.\nдоступен с 8.0",
+            "file_path": "objects/catalog125/catalog474/object476/methods/FindByDescription1190.html"
+          },
+          {
+            "kind": "method",
+            "name_ru": "НайтиПоНаименованию",
+            "name_en": "FindByDescription",
+            "parent_ru": "ПланОбменаМенеджер.<Имя плана обмена>",
+            "parent_en": "ExchangePlanManager.<Exchange plan name>",
+            "full_name": "ПланОбменаМенеджер.<Имя плана обмена>.НайтиПоНаименованию (ExchangePlanManager.<Exchange plan name>.FindByDescription)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "deprecated_version": "",
+            "availability": "Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "ПланОбменаСсылка.<Имя плана обмена> . Ссылка на найденный узел. Если не существует ни одного узла с требуемым наименованием, то будет возвращена пустая ссылка",
+            "text": "[метод] ПланОбменаМенеджер.<Имя плана обмена>.НайтиПоНаименованию (ExchangePlanManager.<Exchange plan name>.FindByDescription)\nИмена: НайтиПоНаименованию FindByDescription ПланОбменаМенеджер.<Имя плана обмена>.НайтиПоНаименованию ExchangePlanManager.<Exchange plan name>.FindByDescription\nСлова: Найти По Наименованию Find By Description\nОсуществляет поиск узла плана обмена по его наименованию.\nВозвращает: ПланОбменаСсылка.<Имя плана обмена> . Ссылка на найденный узел. Если не существует ни одного узла с требуемым наименованием, то будет возвращена пустая ссылка\nДоступность: Сервер, толстый клиент, внешнее соединение, мобильное приложение (сервер), мобильный автономный сервер.\nдоступен с 8.0",
+            "file_path": "objects/catalog125/catalog676/object678/methods/FindByDescription1767.html"
+          },
+          {
+            "kind": "method",
+            "name_ru": "НайтиПоНаименованию",
+            "name_en": "FindByDescription",
+            "parent_ru": "ЗадачаМенеджер.<Имя задачи>",
+            "parent_en": "TaskManager.<Task name>",
+            "full_name": "ЗадачаМенеджер.<Имя задачи>.НайтиПоНаименованию (TaskManager.<Task name>.FindByDescription)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "deprecated_version": "",
+            "availability": "Сервер, толстый клиент, внешнее соединение.",
+            "returns": "ЗадачаСсылка. < Имя задачи >, Неопределено . Ссылка на найденную задачу. Если не существует ни одной задачи с требуемым наименованием, то будет возвращена пустая ссылка. Если наименование не задано (длина = 0) и поиск выполняется по полному соответствию, то будет возвращено Неопределено",
+            "text": "[метод] ЗадачаМенеджер.<Имя задачи>.НайтиПоНаименованию (TaskManager.<Task name>.FindByDescription)\nИмена: НайтиПоНаименованию FindByDescription ЗадачаМенеджер.<Имя задачи>.НайтиПоНаименованию TaskManager.<Task name>.FindByDescription\nСлова: Найти По Наименованию Find By Description\nОсуществляет поиск задачи по ее наименованию.\nВозвращает: ЗадачаСсылка. < Имя задачи >, Неопределено . Ссылка на найденную задачу. Если не существует ни одной задачи с требуемым наименованием, то будет возвращена пустая ссылка. Если наименование не задано (длина = 0) и поиск выполняется по полному соответствию, то будет возвращено Неопределено\nДоступность: Сервер, толстый клиент, внешнее соединение.\nдоступен с 8.0",
+            "file_path": "objects/catalog125/catalog719/object722/methods/FindByDescription1916.html"
+          },
+          {
+            "kind": "method",
+            "name_ru": "НайтиПоНаименованию",
+            "name_en": "FindByDescription",
+            "parent_ru": "ПланВидовХарактеристикМенеджер.<Имя плана видов характеристик>",
+            "parent_en": "ChartOfCharacteristicTypesManager.<Chart of characteristic types name>",
+            "full_name": "ПланВидовХарактеристикМенеджер.<Имя плана видов характеристик>.НайтиПоНаименованию (ChartOfCharacteristicTypesManager.<Chart of characteristic types name>.FindByDescription)",
+            "since_version": "8.0",
+            "deprecated": false,
+            "deprecated_version": "",
+            "availability": "Сервер, толстый клиент, внешнее соединение.",
+            "returns": "ПланВидовХарактеристикСсылка. < Имя плана видов характеристик >, Неопределено . Ссылка на найденный вид характеристики. Если не существует ни одного элемента с требуемым наименованием, то будет возвращена пустая ссылка. Если наименование не задано (длина = 0) и поиск выполняется по полному соответствию, то будет возвращено Неопределено",
+            "text": "[метод] ПланВидовХарактеристикМенеджер.<Имя плана видов характеристик>.НайтиПоНаименованию (ChartOfCharacteristicTypesManager.<Chart of characteristic types name>.FindByDescription)\nИмена: НайтиПоНаименованию FindByDescription ПланВидовХарактеристикМенеджер.<Имя плана видов характеристик>.НайтиПоНаименованию ChartOfCharacteristicTypesManager.<Chart of characteristic types name>.FindByDescription\nСлова: Найти По Наименованию Find By Description\nОсуществляет поиск элемента по его наименованию.\nВозвращает: ПланВидовХарактеристикСсылка. < Имя плана видов характеристик >, Неопределено . Ссылка на найденный вид характеристики. Если не существует ни одного элемента с требуемым наименованием, то будет возвращена пустая ссылка. Если наименование не задано (длина = 0) и поиск выполняется по полному соответствию, то будет возвращено Неопределено\nДоступность: Сервер, толстый клиент, внешнее соединение.\nдоступен с 8.0",
+            "file_path": "objects/catalog125/catalog433/object441/methods/FindByDescription1818.html"
+          }
+        ],
+        "search_type": null
+      }
+    },
+    {
+      "id": "ph-010",
+      "tool": "platform_help_lookup",
+      "args": {
+        "name": "StrSplit",
+        "limit": 5
+      },
+      "notes": "lookup по английскому имени — проверка что name_en тоже индексируется",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 247.61452999996436,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 1
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": true,
+          "detail": {
+            "k": 5,
+            "values": [
+              "СтрРазделить",
+              "StrSplit"
+            ],
+            "match_rank": 1,
+            "matched_name": "стрразделить",
+            "hits_examined": 1
+          },
+          "match_rank": 1
+        }
+      ],
+      "soft": [],
+      "mrr_rank": 1,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [
+          {
+            "kind": "method",
+            "name_ru": "СтрРазделить",
+            "name_en": "StrSplit",
+            "parent_ru": "Глобальный контекст",
+            "parent_en": "Global context",
+            "full_name": "Глобальный контекст.СтрРазделить (Global context.StrSplit)",
+            "since_version": "8.3.6",
+            "deprecated": false,
+            "deprecated_version": "",
+            "availability": "Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер.",
+            "returns": "Массив . Массив со строками, которые получились в результате разделения исходной строки",
+            "text": "[метод] Глобальный контекст.СтрРазделить (Global context.StrSplit)\nИмена: СтрРазделить StrSplit Глобальный контекст.СтрРазделить Global context.StrSplit\nСлова: Стр Разделить Str Split\nРазделяет строку на части по указанным символам-разделителям.\nВозвращает: Массив . Массив со строками, которые получились в результате разделения исходной строки\nДоступность: Тонкий клиент, веб-клиент, мобильный клиент, сервер, толстый клиент, внешнее соединение, мобильное приложение (клиент), мобильное приложение (сервер), мобильный автономный сервер.\nдоступен с 8.3.6",
+            "file_path": "objects/Global context/methods/catalog4838/StrSplit4532.html"
+          }
+        ],
+        "search_type": null
+      }
+    }
+  ]
+}

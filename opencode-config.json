@@ -1,0 +1,33 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "1c-metadata-graph": {
+      "type": "remote",
+      "url": "http://mcp-metadata-graph:8001/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:MCP_SHARED_SECRET}"
+      }
+    },
+    "1c-bsl-checker": {
+      "type": "remote",
+      "url": "http://mcp-bsl-checker:8002/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:MCP_SHARED_SECRET}"
+      }
+    },
+    "1c-platform-help": {
+      "type": "remote",
+      "url": "http://mcp-platform-help:8003/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:MCP_SHARED_SECRET}"
+      }
+    },
+    "1c-query-builder": {
+      "type": "remote",
+      "url": "http://mcp-query-builder:8009/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:MCP_SHARED_SECRET}"
+      }
+    }
+  }
+}

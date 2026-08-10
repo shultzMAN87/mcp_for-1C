@@ -1,0 +1,23 @@
+// Шаблонный датасет — 10 примеров, покрывающий основные типы проверок.
+// Добавляй свои строки в этот же файл по образцу. Порядок не важен.
+// Формат — см. ../schema.md. Комментарии (строки с // в начале) пропускаются.
+
+// ───────── platform_help_search: строки ─────────
+{"id":"ph-001","tool":"platform_help_search","args":{"query":"разделить строку","limit":10},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":5,"values":["СтрРазделить","StrSplit"]}],"soft":[{"type":"any_hit_kind","k":5,"kinds":["method"]}]},"notes":"типовая задача: разрезать строку по разделителю"}
+{"id":"ph-002","tool":"platform_help_search","args":{"query":"длина строки","limit":10},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":5,"values":["СтрДлина","StrLen"]}],"soft":[{"type":"any_hit_kind","k":5,"kinds":["method"]}]},"notes":"базовая строковая функция"}
+{"id":"ph-003","tool":"platform_help_search","args":{"query":"заменить подстроку в строке","limit":10},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":5,"values":["СтрЗаменить","StrReplace"]}],"soft":[]},"notes":"замена подстроки — частый сценарий"}
+
+// ───────── platform_help_search: даты ─────────
+{"id":"ph-004","tool":"platform_help_search","args":{"query":"начало дня от даты","limit":10},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":5,"values":["НачалоДня","BegOfDay"]}],"soft":[{"type":"any_hit_kind","k":5,"kinds":["method"]}]},"notes":"усечение времени до 00:00"}
+{"id":"ph-005","tool":"platform_help_search","args":{"query":"разница между двумя датами в секундах","limit":10},"expect":{"hard":[{"type":"non_empty"}],"soft":[{"type":"name_in_top_k","k":10,"values":["РазностьДат","DateDiff","ТекущаяДата","CurrentDate"]}]},"notes":"запрос размытый, hard-совпадения ожидать не стоит — только страховочный non_empty"}
+
+// ───────── platform_help_search: работа с объектами ─────────
+{"id":"ph-006","tool":"platform_help_search","args":{"query":"зафиксировать транзакцию","limit":10},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":5,"values":["ЗафиксироватьТранзакцию","CommitTransaction"]}],"soft":[{"type":"any_hit_kind","k":10,"kinds":["method"]}]},"notes":"управление транзакциями"}
+{"id":"ph-007","tool":"platform_help_search","args":{"query":"как записать объект справочника","limit":10,"kind":"method"},"expect":{"hard":[{"type":"non_empty"},{"type":"results_count_at_least","min":3}],"soft":[{"type":"full_name_contains","k":10,"substr":"Записать"}]},"notes":"проверяем, что фильтр kind=method работает и возвращает методы записи"}
+
+// ───────── platform_help_search: категория / object_type ─────────
+{"id":"ph-008","tool":"platform_help_search","args":{"query":"таблица значений","limit":10},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":5,"values":["ТаблицаЗначений","ValueTable"]}],"soft":[{"type":"any_hit_kind","k":5,"kinds":["object_type","category"]}]},"notes":"должен найти сам тип ТаблицаЗначений как object_type"}
+
+// ───────── platform_help_lookup: детерминированный поиск по имени ─────────
+{"id":"ph-009","tool":"platform_help_lookup","args":{"name":"НайтиПоНаименованию","limit":10},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":10,"values":["НайтиПоНаименованию","FindByDescription"]}],"soft":[{"type":"results_count_at_least","min":2}]},"notes":"lookup по имени RU — должно быть несколько карточек (Catalog, Document и т.д.)"}
+{"id":"ph-010","tool":"platform_help_lookup","args":{"name":"StrSplit","limit":5},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":5,"values":["СтрРазделить","StrSplit"]}],"soft":[]},"notes":"lookup по английскому имени — проверка что name_en тоже индексируется"}

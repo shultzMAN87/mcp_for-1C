@@ -1,0 +1,41 @@
+# Образ пятого сервера набора — v8std-mcp (STD-4).
+#
+# Отличие от остальных четырёх: код сервера сюда НЕ копируется. Он чужой
+# (zeegin/v8std, CC0) и приезжает монтированием ./v8std-data:/opt/v8std:ro,
+# которое наполняет scripts/fetch_v8std.py. Это сознательно:
+#
+#   - обновление корпуса и обновление сервера — одна операция (fetch),
+#     пересборка образа при этом не нужна;
+#   - чужой код не попадает в наш git и не превращается в форк, который
+#     кто-то однажды начнёт править;
+#   - видно границу ответственности: в образе только среда, снаружи — данные.
+#
+# Тот же приём, что с platform-help-data/*.hbk — данные лежат рядом с
+# проектом и монтируются только на чтение.
+FROM python:3.12-slim
+
+WORKDIR /opt/v8std
+
+COPY requirements-v8std.txt requirements-v8std.lock.txt ./
+# TR-2: ставим из лок-файла, если он заполнен, иначе — по границам.
+# Пустой лок-файл не должен ломать сборку: он всего лишь означает, что
+# `make lock` ещё не прогоняли.
+RUN if grep -qE '^[a-zA-Z]' requirements-v8std.lock.txt; then \
+        echo "TR-2: ставим из requirements-v8std.lock.txt"; \
+        pip install --no-cache-dir -r requirements-v8std.lock.txt; \
+    else \
+        echo "TR-2: requirements-v8std.lock.txt пуст — ставим по границам."; \
+        echo "      Пересборка может дать другие версии. Запустите: make lock"; \
+        pip install --no-cache-dir -r requirements-v8std.txt; \
+    fi
+
+# Кеш индекса, когда сервер тянет его с v8std.ru сам. В compose поверх
+# монтируется именованный том — иначе кеш терялся бы при каждом рестарте
+# и старт зависел бы от сети каждый раз.
+RUN mkdir -p /var/lib/v8std-mcp
+
+COPY v8std_entrypoint.py /opt/entrypoint.py
+
+EXPOSE 8765
+
+CMD ["python3", "/opt/entrypoint.py"]

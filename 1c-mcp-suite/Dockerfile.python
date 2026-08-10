@@ -1,0 +1,65 @@
+FROM python:3.12-slim
+
+# Чтобы print() в stdout не буферизовался в Docker-логах.
+# Иначе сообщения от start.py (метрики, аудит) не видны до тех пор,
+# пока процесс не завершится (а uvicorn не завершается).
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Зависимости Python
+COPY requirements.txt requirements.lock.txt ./
+# TR-2: ставим из лок-файла, если он заполнен, иначе — по границам.
+# Пустой лок-файл не должен ломать сборку: он всего лишь означает, что
+# `make lock` ещё не прогоняли. Предупреждение в логе сборки видно сразу.
+RUN if grep -qE '^[a-zA-Z]' requirements.lock.txt; then \
+        echo "TR-2: ставим из requirements.lock.txt"; \
+        pip install --no-cache-dir -r requirements.lock.txt; \
+    else \
+        echo "TR-2: requirements.lock.txt пуст — ставим по границам из requirements.txt."; \
+        echo "      Пересборка может дать другие версии. Запустите: make lock"; \
+        pip install --no-cache-dir -r requirements.txt; \
+    fi
+
+# Точка входа и общие модули
+COPY start.py                        /app/start.py
+COPY mcp_pagination.py               /app/mcp_pagination.py
+COPY mcp_metrics.py                  /app/mcp_metrics.py
+COPY mcp_cache.py                    /app/mcp_cache.py
+COPY mcp_auth.py                     /app/mcp_auth.py
+# TR-1: общая точка входа Streamable HTTP
+COPY mcp_http.py                     /app/mcp_http.py
+# TOOL-1/TOOL-2/SEC-5: централизованный фильтр набора инструментов
+COPY mcp_tool_filter.py              /app/mcp_tool_filter.py
+
+# Базовые серверы (metadata-graph: server.py + v3-расширения, индексер: v3)
+COPY mcp-metadata-graph/server.py             /app/mcp_metadata_graph.py
+COPY mcp-metadata-graph/graph_state.py        /app/graph_state.py
+COPY mcp-metadata-graph/server_v3_tools.py    /app/server_v3_tools.py
+COPY mcp-metadata-graph/server_v3_code_tools.py /app/server_v3_code_tools.py
+COPY mcp-metadata-graph/server_v3_watch_tools.py /app/server_v3_watch_tools.py
+COPY mcp-metadata-graph-neo4j/indexer.py      /app/mcp_metadata_indexer.py
+COPY mcp-metadata-graph-neo4j/metadata_xml.py /app/metadata_xml.py
+COPY mcp-metadata-graph-neo4j/graph_writer.py /app/graph_writer.py
+COPY mcp-metadata-graph-neo4j/bsl_parser.py    /app/bsl_parser.py
+COPY mcp-metadata-graph-neo4j/bsl_resolver.py /app/bsl_resolver.py
+COPY mcp-metadata-graph-neo4j/incremental.py  /app/incremental.py
+COPY mcp-platform-help/server.py              /app/mcp_platform_help.py
+
+# v2: query-builder
+# FEAT-1/FEAT-2/QOPT-1: парсер и проверка вынесены из server.py отдельными
+# модулями, чтобы их можно было покрыть тестами без FastMCP и Neo4j.
+# Без этих трёх строк сервер падает на импорте при старте — ровно та же
+# грабля, что с graph_state.py в Заходе 2.
+COPY mcp-query-builder/server.py               /app/mcp_query_builder.py
+COPY mcp-query-builder/query_parser.py         /app/query_parser.py
+COPY mcp-query-builder/query_check.py          /app/query_check.py
+COPY mcp-query-builder/query_optimize_rules.py /app/query_optimize_rules.py
+
+# Watcher кодовой базы и XML-метаданных (задача 2.3)
+COPY workspace_watcher.py                /app/workspace_watcher.py
+
+# Каталоги данных
+RUN mkdir -p /data/1c-src /data/platform-help /data/templates
+
+EXPOSE 8001 8003 8009

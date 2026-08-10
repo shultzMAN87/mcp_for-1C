@@ -1,0 +1,41 @@
+{
+  "mcpServers": {
+    "1c-metadata-graph": {
+      "url": "http://localhost:8001/mcp",
+      "transport": "http",
+      "description": "Граф метаданных 1С (Neo4j + пагинация)",
+      "headers": {
+        "Authorization": "Bearer ${MCP_SHARED_SECRET}"
+      }
+    },
+    "1c-bsl-checker": {
+      "url": "http://localhost:8002/mcp",
+      "transport": "http",
+      "description": "Проверка синтаксиса BSL через BSL Language Server",
+      "headers": {
+        "Authorization": "Bearer ${MCP_SHARED_SECRET}"
+      }
+    },
+    "1c-platform-help": {
+      "url": "http://localhost:8003/mcp",
+      "transport": "http",
+      "description": "Справка платформы 1С (гибридный поиск по .hbk)",
+      "headers": {
+        "Authorization": "Bearer ${MCP_SHARED_SECRET}"
+      }
+    },
+    "1c-query-builder": {
+      "url": "http://localhost:8009/mcp",
+      "transport": "http",
+      "description": "Конструктор запросов 1С с валидацией по метаданным",
+      "headers": {
+        "Authorization": "Bearer ${MCP_SHARED_SECRET}"
+      }
+    },
+    "v8std": {
+      "url": "http://localhost:8765/mcp",
+      "transport": "http",
+      "description": "Стандарты разработки v8std (локальный сервер, без авторизации)"
+    }
+  }
+}

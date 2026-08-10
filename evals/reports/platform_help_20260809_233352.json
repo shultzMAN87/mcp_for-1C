@@ -1,0 +1,588 @@
+{
+  "meta": {
+    "dataset": "/app/evals/datasets/platform_help.jsonl",
+    "endpoint": "http://mcp-platform-help:8003/mcp",
+    "started_at": "2026-08-09T23:33:51.285332+00:00",
+    "finished_at": "2026-08-09T23:33:52.317324+00:00",
+    "duration_s": 1.031992,
+    "examples_total": 10
+  },
+  "summary": {
+    "total": 10,
+    "hard_passed": 0,
+    "hard_pass_rate": 0.0,
+    "soft_total": 8,
+    "soft_passed": 0,
+    "soft_pass_rate": 0.0,
+    "examples_with_mrr": 8,
+    "recall_at_1": 0.0,
+    "recall_at_5": 0.0,
+    "recall_at_10": 0.0,
+    "mrr": 0.0,
+    "latency_ms": {
+      "min": 21.8914950000908,
+      "median": 31.32580700003018,
+      "p95": 392.68981440031837,
+      "max": 645.4222560005292
+    },
+    "search_type_dist": {
+      "unavailable": 8,
+      "unknown": 2
+    },
+    "transport_errors": 0,
+    "tool_errors": 0
+  },
+  "examples": [
+    {
+      "id": "ph-001",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "разделить строку",
+        "limit": 10
+      },
+      "notes": "типовая задача: разрезать строку по разделителю",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 645.4222560005292,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "СтрРазделить",
+              "StrSplit"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "kinds": [
+              "method"
+            ],
+            "first_match_rank": null,
+            "observed_kinds": []
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-002",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "длина строки",
+        "limit": 10
+      },
+      "notes": "базовая строковая функция",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 23.873230999925,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "СтрДлина",
+              "StrLen"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "kinds": [
+              "method"
+            ],
+            "first_match_rank": null,
+            "observed_kinds": []
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-003",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "заменить подстроку в строке",
+        "limit": 10
+      },
+      "notes": "замена подстроки — частый сценарий",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 33.42298299958202,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "СтрЗаменить",
+              "StrReplace"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-004",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "начало дня от даты",
+        "limit": 10
+      },
+      "notes": "усечение времени до 00:00",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 21.8914950000908,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "НачалоДня",
+              "BegOfDay"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "kinds": [
+              "method"
+            ],
+            "first_match_rank": null,
+            "observed_kinds": []
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-005",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "разница между двумя датами в секундах",
+        "limit": 10
+      },
+      "notes": "запрос размытый, hard-совпадения ожидать не стоит — только страховочный non_empty",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 29.61182299986831,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 10,
+            "values": [
+              "РазностьДат",
+              "DateDiff",
+              "ТекущаяДата",
+              "CurrentDate"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-006",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "зафиксировать транзакцию",
+        "limit": 10
+      },
+      "notes": "управление транзакциями",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 33.039791000192054,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "ЗафиксироватьТранзакцию",
+              "CommitTransaction"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": false,
+          "detail": {
+            "k": 10,
+            "kinds": [
+              "method"
+            ],
+            "first_match_rank": null,
+            "observed_kinds": []
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-007",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "как записать объект справочника",
+        "limit": 10,
+        "kind": "method"
+      },
+      "notes": "проверяем, что фильтр kind=method работает и возвращает методы записи",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 27.042442000492883,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "results_count_at_least",
+          "passed": false,
+          "detail": {
+            "min": 3,
+            "actual": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "full_name_contains",
+          "passed": false,
+          "detail": {
+            "k": 10,
+            "substr": "Записать",
+            "match_rank": null,
+            "matched_full_name": null
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-008",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "таблица значений",
+        "limit": 10
+      },
+      "notes": "должен найти сам тип ТаблицаЗначений как object_type",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 25.948718000108784,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "ТаблицаЗначений",
+              "ValueTable"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "kinds": [
+              "object_type",
+              "category"
+            ],
+            "first_match_rank": null,
+            "observed_kinds": []
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-009",
+      "tool": "platform_help_lookup",
+      "args": {
+        "name": "НайтиПоНаименованию",
+        "limit": 10
+      },
+      "notes": "lookup по имени RU — должно быть несколько карточек (Catalog, Document и т.д.)",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 83.794608000062,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 10,
+            "values": [
+              "НайтиПоНаименованию",
+              "FindByDescription"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "results_count_at_least",
+          "passed": false,
+          "detail": {
+            "min": 2,
+            "actual": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 10,
+      "response_preview": {
+        "results": [],
+        "search_type": null
+      }
+    },
+    {
+      "id": "ph-010",
+      "tool": "platform_help_lookup",
+      "args": {
+        "name": "StrSplit",
+        "limit": 5
+      },
+      "notes": "lookup по английскому имени — проверка что name_en тоже индексируется",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 34.25553599936393,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "СтрРазделить",
+              "StrSplit"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [],
+        "search_type": null
+      }
+    }
+  ]
+}

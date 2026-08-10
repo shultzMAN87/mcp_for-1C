@@ -1,0 +1,24 @@
+# Python-зависимости для smoke-скриптов, runner'а и eval harness.
+#
+# Минимальный набор, нужный чтобы выполнялось:
+#   scripts/eval.py
+#   evals/runner/* (run_eval, mcp_client, tests, metrics, predicates, report)
+#
+# Версии — минимальные подтверждённые на эталонной установке.
+# Реальные версии могут быть выше — это нормально.
+
+# MCP SDK (CLI) — главная зависимость runner'а
+# Тянет за собой: anyio, starlette, uvicorn, typer, rich, sse-starlette,
+#                 httpx-sse, pydantic, pydantic-settings, click, colorama,
+#                 markdown-it-py, mdurl, Pygments, shellingham
+# TR-1/TR-2: Streamable HTTP появился в SDK 1.9
+mcp[cli]>=1.9.0,<2
+
+# HTTP-клиент — используется напрямую в отдельных проверках
+httpx>=0.27.0
+
+# Подтягивается mcp, но фиксируем явно — eval.py и smoke-тесты на него рассчитывают
+pydantic>=2.0.0
+
+# .env-файлы (используется в некоторых скриптах для загрузки секретов)
+python-dotenv>=1.0.0

@@ -1,0 +1,479 @@
+services:
+  # ── OpenCode (AI-агент) ────────────────────────────────────────────
+  #
+  # За профилем, поэтому `docker compose up -d` его НЕ поднимает.
+  # Причина: контур не рабочий — OPENROUTER_API_KEY не задан, из-за чего
+  # check_prereqs.py показывает FAIL, а compose пишет предупреждение на
+  # каждую команду. Пока сервисы поднимали поимённо, это не мешало; после
+  # CFG-2 обычный `up -d` стал поднимать всё, и в стеке оказался заведомо
+  # неработающий контейнер.
+  #
+  # Запуск по требованию:
+  #     docker compose --profile opencode up -d opencode
+  #
+  # Судьба контура по-прежнему открыта (PLAN-2 §5, PLAN-3 §5): либо задать
+  # ключ, либо удалить четыре файла и этот сервис. Профиль — не решение,
+  # а способ не мешать работе, пока решение не принято.
+  opencode:
+    profiles: ["opencode"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: opencode-dev
+    ports:
+      - "127.0.0.1:4096:4096"
+    volumes:
+      - ${WORKSPACE_DIR:-./workspace}:/workspace
+      - ./opencode-config.json:/root/.config/opencode/opencode.json:ro
+    environment:
+      - MCP_SHARED_SECRET=${MCP_SHARED_SECRET:?Задайте MCP_SHARED_SECRET в .env (openssl rand -hex 32)}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+    #   # опционально если VPN
+    #   - HTTP_PROXY=http://host.docker.internal:10809
+    #   - HTTPS_PROXY=http://host.docker.internal:10809
+    #   - NO_PROXY=mcp-metadata-graph,mcp-bsl-checker,mcp-platform-help,mcp-query-builder,qdrant,neo4j,localhost,127.0.0.1
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    depends_on:
+      # Только активные серверы первого этапа. Шесть выключенных ушли в
+      # профиль extra, и зависеть от них нельзя — compose откажется стартовать.
+      # CFG-2: ждём готовности, а не старта — агент ходит в них сразу.
+      mcp-metadata-graph:
+        condition: service_healthy
+      mcp-bsl-checker:
+        condition: service_healthy
+      mcp-platform-help:
+        condition: service_healthy
+      mcp-query-builder:
+        condition: service_healthy
+
+  # ══════════════════════════════════════════════════════════════════
+  # Инфраструктура: Neo4j (граф) + Qdrant (векторы)
+  # ══════════════════════════════════════════════════════════════════
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: neo4j
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - neo4j-data:/data
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:?Задайте NEO4J_PASSWORD в .env (см. .env.example)}
+      # Отдельная переменная нужна healthcheck'у: NEO4J_AUTH образ после
+      # инициализации затирает, а cypher-shell'у пароль нужен всегда.
+      #
+      # ⚠️ Имя БЕЗ префикса NEO4J_ — и это не косметика. Образ превращает
+      # любую переменную вида NEO4J_<что-то> в настройку конфигурации:
+      # NEO4J_PASSWORD стал бы параметром `password`, такого параметра нет,
+      # строгая валидация конфига в Neo4j 5 включена по умолчанию, и
+      # контейнер уходит в рестарт-цикл ещё до старта СУБД. Проверено
+      # ошибкой: именно так и случилось.
+      - HC_NEO4J_PASSWORD=${NEO4J_PASSWORD:?Задайте NEO4J_PASSWORD в .env (см. .env.example)}
+      - NEO4J_PLUGINS=[]
+    # CFG-2: до этой правки индексатор стартовал одновременно с Neo4j, и
+    # порядок готовности не гарантировался ничем — при развёртывании
+    # отработало случайно (PLAN-2 §2.2). Проверяем через cypher-shell: он
+    # есть в образе, в отличие от curl и wget.
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p \"$$HC_NEO4J_PASSWORD\" 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    # CFG-2: в образе Qdrant нет ни curl, ни wget, поэтому проверяем порт
+    # средствами bash (образ на debian-slim, bash есть).
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  # ══════════════════════════════════════════════════════════════════
+  # Индексаторы (запускаются один раз)
+  # ══════════════════════════════════════════════════════════════════
+
+  # Индексатор метаданных конфигурации → Neo4j
+  metadata-indexer:
+    build:
+      context: ./1c-mcp-suite
+      dockerfile: Dockerfile.python
+    container_name: metadata-indexer
+    command: python /app/mcp_metadata_indexer.py
+    volumes:
+      - ${WORKSPACE_DIR:-./workspace}:/data/1c-xml:ro   # XML-выгрузка для v3
+    environment:
+      - METADATA_SRC_DIR=/data/1c-xml         # ← переопределение, было /data/1c-src
+      # PERF-5: без этого прогресс-логи копятся в буфере stdout и долетают
+      # рывками. У help-indexer это стоило суток слепоты: этап dense-
+      # эмбеддингов печатает скорость и ETA каждые 20 батчей, но ни одна
+      # строка не долетала — снаружи зависший процесс и работающий выглядят
+      # одинаково.
+      - PYTHONUNBUFFERED=1
+      - NEO4J_URL=http://neo4j:7474
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Задайте NEO4J_PASSWORD в .env (см. .env.example)}
+      # CFG-2: раньше форс был возможен только через `docker compose run --rm -e`,
+      # и на этом уже спотыкались: `$env:METADATA_FORCE_REINDEX` перед
+      # `docker compose up` не передавался, потому что переменной не было в
+      # этой секции. Теперь передаётся, а `run --rm -e` продолжает работать.
+      - METADATA_FORCE_REINDEX=${METADATA_FORCE_REINDEX:-false}
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    restart: "no"
+
+  # Индексатор справки платформы (.hbk → Qdrant, только dense)
+  help-indexer:
+    build:
+      context: ./1c-mcp-suite
+      dockerfile: Dockerfile.embeddings
+    container_name: help-indexer
+    command: python /app/indexer.py
+    volumes:
+      - ./platform-help-data:/data/1c-platform:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_COLLECTION=platform_help
+      - PLATFORM_BIN_DIR=/data/1c-platform
+      - EMBEDDING_MODEL=intfloat/multilingual-e5-base
+      # skip_if_nonempty | if_files_changed | force
+      - REINDEX_MODE=${HELP_REINDEX_MODE:-skip_if_nonempty}
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    restart: "no"
+
+  # Watcher кодовой базы и XML-метаданных (задача 2.3 + 4.6.5).
+  # Слушает выгрузку 1С и инкрементально переиндексирует изменённые файлы
+  # через MCP-серверы:
+  #   .bsl     → mcp-metadata-graph.metadata_upsert_file (Neo4j call graph;
+  #              опционально, при METADATA_WATCH_ENABLED=true — 4.6.5)
+  #   .xml     → mcp-metadata-graph.metadata_upsert_file (Neo4j data schema;
+  #              опционально, при METADATA_WATCH_ENABLED=true)
+  #
+  # PORT-2 (доделано): путь к выгрузке во ВСЕХ сервисах берётся из
+  # WORKSPACE_DIR. Раньше переменную читал только bsl-checker, а остальные
+  # четыре монтирования были прибиты как ./workspace — смена пути в .env
+  # переключала один сервис из пяти, молча и незаметно.
+  #
+  # Про монтирование (4.6.5): watcher монтирует выгрузку в /workspace,
+  # metadata-graph — то же ./workspace, но в /data/1c-xml. Watcher шлёт
+  # абсолютные /workspace-пути; на стороне metadata-graph _norm_rel с
+  # tail-suffix фолбэком распознаёт хвост (CommonModules/X/Ext/Module.bsl
+  # и т.п.) и резолвит независимо от точки монтирования. Поэтому нам не
+  # нужно держать единый путь /data/1c-xml в обоих контейнерах — у
+  # code-rag, например, своя точка /workspace и свой WORKSPACE_DIR.
+  workspace-watcher:
+    build:
+      context: ./1c-mcp-suite
+      dockerfile: Dockerfile.python
+    container_name: workspace-watcher
+    command: python /app/workspace_watcher.py
+    volumes:
+      - ${WORKSPACE_DIR:-./workspace}:/workspace:ro
+    environment:
+      - MCP_SHARED_SECRET=${MCP_SHARED_SECRET:?Задайте MCP_SHARED_SECRET в .env (openssl rand -hex 32)}
+      - WATCHER_ENABLED=${WATCHER_ENABLED:-true}
+      - WATCHER_DEBOUNCE_SEC=${WATCHER_DEBOUNCE_SEC:-3}
+      # 4.6.5: ставь true, чтобы .bsl-события фанаутили в metadata-graph
+      # (Neo4j call graph), а .xml — триггерили metadata_upsert_file
+      # (Neo4j data schema). По умолчанию false для совместимости со
+      # стариками, у кого образ mcp-metadata-graph ещё не пересобран.
+      # Образ пересобран, tools metadata_upsert_file/metadata_remove_file есть —
+      # инкрементальный апдейт графа включён по умолчанию.
+      - METADATA_WATCH_ENABLED=${METADATA_WATCH_ENABLED:-true}
+      # Сервер mcp-code-rag удалён из проекта — фанаут .bsl в Qdrant
+      # отключён. Возвращать вместе с сервером, если он понадобится
+      # для FEAT-3 (см. PLAN.md 3.1).
+      - CODE_WATCH_ENABLED=false
+      - WATCH_CODE_DIR=/workspace
+      - WATCH_XML_DIR=/workspace               # ← XML лежит вместе с BSL в ./workspace
+      - METADATA_GRAPH_URL=http://mcp-metadata-graph:8001/mcp
+      # CFG-2: задержка была костылём против ровно той гонки, которую
+      # теперь снимает condition: service_healthy. Оставлена как запас —
+      # graph отвечает на /healthz раньше, чем заканчивает индексацию.
+      - WATCHER_INITIAL_DELAY=30
+    depends_on:
+      mcp-metadata-graph:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ══════════════════════════════════════════════════════════════════
+  # Базовые MCP-серверы
+  # ══════════════════════════════════════════════════════════════════
+
+  # ── 1. Граф метаданных (Neo4j + пагинация v2.1) ───────────────────
+  mcp-metadata-graph:
+    build:
+      context: ./1c-mcp-suite
+      dockerfile: Dockerfile.python
+    container_name: mcp-metadata-graph
+    command: python /app/start.py metadata-graph
+    ports:
+      - "127.0.0.1:8001:8001"
+      - "127.0.0.1:9000:9000"  # дашборд метрик MCP (mcp_metrics)
+    volumes:
+      - mcp-metrics:/data/metrics
+      # 4.6.5: серверу нужна та же выгрузка, что и metadata-indexer'у,
+      # чтобы tools metadata_upsert_file/metadata_remove_file могли
+      # читать .bsl/.xml с диска. Путь /data/1c-xml внутри контейнера
+      # ДОЛЖЕН СОВПАДАТЬ с METADATA_SRC_DIR у indexer'а и с тем абсолютным
+      # путём, который шлёт workspace-watcher (см. там же).
+      - ${WORKSPACE_DIR:-./workspace}:/data/1c-xml:ro
+    environment:
+      - MCP_SHARED_SECRET=${MCP_SHARED_SECRET:?Задайте MCP_SHARED_SECRET в .env (openssl rand -hex 32)}
+      - NEO4J_URL=http://neo4j:7474
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Задайте NEO4J_PASSWORD в .env (см. .env.example)}
+      # 4.6.5: совпадает с METADATA_SRC_DIR у metadata-indexer (выше).
+      # Если значения разойдутся, watcher будет слать пути, которые сервер
+      # не сможет резолвить — _norm_rel вернёт path_outside_src_root.
+      - METADATA_SRC_DIR=/data/1c-xml
+      # TOOL-1: core = рабочий набор под три задачи плана; full = ничего не резать
+      - MCP_TOOL_PROFILE=${MCP_TOOL_PROFILE:-core}
+      # SEC-5: metadata_reload делает MATCH (n) DETACH DELETE n.
+      # SEC-6: metadata_cypher — произвольный Cypher. Оба по умолчанию скрыты.
+      - ALLOW_DESTRUCTIVE_TOOLS=${ALLOW_DESTRUCTIVE_TOOLS:-0}
+      - ALLOW_RAW_CYPHER=${ALLOW_RAW_CYPHER:-0}
+      # Служебные metadata_upsert_file / metadata_remove_file нужны watcher'у
+      - ENABLE_WATCH_TOOLS=${ENABLE_WATCH_TOOLS:-1}
+      - METRICS_DASHBOARD=true
+      - METRICS_DB=/data/metrics/mcp_metrics.db
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      # Намеренно service_started, а не service_completed_successfully.
+      # При completed_successfully упавшая индексация означала бы, что
+      # сервер вообще не поднимется, и агент получил бы отказ соединения
+      # вместо ответа `graph_empty` с объяснением (FIX-3). Диагностика
+      # ценнее блокировки: сервер должен уметь сказать, что графа нет.
+      metadata-indexer:
+        condition: service_started
+    # CFG-2: /healthz добавляет mcp_http.py. Проверяем через python —
+    # в образе нет ни curl, ни wget, ставить их ради healthcheck'а незачем.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── 2. Проверка синтаксиса BSL (BSL Language Server) ──────────────
+  mcp-bsl-checker:
+    build:
+      context: ./1c-mcp-suite
+      dockerfile: Dockerfile.bsl
+    container_name: mcp-bsl-checker
+    ports:
+      - "127.0.0.1:8002:8002"
+    # CFG-2: /healthz добавляет mcp_http.py. Проверяем через python —
+    # в образе нет ни curl, ни wget, ставить их ради healthcheck'а незачем.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      # FIX-1: раньше монтировался ./1c-config-xml, где лежит только
+      # ОтчетПоКонфигурации.txt — bsl_check_directory анализировал пустоту.
+      # Настоящая XML-выгрузка лежит в ./workspace. Путь вынесен в .env (PORT-2).
+      - ${WORKSPACE_DIR:-./workspace}:/data/1c-src:ro
+    environment:
+      - MCP_SHARED_SECRET=${MCP_SHARED_SECRET:?Задайте MCP_SHARED_SECRET в .env (openssl rand -hex 32)}
+      - MCP_PORT=8002
+      - BSL_LS_JAR=${BSL_LS_JAR:-/opt/bsl-language-server/bsl-ls.jar}
+      - JAVA_OPTS=${JAVA_OPTS:--Xmx1g}
+    restart: unless-stopped
+
+  # ── 3. Справка по платформе 1С + ГИБРИДНЫЙ поиск по ИТС ───────────
+  # dense (e5) + sparse (BM25) + RRF fusion для коллекции its_articles
+  mcp-platform-help:
+    build:
+      context: ./1c-mcp-suite
+      dockerfile: Dockerfile.embeddings
+    container_name: mcp-platform-help
+    command: python /app/start.py platform-help
+    ports:
+      - "127.0.0.1:8003:8003"
+    environment:
+      - MCP_SHARED_SECRET=${MCP_SHARED_SECRET:?Задайте MCP_SHARED_SECRET в .env (openssl rand -hex 32)}
+      - METRICS_DB=/data/metrics/mcp_metrics.db
+      - METRICS_DASHBOARD=false
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_COLLECTION=platform_help
+      - ITS_COLLECTION=its_articles
+      - EMBEDDING_MODEL=intfloat/multilingual-e5-base
+      - BM25_MODEL=Qdrant/bm25
+    # CFG-2: /healthz добавляет mcp_http.py. Проверяем через python —
+    # в образе нет ни curl, ни wget, ставить их ради healthcheck'а незачем.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      help-indexer:
+        condition: service_started
+    volumes:
+      - mcp-metrics:/data/metrics
+    restart: unless-stopped
+
+  # ── 5. Стандарты разработки v8std (чужой сервер, STD-4) ───────────
+  #
+  # Это единственный сервер набора, код которого мы не пишем: он приезжает
+  # из репозитория zeegin/v8std (CC0) вместе с корпусом, монтированием
+  # ./v8std-data:ro. Наполняет каталог `python3 scripts/fetch_v8std.py`.
+  #
+  # Почему локально, а не публичный https://ai.v8std.ru/mcp:
+  #   - v8std_explain_snippet отправляет фрагмент кода, и авторы прямо
+  #     пишут не слать туда закрытый код;
+  #   - требование к набору — работать без интернета и не зависеть от
+  #     чужой доступности.
+  # Публичный адрес остаётся запасным вариантом на одну строку в
+  # .cursor/mcp.json — см. README, раздел про сервер № 5.
+  #
+  # Авторизации у него нет: bearer из mcp_auth.py — наша схема, чужой
+  # сервер про неё не знает. Отсюда два следствия, оба учтены:
+  # порт публикуется только на 127.0.0.1, а в docker-сети он доступен
+  # остальным контейнерам — как и Neo4j с Qdrant, которые тоже без токена.
+  v8std-mcp:
+    build:
+      context: ./1c-mcp-suite
+      dockerfile: Dockerfile.v8std
+    container_name: v8std-mcp
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./v8std-data:/opt/v8std:ro
+      - v8std-cache:/var/lib/v8std-mcp
+    environment:
+      - V8STD_MCP_PORT=8765
+      # 0 — запретить старт без локального корпуса (fail-closed).
+      # 1 (по умолчанию) — при пустом ./v8std-data взять индекс с v8std.ru.
+      - V8STD_ALLOW_REMOTE_INDEX=${V8STD_ALLOW_REMOTE_INDEX:-1}
+      - V8STD_MCP_LOG_LEVEL=${V8STD_MCP_LOG_LEVEL:-WARNING}
+    #   # Раскомментировать, если индекс тянется с v8std.ru через системный прокси
+    #   - HTTPS_PROXY=http://host.docker.internal:10809
+    #   - HTTP_PROXY=http://host.docker.internal:10809
+    #   - NO_PROXY=localhost,127.0.0.1
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # /healthz отдаёт сам сервер: 200 при загруженном индексе, 503 пока нет.
+    # То есть healthcheck здесь проверяет не только процесс, но и данные.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # ══════════════════════════════════════════════════════════════════
+  # v2: query-builder
+  # ══════════════════════════════════════════════════════════════════
+
+  # ── 6. Конструктор запросов 1С ────────────────────────────────────
+  mcp-query-builder:
+    build:
+      context: ./1c-mcp-suite
+      dockerfile: Dockerfile.python
+    container_name: mcp-query-builder
+    command: python /app/start.py query-builder
+    ports:
+      - "127.0.0.1:8009:8009"
+    environment:
+      - MCP_SHARED_SECRET=${MCP_SHARED_SECRET:?Задайте MCP_SHARED_SECRET в .env (openssl rand -hex 32)}
+      - METRICS_DB=/data/metrics/mcp_metrics.db
+      - METRICS_DASHBOARD=false
+      - NEO4J_URL=http://neo4j:7474
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Задайте NEO4J_PASSWORD в .env (см. .env.example)}
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    # CFG-2: /healthz добавляет mcp_http.py. Проверяем через python —
+    # в образе нет ни curl, ни wget, ставить их ради healthcheck'а незачем.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8009/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - mcp-metrics:/data/metrics
+    restart: unless-stopped
+
+  # ══════════════════════════════════════════════════════════════════
+  # v2.1: REST-прокси к живой базе 1С
+  # ══════════════════════════════════════════════════════════════════
+
+  # ── Eval-runner (задача 3.4) ──────────────────────────────────────
+  # Поднимается только по запросу: `docker compose --profile evals run --rm eval-runner`.
+  # Ходит в MCP-серверы по docker-DNS (mcp-platform-help:8003 и др.),
+  # отчёты пишет в ./evals/reports через bind-volume.
+  eval-runner:
+    profiles: ["evals"]
+    build:
+      context: ./evals/runner
+    image: mcp-eval-runner
+    container_name: mcp-eval-runner
+    environment:
+      - MCP_SHARED_SECRET=${MCP_SHARED_SECRET:?Задайте MCP_SHARED_SECRET в .env (openssl rand -hex 32)}
+    volumes:
+      - ./evals:/app/evals
+    # command оставлен из Dockerfile (CMD); перезапишется, если передаём
+    # свои аргументы через `docker compose run --rm eval-runner python ...`
+    # (так делает scripts/eval.py).
+    depends_on:
+      mcp-platform-help:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  qdrant-data:
+  neo4j-data:
+  mcp-metrics:
+  # Кеш индекса v8std на случай, когда он тянется с сайта, а не из
+  # ./v8std-data. Без тома старт зависел бы от сети при каждом рестарте.
+  v8std-cache:
+  # ── Shared volume для интеграции с yaxunit-stack ──
+  # mcp-testing складывает сюда payload (config/ + tests/), раннер 1С
+  # читает по тому же пути. yaxunit-stack/docker-compose.yml импортирует
+  # этот том как external. Явное `name` нужно, чтобы оба compose ссылались
+  # на одну и ту же физическую сущность независимо от COMPOSE_PROJECT_NAME.
+
+# ───────────────────────────────────────────────────────────────────────
+# Общая сеть для интеграции с опциональным yaxunit-stack.
+# yaxunit-stack/docker-compose.yml импортирует её как external и
+# подключает свой сервис `app` под алиасом `onec-server`. Благодаря
+# этому mcp-testing достучится до раннера тестов по DNS-имени.
+# ───────────────────────────────────────────────────────────────────────
+networks:
+  default:
+    name: 1c-suite-net
