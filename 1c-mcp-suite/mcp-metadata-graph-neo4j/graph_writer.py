@@ -402,25 +402,75 @@ CODE_LAYER_LABELS = (
 )
 
 
-def clear_metadata_layer(neo: Neo4j) -> dict:
+# FIX-13. Размер порции при удалении слоя.
+#
+# История дефекта. Обе очистки делали `MATCH (n) WHERE ... DETACH DELETE n`
+# ОДНИМ запросом, то есть одной транзакцией. Neo4j держит в памяти весь
+# набор удаляемого до коммита, и на боевой конфигурации транзакция вышла
+# на 1,3 млн узлов и 2,29 млн рёбер:
+#
+#   Neo.TransientError.General.MemoryPoolOutOfMemoryError
+#
+# Падение случилось в самом конце фазы 2, после 5,3 часа сборки графа
+# вызовов, — вся работа была выброшена, слой кода не записан, fingerprint
+# не сохранён. Дефект не воспроизводится ни на каком объёме меньше боевого,
+# поэтому и дожил до этого прогона.
+#
+# Почему цикл с LIMIT, а не `CALL { … } IN TRANSACTIONS`. Второе выглядит
+# уместнее, но исполняется только в неявной транзакции, а мы ходим в базу
+# через HTTP-эндпоинт /tx/commit, который в части версий Neo4j считается
+# явной. Получилась бы замена одного отказа на другой, зато более редкий и
+# зависящий от версии. Цикл с LIMIT работает везде и одинаково.
+DELETE_BATCH_DEFAULT = 10000
+
+
+def _delete_by_labels(neo: Neo4j, labels: Iterable[str], batch: int,
+                      what: str) -> int:
+    """
+    Порционно удаляет узлы с указанными метками. Возвращает число удалённых.
+
+    Обход идёт по одной метке за раз (`MATCH (n:Метка)`), а не общим
+    `WHERE 'Метка' IN labels(n)`: первое использует сканирование по метке,
+    второе перебирает все узлы базы на каждую порцию. При 130 порциях
+    разница уже не косметическая.
+
+    Узел с несколькими метками (:Callable:Procedure) удалится на первой из
+    них; на второй просто не найдётся, поэтому сумма по меткам — это число
+    узлов, а не срабатываний.
+    """
+    total = 0
+    prog = ProgressLogger(log, f"удаление {what}", every_sec=15.0,
+                          check_every=1, unit="узл")
+    for label in labels:
+        while True:
+            # Метку параметризировать нельзя — она из списка констант модуля.
+            rows = neo.rows(
+                f"MATCH (n:{label}) WITH n LIMIT $batch "
+                f"DETACH DELETE n RETURN count(*) AS deleted",
+                {"batch": batch},
+            )
+            deleted = rows[0]["deleted"] if rows else 0
+            if not deleted:
+                break
+            total += deleted
+            prog.step(deleted)
+    if total >= PROGRESS_MIN_ITEMS:
+        prog.done()
+    return total
+
+
+def clear_metadata_layer(neo: Neo4j, batch: int = DELETE_BATCH_DEFAULT) -> dict:
     """
     Удаляет только узлы слоя метаданных. Узлы графа вызовов (:Procedure,
     :Function, :Parameter), а также :Fingerprint остаются.
 
     Возвращает {'deleted_nodes': N}.
     """
-    label_match = " OR ".join(f"'{l}' IN labels(n)" for l in META_LAYER_LABELS)
-    # Параметризировать имя метки нельзя — собираем строку из known-constants.
-    rows = neo.rows(
-        f"MATCH (n) WHERE {label_match} "
-        f"WITH n, count(n) AS _ "
-        f"DETACH DELETE n "
-        f"RETURN count(*) AS deleted"
-    )
-    return {"deleted_nodes": rows[0]["deleted"] if rows else 0}
+    n = _delete_by_labels(neo, META_LAYER_LABELS, batch, "слоя 1")
+    return {"deleted_nodes": n}
 
 
-def clear_code_layer(neo: Neo4j) -> dict:
+def clear_code_layer(neo: Neo4j, batch: int = DELETE_BATCH_DEFAULT) -> dict:
     """
     Удаляет только узлы слоя вызовов (:Callable + :Parameter + :CallSite).
     Узлы слоя 1 (:MetadataObject и потомки) НЕ затрагиваются.
@@ -432,14 +482,8 @@ def clear_code_layer(neo: Neo4j) -> dict:
 
     Возвращает {'deleted_nodes': N}.
     """
-    label_match = " OR ".join(f"'{l}' IN labels(n)" for l in CODE_LAYER_LABELS)
-    rows = neo.rows(
-        f"MATCH (n) WHERE {label_match} "
-        f"WITH n, count(n) AS _ "
-        f"DETACH DELETE n "
-        f"RETURN count(*) AS deleted"
-    )
-    return {"deleted_nodes": rows[0]["deleted"] if rows else 0}
+    n = _delete_by_labels(neo, CODE_LAYER_LABELS, batch, "слоя 2")
+    return {"deleted_nodes": n}
 
 
 # ─── Запись узлов и рёбер ─────────────────────────────────────────────────

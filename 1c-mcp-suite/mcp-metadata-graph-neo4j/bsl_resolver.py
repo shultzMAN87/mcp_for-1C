@@ -64,6 +64,7 @@ API:
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -1155,6 +1156,62 @@ def _resolve_call(
 MAX_ITERATIONS = 8
 
 
+# PERF-7. Ранний останов фикс-пойнта по приросту РЕЗУЛЬТАТА.
+#
+# Что показал боевой прогон 11 августа 2026 (8 итераций, 5,3 часа):
+#
+#   итерация   resolved   callsites   время
+#   1          428 902    747 984     31,0 мин
+#   2          428 914    727 104     31,2 мин
+#   3          428 918    722 258     36,7 мин
+#   4          428 918    721 103     33,4 мин
+#   5…8        428 918    720 754     3,0 часа
+#
+# Первая итерация даёт 99,996 % итогового резолва. Итерации 4-8 не
+# разрешили НИ ОДНОГО нового вызова и переклассифицировали 349 callsite'ов
+# из 720 тысяч — за три с половиной часа.
+#
+# Крутились они потому, что условие продолжения смотрело на реестры типов:
+# те формально росли (param_types 13 502 → 26 641), и цикл считал это
+# поводом идти дальше. Но выведенные на поздних итерациях типы на резолв
+# уже не влияют — они оседают в реестрах, никого не разрешая. Критерий
+# стоял не на том: он проверял «изменилось ли внутреннее состояние», а
+# должен проверять «изменился ли результат».
+#
+# Порог задан в процентах от текущих величин, а не абсолютным числом:
+# абсолютное пришлось бы подбирать под размер конфигурации, а на малой
+# оно просто остановило бы цикл на первой же итерации. На данных выше
+# 1,0 % останавливает после третьей итерации — 1,7 часа вместо 5,3 при
+# потере 0,16 % классификации callsite'ов.
+#
+# Инвариант монотонности при этом никуда не делся: он по-прежнему
+# гарантирует, что цикл КОНЕЧЕН. Ранний останов и MAX_ITERATIONS — про то,
+# что досиживать до естественного конца не окупается.
+FIXPOINT_MIN_GAIN_PCT = 1.0
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw.replace(",", "."))
+    except ValueError:
+        log.warning("%s=%r — не число, использую %s", name, raw, default)
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        log.warning("%s=%r — не целое, использую %s", name, raw, default)
+        return default
+
+
 def _merge_type_fact(
     registry: dict[str, TypeRef],
     key: str,
@@ -1224,7 +1281,12 @@ def _collect_arg_param_facts(
     return facts
 
 
-def build_call_graph(modules: list[ParsedModule], index: Index) -> dict:
+def build_call_graph(
+    modules: list[ParsedModule],
+    index: Index,
+    max_iterations: Optional[int] = None,
+    min_gain_pct: Optional[float] = None,
+) -> dict:
     """
     Собирает полный code_graph (формат write_code_graph).
 
@@ -1247,6 +1309,16 @@ def build_call_graph(modules: list[ParsedModule], index: Index) -> dict:
     """
     _t_start = time.monotonic()
     n_procs_total = sum(len(m.procedures) for m in modules)
+
+    # PERF-7: аргументы важнее окружения (нужно тестам), окружение важнее
+    # умолчаний (нужно на боевой, чтобы менять без пересборки образа).
+    if max_iterations is None:
+        max_iterations = _env_int("METADATA_MAX_ITERATIONS", MAX_ITERATIONS)
+    if min_gain_pct is None:
+        min_gain_pct = _env_float("METADATA_FIXPOINT_MIN_GAIN_PCT",
+                                  FIXPOINT_MIN_GAIN_PCT)
+    max_iterations = max(1, max_iterations)
+    min_gain_pct = max(0.0, min_gain_pct)
 
     module_nodes: list[dict] = []
     callable_nodes: list[dict] = []
@@ -1348,6 +1420,9 @@ def build_call_graph(modules: list[ParsedModule], index: Index) -> dict:
 
     pass_result: dict = {}
     iteration = 0
+    prev_resolved = 0
+    prev_callsites = 0
+    stop_reason = ""
     while True:
         iteration += 1
         _t_iter = time.monotonic()
@@ -1378,31 +1453,56 @@ def build_call_graph(modules: list[ParsedModule], index: Index) -> dict:
                 changed = True
                 n_new_return += 1
 
+        # PERF-7: прирост РЕЗУЛЬТАТА за эту итерацию. Именно он решает,
+        # стоит ли идти дальше, — рост реестров типов сам по себе не решает
+        # ничего (см. комментарий к FIXPOINT_MIN_GAIN_PCT).
+        cur_resolved  = pass_result["stats_resolved"]
+        cur_callsites = len(pass_result["callsite_nodes"])
+        gain_resolved  = abs(cur_resolved - prev_resolved) if iteration > 1 else cur_resolved
+        gain_callsites = abs(cur_callsites - prev_callsites) if iteration > 1 else cur_callsites
+        pct_resolved  = 100.0 * gain_resolved / cur_resolved if cur_resolved else 0.0
+        pct_callsites = 100.0 * gain_callsites / cur_callsites if cur_callsites else 0.0
+        prev_resolved, prev_callsites = cur_resolved, cur_callsites
+
         log.info(
             "build_call_graph: итерация %d/%d за %s — callsites %d "
-            "(resolved %d, unresolved %d); новых типов: параметров %d, "
-            "возвратов %d; реестры: param_types %d, return_types %d",
-            iteration, MAX_ITERATIONS, human_sec(time.monotonic() - _t_iter),
-            len(pass_result["callsite_nodes"]),
-            pass_result["stats_resolved"], pass_result["stats_unresolved"],
+            "(resolved %d, unresolved %d); прирост: resolved %+d (%.3f%%), "
+            "callsites %d (%.2f%%); новых типов: параметров %d, возвратов %d; "
+            "реестры: param_types %d, return_types %d",
+            iteration, max_iterations, human_sec(time.monotonic() - _t_iter),
+            cur_callsites,
+            cur_resolved, pass_result["stats_unresolved"],
+            gain_resolved, pct_resolved, gain_callsites, pct_callsites,
             n_new_param, n_new_return, len(param_types), len(return_types),
         )
 
         if not changed:
+            stop_reason = "реестры типов стабилизировались (естественный фикс-пойнт)"
             break
-        # Предупреждаем НА ПОДХОДЕ к пределу, а не по факту его достижения:
-        # по факту делать уже нечего, а за две итерации до — видно, что
-        # реестры не сходятся, и прогон можно не досиживать.
-        if iteration == MAX_ITERATIONS - 1:
+
+        # Ранний останов. Первую итерацию не проверяем: сравнивать не с чем,
+        # и её результат — это почти весь результат вообще.
+        if iteration > 1 and pct_resolved < min_gain_pct and pct_callsites < min_gain_pct:
+            stop_reason = (
+                f"прирост ниже порога {min_gain_pct:.2f}% "
+                f"(resolved {pct_resolved:.3f}%, callsites {pct_callsites:.2f}%) — "
+                f"дальнейшие итерации не окупаются"
+            )
+            break
+
+        if iteration == max_iterations - 1:
             log.warning(
                 "build_call_graph: следующая итерация последняя "
-                "(MAX_ITERATIONS=%d), а реестры типов ещё растут. Если "
-                "остановка произойдёт по пределу — вывод типов недонасыщен.",
-                MAX_ITERATIONS,
+                "(METADATA_MAX_ITERATIONS=%d), а прирост ещё выше порога. "
+                "Если остановка произойдёт по пределу — вывод типов недонасыщен.",
+                max_iterations,
             )
-        if iteration >= MAX_ITERATIONS:
-            log.warning("build_call_graph: фикс-пойнт остановлен по MAX_ITERATIONS=%d "
-                        "(реестры ещё росли — возможна недонасыщенность)", MAX_ITERATIONS)
+        if iteration >= max_iterations:
+            stop_reason = f"достигнут предел METADATA_MAX_ITERATIONS={max_iterations}"
+            log.warning("build_call_graph: фикс-пойнт остановлен по пределу "
+                        "METADATA_MAX_ITERATIONS=%d (прирост ещё был выше порога "
+                        "%.2f%% — возможна недонасыщенность)",
+                        max_iterations, min_gain_pct)
             break
 
     # ─── 4. Финал: :Type-узлы + :INFERRED_TYPE-рёбра (этап D) ────────
@@ -1463,12 +1563,16 @@ def build_call_graph(modules: list[ParsedModule], index: Index) -> dict:
         "reason_counts":   pass_result["reason_counts"],
         "inferred_types":  len(inferred_type_edges),
         "fixpoint_iterations": iteration,
+        # PERF-7: причина останова уезжает в stats, а не только в лог —
+        # metadata_stats отдаёт её наружу, и «почему итераций всего три»
+        # можно спросить у графа, не поднимая логи прогона.
+        "fixpoint_stop_reason": stop_reason,
     }
 
     log.info("build_call_graph: готово за %s — итераций %d, рёбер %d, "
-             "покрытие %.2f%%",
+             "покрытие %.2f%%; останов: %s",
              human_sec(time.monotonic() - _t_start), iteration, len(edges),
-             stats["resolve_coverage_pct"])
+             stats["resolve_coverage_pct"], stop_reason)
 
     return {
         "module_nodes":    module_nodes,

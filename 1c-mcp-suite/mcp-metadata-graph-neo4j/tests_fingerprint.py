@@ -20,14 +20,16 @@ PERF-4 — про то, КАКОЙ Cypher уходит в базу и с как�
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
 from graph_writer import (
-    FP_MODE_CONTENT, FP_MODE_STAT,
-    EDGE_QUERIES, _infer_src_label,
+    CODE_LAYER_LABELS, DELETE_BATCH_DEFAULT, FP_MODE_CONTENT, FP_MODE_STAT,
+    META_LAYER_LABELS,
+    EDGE_QUERIES, _infer_src_label, clear_code_layer, clear_metadata_layer,
     fingerprint_matches, fingerprint_workspace,
     fingerprint_workspace_files, fingerprint_workspace_multi,
     write_edges,
@@ -50,6 +52,32 @@ class FakeNeo4j:
     def rows(self, cypher, parameters=None):
         self.calls.append((cypher, parameters or {}))
         return []
+
+
+class FakeNeo4jWithNodes(FakeNeo4j):
+    """
+    Стаб с учётом «сколько узлов осталось» — для проверки FIX-13.
+
+    Отвечает на порционный DELETE так же, как ответила бы Neo4j: отдаёт
+    min(остаток, batch) и уменьшает остаток. Позволяет проверить, что цикл
+    доедает всё и корректно останавливается.
+    """
+
+    def __init__(self, counts: dict):
+        super().__init__()
+        self.counts = dict(counts)
+
+    def rows(self, cypher, parameters=None):
+        self.calls.append((cypher, parameters or {}))
+        m = re.search(r"MATCH \(n:(\w+)\)", cypher)
+        if not m or "DETACH DELETE" not in cypher:
+            return []
+        label = m.group(1)
+        batch = (parameters or {}).get("batch", 0)
+        left = self.counts.get(label, 0)
+        take = min(left, batch)
+        self.counts[label] = left - take
+        return [{"deleted": take}]
 
 
 def _mkfile(root: Path, rel: str, content: str = "x") -> Path:
@@ -459,6 +487,228 @@ class TestBuildGraphMarksSourceLabel(unittest.TestCase):
         for e in graph["edges"]:
             if e["rel"] != "HAS_ATTRIBUTE":
                 self.assertNotIn("src_label", e, f"{e['rel']} не нуждается в метке")
+
+
+# ─── FIX-13: порционное удаление слоя ─────────────────────────────────
+
+
+class TestBatchedDelete(unittest.TestCase):
+    """
+    Удаление слоя порциями.
+
+    Дефект, который эти тесты закрывают: обе очистки делали DETACH DELETE
+    одним запросом. На боевой конфигурации транзакция вышла на 1,3 млн
+    узлов и 2,29 млн рёбер, Neo4j ответил MemoryPoolOutOfMemoryError, и
+    5,3 часа сборки графа вызовов были выброшены на последнем шаге.
+    """
+
+    def test_deletes_everything_in_batches(self):
+        neo = FakeNeo4jWithNodes({"Callable": 23000, "CallSite": 7000})
+        result = clear_code_layer(neo, batch=10000)
+        self.assertEqual(result["deleted_nodes"], 30000)
+        self.assertEqual(sum(neo.counts.values()), 0, "остаток должен быть выбран")
+
+    def test_batch_size_is_respected(self):
+        """Ни одна порция не должна превышать заданный размер."""
+        neo = FakeNeo4jWithNodes({"Callable": 25000})
+        clear_code_layer(neo, batch=10000)
+        for cypher, params in neo.calls:
+            self.assertEqual(params["batch"], 10000)
+        self.assertIn("LIMIT $batch", neo.calls[0][0])
+
+    def test_no_single_unbounded_delete(self):
+        """
+        Главный инвариант: в базу не должен уходить DELETE без LIMIT.
+        Именно его отсутствие и стоило прогона.
+        """
+        neo = FakeNeo4jWithNodes({"Callable": 5})
+        clear_code_layer(neo, batch=10000)
+        for cypher, _ in neo.calls:
+            if "DETACH DELETE" in cypher:
+                self.assertIn("LIMIT $batch", cypher,
+                              "DETACH DELETE без LIMIT — это тот самый дефект")
+
+    def test_stops_when_empty(self):
+        """
+        Пустая метка — ровно один запрос: спросили, получили ноль, вышли.
+        Бесконечного цикла быть не должно.
+        """
+        neo = FakeNeo4jWithNodes({})
+        result = clear_code_layer(neo, batch=10000)
+        self.assertEqual(result["deleted_nodes"], 0)
+        self.assertEqual(len(neo.calls), len(CODE_LAYER_LABELS))
+
+    def test_uses_label_scan_not_full_scan(self):
+        """
+        `MATCH (n:Метка)` использует сканирование по метке; прежний
+        `WHERE 'Метка' IN labels(n)` перебирал все узлы базы — на каждую
+        из сотни порций.
+        """
+        neo = FakeNeo4jWithNodes({"Callable": 1})
+        clear_code_layer(neo, batch=100)
+        for cypher, _ in neo.calls:
+            self.assertNotIn("IN labels(n)", cypher)
+            self.assertRegex(cypher, r"MATCH \(n:\w+\)")
+
+    def test_covers_all_code_labels(self):
+        neo = FakeNeo4jWithNodes({})
+        clear_code_layer(neo, batch=100)
+        asked = {re.search(r"MATCH \(n:(\w+)\)", c).group(1) for c, _ in neo.calls}
+        self.assertEqual(asked, set(CODE_LAYER_LABELS))
+
+    def test_metadata_layer_covers_its_own_labels(self):
+        neo = FakeNeo4jWithNodes({})
+        clear_metadata_layer(neo, batch=100)
+        asked = {re.search(r"MATCH \(n:(\w+)\)", c).group(1) for c, _ in neo.calls}
+        self.assertEqual(asked, set(META_LAYER_LABELS))
+
+    def test_layers_do_not_overlap(self):
+        """
+        Очистка слоя 2 не должна трогать метки слоя 1 и наоборот — иначе
+        переиндексация кода снесёт метаданные.
+        """
+        self.assertEqual(set(CODE_LAYER_LABELS) & set(META_LAYER_LABELS), set())
+
+    def test_default_batch_is_sane(self):
+        self.assertGreaterEqual(DELETE_BATCH_DEFAULT, 1000)
+        self.assertLessEqual(DELETE_BATCH_DEFAULT, 100000)
+
+
+# ─── PERF-7: ранний останов фикс-пойнта ───────────────────────────────
+
+
+class TestFixpointEarlyStop(unittest.TestCase):
+    """
+    Критерий останова смотрит на прирост результата, а не на рост реестров.
+
+    Числа в сценарии — из боевого прогона 11 августа 2026, где 8 итераций
+    заняли 5,3 часа, а resolved замер на третьей.
+    """
+
+    def _run(self, per_iteration, **kwargs):
+        """
+        Гоняет build_call_graph с подменённым _resolve_pass, который отдаёт
+        заранее заданные результаты по итерациям. Возвращает stats.
+        """
+        import bsl_resolver as R
+        from bsl_parser import ParsedModule
+
+        state = {"i": 0}
+
+        def fake_pass(modules, index, params_by_callable,
+                      param_types, return_types, progress=None):
+            i = state["i"]
+            state["i"] += 1
+            spec = per_iteration[min(i, len(per_iteration) - 1)]
+            # Каждая итерация приносит новый факт — реестры растут всегда,
+            # то есть естественный фикс-пойнт не наступит никогда. Ровно эта
+            # ситуация и наблюдалась на боевой.
+            return {
+                "callsite_nodes":   [{"id": f"cs{n}"} for n in range(spec["callsites"])],
+                "edges":            [],
+                "stats_resolved":   spec["resolved"],
+                "stats_unresolved": 0,
+                "stats_skipped":    0,
+                "stats_non_config": 0,
+                "reason_counts":    {},
+                "param_facts":      [(f"p{i}", R.TypeRef(kind="String", target=None))],
+                "return_facts":     [],
+            }
+
+        orig = R._resolve_pass
+        R._resolve_pass = fake_pass
+        try:
+            mod = ParsedModule(
+                module_id="CommonModule.М", module_kind="CommonModule",
+                parent_metadata_id=None, source_path="CommonModules/М/Ext/Module.bsl",
+                is_server=True, is_client=False, procedures=[],
+            )
+            return R.build_call_graph([mod], R.Index(), **kwargs)["stats"]
+        finally:
+            R._resolve_pass = orig
+            state["i"] = 0
+
+    # Профиль боевого прогона: resolved замирает, callsites тают.
+    PROD = [
+        {"resolved": 428902, "callsites": 747984},
+        {"resolved": 428914, "callsites": 727104},
+        {"resolved": 428918, "callsites": 722258},
+        {"resolved": 428918, "callsites": 721103},
+        {"resolved": 428918, "callsites": 720838},
+        {"resolved": 428918, "callsites": 720754},
+    ]
+
+    def test_stops_early_on_production_profile(self):
+        """
+        На боевом профиле цикл обязан остановиться сильно раньше восьми
+        итераций. Без раннего останова он прошёл бы все восемь — итерации
+        4-8 дали ноль новых разрешённых вызовов за 3,5 часа.
+        """
+        stats = self._run(self.PROD, max_iterations=8, min_gain_pct=1.0)
+        self.assertLessEqual(stats["fixpoint_iterations"], 4)
+        self.assertGreaterEqual(stats["fixpoint_iterations"], 2,
+                                "вторая итерация даёт реальный прирост — её нельзя терять")
+        self.assertIn("ниже порога", stats["fixpoint_stop_reason"])
+
+    def test_second_iteration_is_never_skipped(self):
+        """
+        Первая итерация не проверяется на прирост: сравнивать не с чем.
+        Иначе цикл вырождался бы в один проход и терял inter-procedural
+        распространение типов, ради которого фикс-пойнт и заводился.
+        """
+        stats = self._run(self.PROD, max_iterations=8, min_gain_pct=99.0)
+        self.assertEqual(stats["fixpoint_iterations"], 2)
+
+    def test_zero_threshold_runs_to_the_limit(self):
+        """Порог 0 — старое поведение: до предела, раз реестры всё растут."""
+        stats = self._run(self.PROD, max_iterations=5, min_gain_pct=0.0)
+        self.assertEqual(stats["fixpoint_iterations"], 5)
+        self.assertIn("предел", stats["fixpoint_stop_reason"])
+
+    def test_growing_gain_is_not_stopped(self):
+        """Пока прирост существенный — останавливаться нельзя."""
+        growing = [
+            {"resolved": 1000, "callsites": 5000},
+            {"resolved": 2000, "callsites": 4000},
+            {"resolved": 3000, "callsites": 3000},
+        ]
+        stats = self._run(growing, max_iterations=3, min_gain_pct=1.0)
+        self.assertEqual(stats["fixpoint_iterations"], 3)
+
+    def test_max_iterations_floor(self):
+        """Ноль или отрицательное значение не должны давать пустой цикл."""
+        stats = self._run(self.PROD, max_iterations=0, min_gain_pct=1.0)
+        self.assertGreaterEqual(stats["fixpoint_iterations"], 1)
+
+    def test_env_overrides_defaults(self):
+        import bsl_resolver as R
+        os.environ["METADATA_MAX_ITERATIONS"] = "2"
+        os.environ["METADATA_FIXPOINT_MIN_GAIN_PCT"] = "0"
+        try:
+            stats = self._run(self.PROD)
+            self.assertEqual(stats["fixpoint_iterations"], 2)
+        finally:
+            del os.environ["METADATA_MAX_ITERATIONS"]
+            del os.environ["METADATA_FIXPOINT_MIN_GAIN_PCT"]
+
+    def test_bad_env_falls_back_to_default(self):
+        import bsl_resolver as R
+        os.environ["METADATA_FIXPOINT_MIN_GAIN_PCT"] = "не-число"
+        try:
+            self.assertEqual(
+                R._env_float("METADATA_FIXPOINT_MIN_GAIN_PCT", 1.0), 1.0)
+        finally:
+            del os.environ["METADATA_FIXPOINT_MIN_GAIN_PCT"]
+
+    def test_comma_decimal_accepted(self):
+        """В .env легко написать 0,5 — это не повод падать."""
+        import bsl_resolver as R
+        os.environ["METADATA_FIXPOINT_MIN_GAIN_PCT"] = "0,5"
+        try:
+            self.assertAlmostEqual(
+                R._env_float("METADATA_FIXPOINT_MIN_GAIN_PCT", 1.0), 0.5)
+        finally:
+            del os.environ["METADATA_FIXPOINT_MIN_GAIN_PCT"]
 
 
 if __name__ == "__main__":

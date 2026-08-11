@@ -146,6 +146,13 @@ services:
       # Строгий режим включать при сомнениях: копия выгрузки с сохранённым
       # mtime, переключение ветки, любое «а точно ли оно увидело правку».
       - METADATA_FINGERPRINT_STRICT=${METADATA_FINGERPRINT_STRICT:-false}
+      # PERF-7: ранний останов фикс-пойнта резолва. На боевом прогоне
+      # 11.08.2026 восемь итераций заняли 5,3 ч, а число разрешённых вызовов
+      # замерло уже на третьей: итерации 4-8 дали НОЛЬ новых разрешённых
+      # вызовов за 3,5 часа. Порог — процент прироста, ниже которого
+      # продолжать не окупается; 0 возвращает прежнее поведение (до предела).
+      - METADATA_FIXPOINT_MIN_GAIN_PCT=${METADATA_FIXPOINT_MIN_GAIN_PCT:-1.0}
+      - METADATA_MAX_ITERATIONS=${METADATA_MAX_ITERATIONS:-8}
     depends_on:
       neo4j:
         condition: service_healthy
