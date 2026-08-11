@@ -513,6 +513,44 @@ def _node_progress(label: str, total: int, enabled: bool = True):
                           check_every=1, unit="узл")
 
 
+# FIX-15. Сколько строк РЕАЛЬНО легло в базу.
+#
+# Все писатели узлов и рёбер возвращали `len(rows)` — число строк, которые
+# они отправили, а не которые записались. Разница не теоретическая: любой
+# `MATCH … MERGE` на ненайденном узле молча пропускает строку. Так был
+# потерян 69 % рёбер :HAS_METHOD (FIX-14), и лог при этом бодро отчитался
+# о полном успехе. Дефект нашёлся только сверкой счётчиков с базой вручную
+# — то есть его могло не быть найдено вовсе.
+#
+# `RETURN count(*)` после MERGE считает строки, дошедшие до записи. Для
+# рёбер с дедупликацией (:CALLS, :OPERATES_ON — MERGE по паре узлов) это
+# по-прежнему число обработанных строк, а не созданных связей: именно то,
+# что нужно, чтобы отличить «схлопнулось по замыслу» от «не нашло узел».
+def _query_written(neo: Neo4j, cypher: str, rows: list) -> int:
+    """Выполняет запись и возвращает число обработанных строк."""
+    try:
+        res = neo.rows(cypher + " RETURN count(*) AS written", {"rows": rows})
+    except Exception:
+        raise
+    if res and res[0].get("written") is not None:
+        return int(res[0]["written"])
+    # Стаб или экзотический драйвер, не вернувший счётчик: не выдумываем
+    # недостачу там, где её нечем измерить.
+    return len(rows)
+
+
+def _warn_shortfall(what: str, sent: int, written: int) -> None:
+    if written >= sent:
+        return
+    log.warning(
+        "%s: записано %d из %d — %d строк не нашли узлов и пропущены молча. "
+        "Это почти всегда несовпадение меток или id между слоями; "
+        "сверьте запрос в EDGE_QUERIES с тем, какие метки реально висят "
+        "на узлах (см. FIX-14).",
+        what, written, sent, sent - written,
+    )
+
+
 def _safe_label(s: str) -> str:
     """Очищаем kind_eng для использования как метки Neo4j (буквы/цифры/_)."""
     out = []
@@ -596,8 +634,7 @@ def write_meta_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500,
                     "properties_json": json.dumps(n.get("properties", {}), ensure_ascii=False),
                     "attributes_json": json.dumps(attrs_compat, ensure_ascii=False),
                 })
-            neo.query(cypher, {"rows": rows})
-            total += len(rows)
+            total += _query_written(neo, cypher, rows)
             if prog:
                 prog.step(len(rows))
     if prog:
@@ -626,8 +663,7 @@ def write_attribute_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500,
             "indexing":  n.get("indexing", ""),
             "parent":    n["parent"],
         } for n in chunk]
-        neo.query(cypher, {"rows": rows})
-        total += len(rows)
+        total += _query_written(neo, cypher, rows)
         if prog:
             prog.step(len(rows))
     if prog:
@@ -646,8 +682,7 @@ def write_tabular_section_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500)
         rows = [{"id": n["id"], "name": n["name"],
                  "synonym": n.get("synonym", ""), "parent": n["parent"]}
                 for n in chunk]
-        neo.query(cypher, {"rows": rows})
-        total += len(rows)
+        total += _query_written(neo, cypher, rows)
     return total
 
 
@@ -664,8 +699,7 @@ def write_form_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int:
                  "is_main": n.get("is_main", False),
                  "main_kind": n.get("main_kind", ""),
                  "parent": n["parent"]} for n in chunk]
-        neo.query(cypher, {"rows": rows})
-        total += len(rows)
+        total += _query_written(neo, cypher, rows)
     return total
 
 
@@ -680,8 +714,7 @@ def write_enum_value_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> i
         rows = [{"id": n["id"], "name": n["name"],
                  "synonym": n.get("synonym", ""), "parent": n["parent"]}
                 for n in chunk]
-        neo.query(cypher, {"rows": rows})
-        total += len(rows)
+        total += _query_written(neo, cypher, rows)
     return total
 
 
@@ -695,8 +728,7 @@ def write_type_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int:
     for chunk in _chunks(nodes, batch):
         rows = [{"id": n["id"], "kind": n["kind"], "target": n.get("target")}
                 for n in chunk]
-        neo.query(cypher, {"rows": rows})
-        total += len(rows)
+        total += _query_written(neo, cypher, rows)
     return total
 
 
@@ -783,12 +815,37 @@ EDGE_QUERIES: dict[str, Any] = {
         "MERGE (a)-[:REGISTERS]->(b)"
     ),
     # ─── Слой 2 (call graph) ─────────────────────────────────────────
-    "HAS_METHOD": (
-        "UNWIND $rows AS r "
-        "MATCH (m:MetadataObject {id: r.src}), (c:Callable {id: r.dst}) "
-        "MERGE (m)-[e:HAS_METHOD]->(c) "
-        "SET e.kind = r.kind"  # 'procedure' | 'function'
-    ),
+    # FIX-14. Источник :HAS_METHOD — модуль, и метки у модулей РАЗНЫЕ.
+    #
+    # История дефекта. Здесь стояло `MATCH (m:MetadataObject {id: r.src})`
+    # одним запросом на все модули. Общие модули, модули объектов и модули
+    # менеджеров действительно :MetadataObject — первые приходят из слоя 1,
+    # вторые и третьи создаёт write_module_nodes с этой меткой. А вот модуль
+    # формы — это узел :Form, которому фаза 2 лишь ДОПИСЫВАЕТ метку :Module
+    # (write_form_nodes создаёт форму как `MERGE (n:Form {id: r.id})`, без
+    # :MetadataObject). Под `MATCH (m:MetadataObject …)` он не подходит
+    # никогда.
+    #
+    # Цена на боевой конфигурации: из 231 114 рёбер :HAS_METHOD записалось
+    # 72 152. Все 158 961 процедуры модулей форм остались без владельца —
+    # 69 % слоя кода потеряло связь «объект метаданных → его методы».
+    # Ошибки при этом не было ни одной: `MATCH … MERGE` на ненайденном
+    # источнике молча пропускает строку, а счётчик в логе считает рёбра на
+    # входе. Нашлось только сверкой счётчиков с базой.
+    "HAS_METHOD": {
+        "MetadataObject": (
+            "UNWIND $rows AS r "
+            "MATCH (m:MetadataObject {id: r.src}), (c:Callable {id: r.dst}) "
+            "MERGE (m)-[e:HAS_METHOD]->(c) "
+            "SET e.kind = r.kind"  # 'procedure' | 'function'
+        ),
+        "Form": (
+            "UNWIND $rows AS r "
+            "MATCH (m:Form {id: r.src}), (c:Callable {id: r.dst}) "
+            "MERGE (m)-[e:HAS_METHOD]->(c) "
+            "SET e.kind = r.kind"
+        ),
+    },
     "HAS_PARAM": (
         "UNWIND $rows AS r "
         "MATCH (c:Callable {id: r.src}), (p:Parameter {id: r.dst}) "
@@ -834,6 +891,9 @@ EDGE_QUERIES: dict[str, Any] = {
 def _infer_src_label(rel: str, src_id: str, variants: dict) -> str:
     if rel == "HAS_ATTRIBUTE":
         return "TabularSection" if ".TS." in (src_id or "") else "MetadataObject"
+    if rel == "HAS_METHOD":
+        # id модуля формы: "<Вид>.<Объект>.Form.<ИмяФормы>" (см. bsl_parser).
+        return "Form" if ".Form." in (src_id or "") else "MetadataObject"
     return next(iter(variants))
 
 
@@ -883,13 +943,14 @@ def write_edges(neo: Neo4j, edges: list[dict], batch: int = 500,
             check_every=1, unit="реб",
         ) if log_progress else None
 
+        written = 0
         for chunk in _chunks(group, batch):
             rows = []
             for e in chunk:
                 row = {"src": e["src"], "dst": e["dst"]}
                 row.update(e.get("props") or {})
                 rows.append(row)
-            neo.query(cypher, {"rows": rows})
+            written += _query_written(neo, cypher, rows)
             if prog:
                 prog.step(len(rows))
 
@@ -898,7 +959,8 @@ def write_edges(neo: Neo4j, edges: list[dict], batch: int = 500,
             # лог малой конфигурации утонет в отчётах о десяти рёбрах.
             if len(group) >= 5000 or prog.elapsed >= 5.0:
                 prog.done()
-        counters[rel] = counters.get(rel, 0) + len(group)
+        _warn_shortfall(f"рёбра {name}", len(group), written)
+        counters[rel] = counters.get(rel, 0) + written
     return counters
 
 
@@ -989,8 +1051,7 @@ def write_module_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500) -> int:
                     "is_client":           bool(n.get("is_client", False)),
                     "full_name_eng":       n.get("full_name_eng", n["id"]),
                 })
-            neo.query(cypher, {"rows": rows})
-            total += len(rows)
+            total += _query_written(neo, cypher, rows)
     return total
 
 
@@ -1038,8 +1099,7 @@ def write_callable_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500,
                 "line_end":    int(n.get("line_end", 0)),
                 "source_path": n.get("source_path", ""),
             } for n in chunk]
-            neo.query(cypher, {"rows": rows})
-            total += len(rows)
+            total += _query_written(neo, cypher, rows)
             if prog:
                 prog.step(len(rows))
     if prog:
@@ -1071,8 +1131,7 @@ def write_parameter_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500,
             "default_value": n.get("default_value", ""),
             "callable_id":   n["callable_id"],
         } for n in chunk]
-        neo.query(cypher, {"rows": rows})
-        total += len(rows)
+        total += _query_written(neo, cypher, rows)
         if prog:
             prog.step(len(rows))
     if prog:
@@ -1113,8 +1172,7 @@ def write_callsite_nodes(neo: Neo4j, nodes: list[dict], batch: int = 500,
             "resolved":    bool(n.get("resolved", False)),
             "reason":      n.get("reason", ""),
         } for n in chunk]
-        neo.query(cypher, {"rows": rows})
-        total += len(rows)
+        total += _query_written(neo, cypher, rows)
         if prog:
             prog.step(len(rows))
     if prog:
@@ -1149,6 +1207,7 @@ def write_code_graph(neo: Neo4j, code_graph: dict) -> dict:
         t = time.monotonic()
         n = fn(neo, nodes)
         log.info("  %s: %d за %s", name, n, human_sec(time.monotonic() - t))
+        _warn_shortfall(f"узлы {name}", len(nodes), n or 0)
         return n
 
     n_module    = _timed(":Module",    write_module_nodes,
@@ -1266,8 +1325,9 @@ def write_graph(neo: Neo4j, graph: dict, config_name: str = "Конфигура�
     # найден: видно не «медленно вообще», а какой именно кусок медленный.
     def _timed(name: str, fn, nodes: list) -> None:
         t = time.monotonic()
-        fn(neo, nodes)
-        log.info("  %s: %d за %s", name, len(nodes), human_sec(time.monotonic() - t))
+        written = fn(neo, nodes)
+        log.info("  %s: %d за %s", name, written, human_sec(time.monotonic() - t))
+        _warn_shortfall(f"узлы {name}", len(nodes), written or 0)
 
     _timed(":Type",           write_type_nodes,            graph["type_nodes"])
     _timed(":MetadataObject", write_meta_nodes,            graph["meta_nodes"])

@@ -1379,6 +1379,14 @@ def build_call_graph(
                 "rel":   "HAS_METHOD",
                 "src":   m.module_id,
                 "dst":   callable_id,
+                # FIX-14: метка узла-владельца. Модуль формы — это :Form
+                # (write_form_nodes создаёт его без :MetadataObject и лишь
+                # дописывает :Module), все остальные модули —
+                # :MetadataObject. Без этой метки writer искал владельца
+                # одним запросом по :MetadataObject и терял ВСЕ рёбра
+                # модулей форм — 158 961 из 231 114 на боевой конфигурации,
+                # молча.
+                "src_label": "Form" if m.module_kind == "Form" else "MetadataObject",
                 "props": {"kind": proc.kind.lower()},
             })
 

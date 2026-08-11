@@ -51,6 +51,11 @@ class FakeNeo4j:
 
     def rows(self, cypher, parameters=None):
         self.calls.append((cypher, parameters or {}))
+        if "count(*) AS written" in cypher:
+            # FIX-15: писатели спрашивают, сколько строк реально легло.
+            # Базовый стаб отвечает «все» — недостачу моделирует
+            # FakeNeo4jPartialWrite ниже.
+            return [{"written": len((parameters or {}).get("rows", []))}]
         return []
 
 
@@ -78,6 +83,27 @@ class FakeNeo4jWithNodes(FakeNeo4j):
         take = min(left, batch)
         self.counts[label] = left - take
         return [{"deleted": take}]
+
+
+class FakeNeo4jPartialWrite(FakeNeo4j):
+    """
+    Стаб, у которого часть строк «не находит узлов», — для проверки FIX-15.
+
+    Именно так вела себя боевая база на :HAS_METHOD: MATCH не находил
+    владельца, MERGE не срабатывал, ошибки не было, и потеря 158 961 ребра
+    осталась незамеченной до ручной сверки счётчиков.
+    """
+
+    def __init__(self, write_fraction: float = 0.5):
+        super().__init__()
+        self.write_fraction = write_fraction
+
+    def rows(self, cypher, parameters=None):
+        self.calls.append((cypher, parameters or {}))
+        if "count(*) AS written" in cypher:
+            sent = len((parameters or {}).get("rows", []))
+            return [{"written": int(sent * self.write_fraction)}]
+        return []
 
 
 def _mkfile(root: Path, rel: str, content: str = "x") -> Path:
@@ -709,6 +735,147 @@ class TestFixpointEarlyStop(unittest.TestCase):
                 R._env_float("METADATA_FIXPOINT_MIN_GAIN_PCT", 1.0), 0.5)
         finally:
             del os.environ["METADATA_FIXPOINT_MIN_GAIN_PCT"]
+
+
+# ─── FIX-14: HAS_METHOD и метки модулей ───────────────────────────────
+
+
+class TestHasMethodSourceLabels(unittest.TestCase):
+    """
+    Модуль формы — это :Form, а не :MetadataObject.
+
+    Дефект, который эти тесты закрывают: HAS_METHOD искал владельца одним
+    запросом `MATCH (m:MetadataObject {id: r.src})`. Модули форм создаются
+    write_form_nodes как `MERGE (n:Form {id: r.id})` — без :MetadataObject,
+    фаза 2 лишь дописывает им :Module. Под этот MATCH они не подходят
+    никогда, и на боевой конфигурации записалось 72 152 ребра из 231 114:
+    все 158 961 процедура модулей форм осталась без владельца.
+    """
+
+    def test_split_by_owner_label(self):
+        q = EDGE_QUERIES["HAS_METHOD"]
+        self.assertIsInstance(q, dict, "HAS_METHOD должен различать метки владельца")
+        self.assertEqual(set(q), {"MetadataObject", "Form"})
+        self.assertIn("(m:Form {id: r.src})", q["Form"])
+        self.assertIn("(m:MetadataObject {id: r.src})", q["MetadataObject"])
+
+    def test_form_module_routed_to_form_query(self):
+        neo = FakeNeo4j()
+        write_edges(neo, [
+            {"rel": "HAS_METHOD", "src": "DataProcessor.Консоль.Form.Форма",
+             "dst": "DataProcessor.Консоль.Form.Форма.ПриОткрытии",
+             "src_label": "Form", "props": {"kind": "procedure"}},
+        ], log_progress=False)
+        self.assertIn("(m:Form {id: r.src})", neo.calls[0][0])
+
+    def test_common_module_routed_to_metadata_query(self):
+        neo = FakeNeo4j()
+        write_edges(neo, [
+            {"rel": "HAS_METHOD", "src": "CommonModule.Общий",
+             "dst": "CommonModule.Общий.Сделать",
+             "src_label": "MetadataObject", "props": {"kind": "procedure"}},
+        ], log_progress=False)
+        self.assertIn("(m:MetadataObject {id: r.src})", neo.calls[0][0])
+
+    def test_label_inferred_from_form_id(self):
+        """Вызов без метки — метка выводится из id, а не гадается."""
+        variants = EDGE_QUERIES["HAS_METHOD"]
+        self.assertEqual(
+            _infer_src_label("HAS_METHOD", "Catalog.Контрагенты.Form.ФормаЭлемента",
+                             variants), "Form")
+        self.assertEqual(
+            _infer_src_label("HAS_METHOD", "Catalog.Контрагенты.ObjectModule",
+                             variants), "MetadataObject")
+        self.assertEqual(
+            _infer_src_label("HAS_METHOD", "CommonModule.Общий", variants),
+            "MetadataObject")
+
+    def test_resolver_marks_form_modules(self):
+        """
+        build_call_graph обязан проставлять метку сам — вывод по id это
+        страховка, а не основной путь.
+        """
+        from bsl_parser import ParsedModule, ParsedProcedure
+        import bsl_resolver as R
+
+        def mod(module_id, kind):
+            return ParsedModule(
+                module_id=module_id, module_kind=kind,
+                parent_metadata_id=None, source_path=f"{module_id}.bsl",
+                is_server=True, is_client=False,
+                procedures=[ParsedProcedure(
+                    name="П", kind="Procedure", is_export=False,
+                    directive="", line_start=1, line_end=2, parameters=[],
+                )],
+            )
+
+        cg = R.build_call_graph(
+            [mod("Catalog.К.Form.ФормаЭлемента", "Form"),
+             mod("Catalog.К.ObjectModule", "ObjectModule"),
+             mod("CommonModule.Общий", "CommonModule")],
+            R.Index(), max_iterations=1,
+        )
+        labels = {e["src"]: e.get("src_label")
+                  for e in cg["edges"] if e["rel"] == "HAS_METHOD"}
+        self.assertEqual(labels["Catalog.К.Form.ФормаЭлемента"], "Form")
+        self.assertEqual(labels["Catalog.К.ObjectModule"], "MetadataObject")
+        self.assertEqual(labels["CommonModule.Общий"], "MetadataObject")
+
+
+# ─── FIX-15: недостача записи больше не молчит ────────────────────────
+
+
+class TestWriteShortfallIsReported(unittest.TestCase):
+    """
+    Писатели возвращали число ОТПРАВЛЕННЫХ строк, а не записанных.
+
+    Из-за этого потеря 69 % рёбер :HAS_METHOD прошла с бодрым логом об
+    успехе и нашлась только ручной сверкой счётчиков с базой. То есть
+    могла не найтись вовсе.
+    """
+
+    def test_counter_reflects_written_not_sent(self):
+        neo = FakeNeo4jPartialWrite(write_fraction=0.5)
+        edges = [{"rel": "CONTAINS", "src": f"s{i}", "dst": f"d{i}", "props": {}}
+                 for i in range(100)]
+        counters = write_edges(neo, edges, batch=100, log_progress=False)
+        self.assertEqual(counters["CONTAINS"], 50,
+                         "счётчик обязан показывать записанное, а не отправленное")
+
+    def test_shortfall_is_logged_as_warning(self):
+        neo = FakeNeo4jPartialWrite(write_fraction=0.25)
+        edges = [{"rel": "CONTAINS", "src": f"s{i}", "dst": f"d{i}", "props": {}}
+                 for i in range(40)]
+        with self.assertLogs("graph_writer", level="WARNING") as cm:
+            write_edges(neo, edges, batch=40, log_progress=False)
+        self.assertTrue(any("не нашли узлов" in m for m in cm.output))
+
+    def test_no_warning_when_all_written(self):
+        import logging as _log
+        neo = FakeNeo4j()
+        edges = [{"rel": "CONTAINS", "src": "a", "dst": "b", "props": {}}]
+        logger = _log.getLogger("graph_writer")
+        with self.assertLogs(logger, level="DEBUG") as cm:
+            logger.debug("якорь")   # assertLogs требует хотя бы одной записи
+            write_edges(neo, edges, log_progress=False)
+        self.assertFalse(any(r.levelno >= _log.WARNING for r in cm.records))
+
+    def test_query_written_reads_the_counter(self):
+        from graph_writer import _query_written
+        neo = FakeNeo4jPartialWrite(write_fraction=0.5)
+        self.assertEqual(_query_written(neo, "MERGE (n)", [1, 2, 3, 4]), 2)
+        self.assertIn("RETURN count(*) AS written", neo.calls[0][0])
+
+    def test_query_written_falls_back_without_counter(self):
+        """Драйвер не вернул счётчик — недостачу не выдумываем."""
+        from graph_writer import _query_written
+
+        class Silent(FakeNeo4j):
+            def rows(self, cypher, parameters=None):
+                self.calls.append((cypher, parameters or {}))
+                return []
+
+        self.assertEqual(_query_written(Silent(), "MERGE (n)", [1, 2, 3]), 3)
 
 
 if __name__ == "__main__":
