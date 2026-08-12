@@ -35,6 +35,11 @@ COPY mcp_tool_filter.py              /app/mcp_tool_filter.py
 # Базовые серверы (metadata-graph: server.py + v3-расширения, индексер: v3)
 COPY mcp-metadata-graph/server.py             /app/mcp_metadata_graph.py
 COPY mcp-metadata-graph/graph_state.py        /app/graph_state.py
+# PERF-6: подготовка полнотекстового запроса. Импортируется из server.py
+# metadata-graph — без этой строки сервер падает на импорте при старте.
+COPY mcp-metadata-graph/search_fulltext.py    /app/search_fulltext.py
+# SCALE-1: границы подсистемы. Импортируется из server.py metadata-graph.
+COPY mcp-metadata-graph/subsystem_scope.py    /app/subsystem_scope.py
 COPY mcp-metadata-graph/server_v3_tools.py    /app/server_v3_tools.py
 COPY mcp-metadata-graph/server_v3_code_tools.py /app/server_v3_code_tools.py
 COPY mcp-metadata-graph/server_v3_watch_tools.py /app/server_v3_watch_tools.py

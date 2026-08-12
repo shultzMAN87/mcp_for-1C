@@ -471,3 +471,106 @@ def temp_table_columns(text: str) -> dict[str, list[str] | None]:
             cols, known = st.columns()
             out[st.temp_table] = cols if known else None
     return out
+
+
+# ─── TOOL-2: размер ответа query_fields ───────────────────────────────────
+#
+# `query_fields` отдавал состав объекта целиком и без ограничений. На
+# «Справочник.Контрагенты» это 41 реквизит плюс табличные части плюс
+# стандартные поля — уже заметный кусок контекста. Инструмент писался под
+# конфигурацию, где максимум было шестнадцать реквизитов; на документах ERP
+# реквизитов и ТЧ кратно больше, и один вызов съедает окно.
+#
+# Что режем и почему именно так:
+#
+#   • Реквизиты — постранично. Они нужны поимённо, их нельзя заменить
+#     сводкой: агент строит по ним запрос.
+#
+#   • Табличные части — по умолчанию только имена и число реквизитов.
+#     Главный источник разрастания: на документе ERP это десяток ТЧ по
+#     двадцать полей, и почти всегда нужна одна из них. Состав конкретной
+#     ТЧ разворачивается параметром `tabular_section`.
+#
+#   • Стандартные поля и виртуальные таблицы не режем: их единицы, и они
+#     нужны почти всегда.
+#
+# Ответ всегда сообщает, сколько всего есть и как взять остальное. Молча
+# обрезанный список хуже полного: агент примет его за исчерпывающий и
+# построит запрос по несуществующему набору полей.
+
+FIELDS_DEFAULT_LIMIT = 50
+FIELDS_MAX_LIMIT = 500
+
+
+def trim_fields_payload(
+    payload: dict,
+    attributes_limit: int = FIELDS_DEFAULT_LIMIT,
+    attributes_offset: int = 0,
+    tabular_section: str = "",
+) -> dict:
+    """
+    Обрезает ответ `query_fields` до разумного размера.
+
+    Принимает полностью собранный словарь и возвращает новый — исходный не
+    меняется. Чистая функция: её можно проверить без Neo4j и без fastmcp,
+    в отличие от самого инструмента.
+
+    `attributes_limit=0` — без ограничения (осознанный запрос «дай всё»).
+    `tabular_section` — развернуть состав одной ТЧ; имя сверяется без учёта
+    регистра, потому что имена ТЧ в 1С регистронезависимы, и требовать от
+    агента точного написания значило бы возвращать пустоту на опечатку.
+    """
+    out = dict(payload)
+
+    # ─ Реквизиты: постранично ─
+    attrs = list(payload.get("attributes") or [])
+    total_attrs = len(attrs)
+    offset = max(0, int(attributes_offset))
+    limit = int(attributes_limit)
+    if limit < 0:
+        limit = FIELDS_DEFAULT_LIMIT
+    if limit > FIELDS_MAX_LIMIT:
+        limit = FIELDS_MAX_LIMIT
+
+    if limit == 0:
+        page = attrs[offset:]
+    else:
+        page = attrs[offset:offset + limit]
+
+    out["attributes"] = page
+    out["attributes_total"] = total_attrs
+    end = offset + len(page)
+    if end < total_attrs:
+        out["attributes_has_more"] = True
+        out["attributes_next_offset"] = end
+        out["note_attributes"] = (
+            f"Показано {len(page)} из {total_attrs} реквизитов. "
+            f"Остальные — повторный вызов с attributes_offset={end}."
+        )
+
+    # ─ Табличные части: имена и размеры, состав по запросу ─
+    ts_all = dict(payload.get("tabular_sections") or {})
+    if ts_all:
+        wanted = (tabular_section or "").strip().lower()
+        if wanted:
+            matched = [k for k in ts_all if k.lower() == wanted]
+            if matched:
+                out["tabular_sections"] = {matched[0]: ts_all[matched[0]]}
+                out["tabular_sections_expanded"] = matched[0]
+            else:
+                out["tabular_sections"] = {}
+                out["error_tabular_section"] = (
+                    f"Табличная часть '{tabular_section}' не найдена. "
+                    f"Есть: {', '.join(sorted(ts_all))}"
+                )
+        else:
+            out["tabular_sections"] = {
+                name: {"attributes_count": len(attrs_)}
+                for name, attrs_ in sorted(ts_all.items())
+            }
+            if len(ts_all) > 0:
+                out["note_tabular_sections"] = (
+                    "Показаны только имена табличных частей. Состав одной — "
+                    "повторный вызов с tabular_section=\"<имя>\"."
+                )
+    return out

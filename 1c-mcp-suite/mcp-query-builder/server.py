@@ -57,6 +57,7 @@ except ImportError:  # pragma: no cover — путь только для лок�
     from graph_state import GRAPH_OK, graph_error, graph_state
 
 from query_check import (AttrInfo, MetadataProvider, ObjectInfo, VIRTUAL_TABLES,
+                         trim_fields_payload,
                          check_query, standard_fields_for, temp_table_columns)
 from query_optimize_rules import analyze
 from query_parser import TABLE_PREFIXES
@@ -260,17 +261,28 @@ def _type_text(attr: AttrInfo) -> str:
 # ─── Инструменты ──────────────────────────────────────────────────────────
 
 @mcp.tool()
-def query_fields(object_name: str, query_text: str = "") -> str:
+def query_fields(object_name: str, query_text: str = "",
+                 attributes_limit: int = 50, attributes_offset: int = 0,
+                 tabular_section: str = "") -> str:
     """
-    Получить все доступные поля таблицы для использования в запросе:
+    Получить доступные поля таблицы для использования в запросе:
     реквизиты, стандартные реквизиты, табличные части, виртуальные таблицы.
 
     Параметры:
-      object_name — имя объекта ("Справочник.Номенклатура" или "Номенклатура"),
-                    либо имя временной таблицы, если передан query_text
-      query_text  — (опционально) текст пакета запросов. Если object_name —
-                    временная таблица, объявленная в нём через ПОМЕСТИТЬ,
-                    вернётся состав её колонок.
+      object_name       — имя объекта ("Справочник.Номенклатура" или
+                          "Номенклатура"), либо имя временной таблицы, если
+                          передан query_text
+      query_text        — (опционально) текст пакета запросов. Если
+                          object_name — временная таблица, объявленная в нём
+                          через ПОМЕСТИТЬ, вернётся состав её колонок.
+      attributes_limit  — сколько реквизитов вернуть (по умолчанию 50,
+                          0 — все). Ответ сообщает общее число и смещение
+                          для следующей страницы.
+      attributes_offset — смещение для постраничного чтения реквизитов
+      tabular_section   — развернуть состав одной табличной части. По
+                          умолчанию ТЧ отдаются списком имён с числом
+                          реквизитов: на документах ERP их состав — главный
+                          источник разрастания ответа.
     """
     # FEAT-2: временная таблица ищется до похода в граф — её в графе нет.
     if query_text:
@@ -330,10 +342,22 @@ def query_fields(object_name: str, query_text: str = "") -> str:
         "virtual_tables": [f"{table}.{v}" for v in vt],
     }
     if obj.kind_ru.startswith("Регистр"):
+        # Измерения и ресурсы — имена, их немного, и они нужны целиком:
+        # без них не построить ни одного запроса к регистру. Считаем по
+        # ПОЛНОМУ списку реквизитов, а не по обрезанной странице, иначе
+        # состав ключа регистра зависел бы от attributes_limit.
         result["dimensions"] = [a.name for a in obj.attributes
                                 if a.role == "dimension"]
         result["resources"] = [a.name for a in obj.attributes
                                if a.role == "resource"]
+
+    # TOOL-2: обрезка до разумного размера — см. trim_fields_payload.
+    result = trim_fields_payload(
+        result,
+        attributes_limit=attributes_limit,
+        attributes_offset=attributes_offset,
+        tabular_section=tabular_section,
+    )
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 

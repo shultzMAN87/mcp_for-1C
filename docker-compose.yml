@@ -262,6 +262,12 @@ services:
       - NEO4J_URL=http://neo4j:7474
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Задайте NEO4J_PASSWORD в .env (см. .env.example)}
+      # SCALE-1: подсистема по умолчанию для metadata_search и
+      # metadata_list_objects. Разработка почти всегда идёт внутри одной
+      # подсистемы, а поиск по всей конфигурации на слово вроде «заказ»
+      # даёт сотни совпадений. Пусто — искать по всей базе; в вызове
+      # инструмента subsystem="*" разово отменяет это умолчание.
+      - METADATA_DEFAULT_SUBSYSTEM=${METADATA_DEFAULT_SUBSYSTEM:-}
       # 4.6.5: совпадает с METADATA_SRC_DIR у metadata-indexer (выше).
       # Если значения разойдутся, watcher будет слать пути, которые сервер
       # не сможет резолвить — _norm_rel вернёт path_outside_src_root.

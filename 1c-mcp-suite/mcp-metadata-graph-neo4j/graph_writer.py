@@ -155,6 +155,58 @@ INDEXES = [
 ]
 
 
+# PERF-6. Полнотекстовые индексы для поиска по именам и синонимам.
+#
+# `metadata_search` ищет через `toLower(n.name) CONTAINS toLower($q)`.
+# Подстрочный поиск не использует обычный индекс — это полный перебор, — но
+# на 16 тысячах узлов терпимо по скорости. Проблема не в скорости, а в
+# качестве: `CONTAINS` не ранжирует. Подстрока либо есть, либо нет, и
+# «Контрагенты» окажется в выдаче рядом с «ВводОстатковПоКонтрагентам»
+# без всякого признака, что первое релевантнее.
+#
+# Полнотекстовый индекс даёт score и морфологию токенов. Держим ОБА пути:
+# индекс может отсутствовать (граф собран старым индексером, у пользователя
+# Community-версия без нужной процедуры), и тогда поиск обязан продолжать
+# работать через CONTAINS, а не падать.
+#
+# Индексы создаются отдельно от обычных: синтаксис другой, и на версиях без
+# поддержки они молча пропускаются, а не роняют ensure_schema.
+FULLTEXT_INDEXES = [
+    ("meta_fulltext",
+     "CREATE FULLTEXT INDEX meta_fulltext IF NOT EXISTS "
+     "FOR (n:MetadataObject) ON EACH [n.name, n.synonym, n.full_name_ru]"),
+    ("callable_fulltext",
+     "CREATE FULLTEXT INDEX callable_fulltext IF NOT EXISTS "
+     "FOR (n:Callable) ON EACH [n.name, n.full_name]"),
+]
+
+
+def ensure_fulltext_indexes(neo: Neo4j) -> dict[str, bool]:
+    """
+    Создаёт полнотекстовые индексы. Возвращает {имя: удалось ли}.
+
+    Неудача НЕ является ошибкой: поиск умеет работать и без них (см.
+    PERF-6). Поэтому здесь warning, а не исключение — иначе индексация
+    боевой конфигурации падала бы на версии Neo4j, где нет полнотекста.
+    """
+    result: dict[str, bool] = {}
+    for name, cypher in FULLTEXT_INDEXES:
+        try:
+            neo.query(cypher)
+            result[name] = True
+        except RuntimeError as e:
+            if "EquivalentSchemaRule" in str(e) or "already exists" in str(e).lower():
+                result[name] = True
+                continue
+            log.warning(
+                "Полнотекстовый индекс %s не создан: %s. Поиск продолжит "
+                "работать через CONTAINS — медленнее и без ранжирования.",
+                name, e,
+            )
+            result[name] = False
+    return result
+
+
 def ensure_schema(neo: Neo4j) -> None:
     for c in CONSTRAINTS:
         try:
@@ -170,6 +222,7 @@ def ensure_schema(neo: Neo4j) -> None:
         except RuntimeError as e:
             if "EquivalentSchemaRule" not in str(e):
                 log.warning("index failed: %s", e)
+    ensure_fulltext_indexes(neo)   # PERF-6
 
 
 # ─── Fingerprint ──────────────────────────────────────────────────────────

@@ -31,6 +31,13 @@ sys.path.insert(0, "/app")
 
 # FIX-3: диагностика состояния графа и общие константы. Отдельный модуль без
 # зависимости от FastMCP — иначе логику не покрыть юнит-тестами.
+from subsystem_scope import (   # noqa: E402  (SCALE-1)
+    SCOPE_ALL, apply_scope, resolve_subsystem, scope_note,
+)
+from search_fulltext import (   # noqa: E402  (PERF-6)
+    FULLTEXT_COUNT_CYPHER, FULLTEXT_CYPHER,
+    build_fulltext_query, fulltext_where, is_missing_index_error,
+)
 from graph_state import (            # noqa: E402
     GRAPH_OK, GRAPH_EMPTY, GRAPH_UNAVAILABLE,
     graph_state, graph_error, make_guard,
@@ -305,50 +312,91 @@ def metadata_stats() -> str:
 
 
 @mcp.tool()
-def metadata_search(query: str, kind: str = "", limit: int = 20, offset: int = 0) -> str:
+def metadata_search(query: str, kind: str = "", limit: int = 20, offset: int = 0,
+                    subsystem: str = "") -> str:
     """
     Поиск объектов метаданных.
 
     Параметры:
-      query  — строка поиска
-      kind   — фильтр по типу ("Справочник", "РегистрСведений", ...)
-      limit  — макс. результатов (1-100, по умолчанию 20)
-      offset — смещение для пагинации
+      query     — строка поиска
+      kind      — фильтр по типу ("Справочник", "РегистрСведений", ...)
+      limit     — макс. результатов (1-100, по умолчанию 20)
+      offset    — смещение для пагинации
+      subsystem — SCALE-1: ограничить подсистемой и вложенными в неё.
+                  Разработка почти всегда идёт внутри одной подсистемы, а
+                  поиск по всей конфигурации на слово вроде «заказ» даёт
+                  сотни совпадений, из которых к задаче относятся единицы.
+                  По умолчанию берётся METADATA_DEFAULT_SUBSYSTEM;
+                  subsystem="*" отменяет умолчание и ищет по всей базе.
     """
     _err = _graph_guard()
     if _err:
         return _err
 
     p = PaginationParams(limit=limit, offset=offset)
-
-    where = "WHERE (toLower(n.name) CONTAINS toLower($q) OR toLower(n.synonym) CONTAINS toLower($q) OR toLower(n.full_name) CONTAINS toLower($q))"
     params = {"q": query, "limit": p.limit, "offset": p.offset}
     if kind:
-        where += " AND (toLower(n.kind) = toLower($kind) OR toLower(n.kind_eng) = toLower($kind))"
         params["kind"] = kind
+    scope = resolve_subsystem(subsystem)
+    if scope:
+        params["subsys"] = scope
 
-    # Сначала считаем total
-    total = _neo4j_count(f"""
-        MATCH (n:MetadataObject)
-        {where}
-        RETURN count(n)
-    """, params)
+    total, rows, engine = None, None, "fulltext"
 
-    # Потом выбираем страницу
-    rows = _neo4j_rows(f"""
-        MATCH (n:MetadataObject)
-        {where}
-        RETURN n.full_name as full_name, n.kind as kind, n.name as name,
-               n.synonym as synonym
-        ORDER BY n.full_name
-        SKIP $offset
-        LIMIT $limit
-    """, params)
+    # PERF-6: сначала пробуем полнотекстовый индекс — он ранжирует. Если
+    # индекса нет, молча уходим на CONTAINS: граф мог быть собран старым
+    # индексером, и поиск обязан работать, пусть и хуже.
+    ftq = build_fulltext_query(query)
+    if ftq:
+        ft_params = dict(params, ftq=ftq)
+        where_ft = fulltext_where(kind, scope=scope)
+        try:
+            total = _neo4j_count(
+                FULLTEXT_COUNT_CYPHER.format(where=where_ft), ft_params)
+            rows = _neo4j_rows(
+                FULLTEXT_CYPHER.format(where=where_ft), ft_params)
+        except Exception as e:
+            if not is_missing_index_error(e):
+                raise      # настоящая ошибка — не прячем её за деградацией
+            log.info("Полнотекстовый индекс недоступен, поиск через CONTAINS: %s", e)
+            total, rows = None, None
+
+    if rows is None:
+        engine = "contains"
+        # Запасной путь. `NOT n:Module` — узлы модулей объекта и менеджера
+        # тоже :MetadataObject, но объектами метаданных в смысле поиска не
+        # являются (их name — «ObjectModule» / «ManagerModule»).
+        clauses = ["NOT n:Module",
+                   "(toLower(n.name) CONTAINS toLower($q) "
+                   "OR toLower(n.synonym) CONTAINS toLower($q) "
+                   "OR toLower(n.full_name) CONTAINS toLower($q))"]
+        if kind:
+            clauses.append("(toLower(n.kind) = toLower($kind) "
+                           "OR toLower(n.kind_eng) = toLower($kind))")
+        clauses = apply_scope(clauses, scope)
+        where = "WHERE " + " AND ".join(clauses)
+
+        total = _neo4j_count(f"""
+            MATCH (n:MetadataObject)
+            {where}
+            RETURN count(n)
+        """, params)
+
+        rows = _neo4j_rows(f"""
+            MATCH (n:MetadataObject)
+            {where}
+            RETURN n.full_name as full_name, n.kind as kind, n.name as name,
+                   n.synonym as synonym
+            ORDER BY n.full_name
+            SKIP $offset
+            LIMIT $limit
+        """, params)
 
     end = p.offset + len(rows)
     response = {
         "query": query,
         "kind_filter": kind,
+        "search_engine": engine,
         "total": total,
         "returned": len(rows),
         "offset": p.offset,
@@ -356,6 +404,7 @@ def metadata_search(query: str, kind: str = "", limit: int = 20, offset: int = 0
         "has_more": end < total,
         "items": rows,
     }
+    response.update(scope_note(scope, total, bool(rows)))
     if end < total:
         response["next_offset"] = end
 
@@ -466,9 +515,13 @@ def metadata_object_details(
 
     # Подсистемы (опционально)
     if include_subsystems:
+        # FIX-16: тип ребра — CONTAINS, а не русский СОДЕРЖИТ; свойство —
+        # full_name_eng, а не full_name. См. комментарий у metadata_subsystems.
         sub_rows = _neo4j_rows("""
-            MATCH (s:Подсистема)-[:СОДЕРЖИТ]->(n:MetadataObject {full_name: $fn})
+            MATCH (s:MetadataObject {kind_eng: 'Subsystem'})-[:CONTAINS]->(n:MetadataObject)
+            WHERE n.full_name_eng = $fn OR n.full_name_ru = $fn
             RETURN s.name as subsystem
+            ORDER BY s.name
         """, {"fn": full_name})
         response["subsystems"] = [s["subsystem"] for s in sub_rows]
 
@@ -639,7 +692,8 @@ def metadata_list_kinds() -> str:
 
 @mcp.tool()
 @cached(ttl=600)
-def metadata_list_objects(kind: str = "", limit: int = 50, offset: int = 0) -> str:
+def metadata_list_objects(kind: str = "", limit: int = 50, offset: int = 0,
+                          subsystem: str = "") -> str:
     """
     Список объектов метаданных.
 
@@ -648,41 +702,43 @@ def metadata_list_objects(kind: str = "", limit: int = 50, offset: int = 0) -> s
     limit/offset постранично.
 
     Параметры:
-      kind   — фильтр по типу ("Справочник", "Документ", ...)
-      limit  — макс. результатов (1-100, по умолчанию 50)
-      offset — смещение для пагинации
+      kind      — фильтр по типу ("Справочник", "Документ", ...)
+      limit     — макс. результатов (1-100, по умолчанию 50)
+      offset    — смещение для пагинации
+      subsystem — SCALE-1: ограничить подсистемой и вложенными в неё.
+                  По умолчанию берётся METADATA_DEFAULT_SUBSYSTEM;
+                  subsystem="*" отменяет умолчание и ищет по всей базе.
     """
     _err = _graph_guard()
     if _err:
         return _err
 
     p = PaginationParams(limit=limit, offset=offset)
+    scope = resolve_subsystem(subsystem)
 
+    clauses = []
+    params = {"offset": p.offset, "limit": p.limit}
     if kind:
-        total = _neo4j_count("""
-            MATCH (n:MetadataObject)
-            WHERE toLower(n.kind) = toLower($kind) OR toLower(n.kind_eng) = toLower($kind)
-            RETURN count(n)
-        """, {"kind": kind})
+        clauses.append("(toLower(n.kind) = toLower($kind) "
+                       "OR toLower(n.kind_eng) = toLower($kind))")
+        params["kind"] = kind
+    clauses = apply_scope(clauses, scope)
+    if scope:
+        params["subsys"] = scope
+    # SCALE-1: узлы модулей тоже :MetadataObject — в списке объектов
+    # конфигурации им не место (см. PERF-6).
+    clauses.append("NOT n:Module")
+    where = "WHERE " + " AND ".join(clauses)
 
-        rows = _neo4j_rows("""
-            MATCH (n:MetadataObject)
-            WHERE toLower(n.kind) = toLower($kind) OR toLower(n.kind_eng) = toLower($kind)
-            RETURN n.full_name as full_name, n.synonym as synonym
-            ORDER BY n.full_name
-            SKIP $offset
-            LIMIT $limit
-        """, {"kind": kind, "offset": p.offset, "limit": p.limit})
-    else:
-        total = _neo4j_count("MATCH (n:MetadataObject) RETURN count(n)")
-
-        rows = _neo4j_rows("""
-            MATCH (n:MetadataObject)
-            RETURN n.full_name as full_name, n.synonym as synonym
-            ORDER BY n.full_name
-            SKIP $offset
-            LIMIT $limit
-        """, {"offset": p.offset, "limit": p.limit})
+    total = _neo4j_count(f"MATCH (n:MetadataObject) {where} RETURN count(n)", params)
+    rows = _neo4j_rows(f"""
+        MATCH (n:MetadataObject)
+        {where}
+        RETURN n.full_name_eng as full_name, n.synonym as synonym
+        ORDER BY n.full_name_eng
+        SKIP $offset
+        LIMIT $limit
+    """, params)
 
     end = p.offset + len(rows)
     response = {
@@ -696,6 +752,8 @@ def metadata_list_objects(kind: str = "", limit: int = 50, offset: int = 0) -> s
     }
     if end < total:
         response["next_offset"] = end
+
+    response.update(scope_note(scope, total, bool(rows)))
 
     # Подсказка для больших списков
     if not kind and total > 100:
@@ -724,13 +782,27 @@ def metadata_subsystems(limit: int = 30, offset: int = 0) -> str:
 
     p = PaginationParams(limit=limit, offset=offset)
 
-    total = _neo4j_count("MATCH (s:Подсистема) RETURN count(s)")
+    # FIX-16. Здесь ребро называлось по-русски. Метка русская существует —
+    # узлы несут и :Subsystem, и :Подсистема, — а вот РЕБРА с русским именем
+    # в графе нет: writer пишет CONTAINS (см. EDGE_QUERIES в graph_writer).
+    #
+    # Из-за этого все три инструмента подсистем возвращали пустоту:
+    # metadata_subsystems показывал members_count=0 у каждой подсистемы,
+    # metadata_subsystem_members не находил ничего, а в
+    # metadata_object_details список подсистем всегда был пуст.
+    #
+    # Ошибки не было ни одной: Neo4j на несуществующий тип ребра отвечает
+    # пустым результатом, а не отказом. Тот же класс, что FIX-14, и та же
+    # причина — запрос разошёлся с тем, что реально лежит в графе.
+    total = _neo4j_count(
+        "MATCH (s:MetadataObject {kind_eng: 'Subsystem'}) RETURN count(s)")
 
     rows = _neo4j_rows("""
-        MATCH (s:Подсистема)
-        OPTIONAL MATCH (s)-[:СОДЕРЖИТ]->(m:MetadataObject)
+        MATCH (s:MetadataObject {kind_eng: 'Subsystem'})
+        OPTIONAL MATCH (s)-[:CONTAINS]->(m:MetadataObject)
         WITH s, count(m) as members_count
-        RETURN s.name as subsystem, members_count
+        RETURN s.name as subsystem, s.full_name_eng as full_name,
+               members_count
         ORDER BY s.name
         SKIP $offset
         LIMIT $limit
@@ -769,18 +841,27 @@ def metadata_subsystem_members(
 
     p = PaginationParams(limit=limit, offset=offset)
 
-    total = _neo4j_count("""
-        MATCH (s:Подсистема {name: $name})-[:СОДЕРЖИТ]->(m:MetadataObject)
-        RETURN count(m)
-    """, {"name": subsystem_name})
+    # FIX-16: правильный тип ребра — CONTAINS (см. metadata_subsystems).
+    # Имя подсистемы принимаем и коротким, и полным: агент видит в дереве
+    # `Subsystem.Продажи`, а в других ответах — просто `Продажи`, и требовать
+    # от него угадывать форму значило бы возвращать пустоту на верный запрос.
+    match_sub = ("MATCH (s:MetadataObject {kind_eng: 'Subsystem'}) "
+                 "WHERE s.name = $name OR s.full_name_eng = $name "
+                 "OR s.full_name_ru = $name ")
 
-    rows = _neo4j_rows("""
-        MATCH (s:Подсистема {name: $name})-[:СОДЕРЖИТ]->(m:MetadataObject)
-        RETURN m.full_name as full_name, m.kind as kind, m.synonym as synonym
-        ORDER BY m.full_name
+    total = _neo4j_count(
+        match_sub + "MATCH (s)-[:CONTAINS]->(m:MetadataObject) RETURN count(m)",
+        {"name": subsystem_name})
+
+    rows = _neo4j_rows(
+        match_sub + """
+        MATCH (s)-[:CONTAINS]->(m:MetadataObject)
+        RETURN m.full_name_eng as full_name, m.kind_ru as kind,
+               m.synonym as synonym
+        ORDER BY m.full_name_eng
         SKIP $offset
         LIMIT $limit
-    """, {"name": subsystem_name, "offset": p.offset, "limit": p.limit})
+        """, {"name": subsystem_name, "offset": p.offset, "limit": p.limit})
 
     end = p.offset + len(rows)
     return json.dumps({
