@@ -1,0 +1,39 @@
+// EVAL-1 — датасет для mcp-metadata-graph. Заход 4, блок D.
+//
+// ВАЖНО, ПРОЧТИТЕ ПЕРЕД ПЕРВЫМ ПРОГОНОМ.
+// Примеры засеяны данными из вашей приёмки 11-12 августа: имена объектов,
+// числа вызывающих, состав реквизитов — всё это взято из ответов, которые
+// вы проверили и назвали верными. Но проверял их ЧЕЛОВЕК ОДИН РАЗ, а не
+// эталонный источник. Прогоните датасет, и там, где предикат падает, —
+// сначала посмотрите глазами, кто неправ: инструмент или ожидание. Правьте
+// values, а не выбрасывайте пример: неверное ожидание в датасете хуже
+// отсутствующего, потому что оно даёт ложное спокойствие.
+//
+// Числа ниже верны для графа от 12.08.2026 (10 747 объектов, 231 114
+// процедур). После правки конфигурации часть точных значений устареет —
+// такие предикаты помечены в notes.
+//
+// Запуск:
+//   python3 scripts/eval.py --dataset evals/datasets/metadata_graph.jsonl
+//
+// ─── Поиск: то, ради чего делались PERF-6 и PERF-6b ────────────────────
+{"id":"mg-001","tool":"metadata_search","args":{"query":"Контрагенты","limit":10},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":3,"values":["Контрагенты"]}],"soft":[{"type":"results_count_at_least","min":5}]},"notes":"Целый токен в имени: точное совпадение должно давать высокий score"}
+{"id":"mg-002","tool":"metadata_search","args":{"query":"заказ","limit":10},"expect":{"hard":[{"type":"non_empty"},{"type":"full_name_contains","k":5,"substr":"Document."}],"soft":[{"type":"results_count_at_least","min":20}]},"notes":"PERF-6b: в топ-5 обязан быть документ, а не CommonPicture. Именно этот случай был сломан"}
+{"id":"mg-003","tool":"metadata_search","args":{"query":"Контрагенты (ЕГРЮЛ)","limit":10},"expect":{"hard":[{"type":"non_empty"}],"soft":[]},"notes":"Спецсимволы Lucene: скобки не должны ронять поиск синтаксической ошибкой"}
+{"id":"mg-004","tool":"metadata_search","args":{"query":"заказ","kind":"Справочник","limit":10},"expect":{"hard":[{"type":"non_empty"},{"type":"full_name_contains","k":10,"substr":"Catalog."}],"soft":[]},"notes":"FIX-17: фильтр по РУССКОМУ имени вида не работал никогда — сравнивался с null"}
+{"id":"mg-005","tool":"metadata_search","args":{"query":"ЭдоОбщийУчастникиДО","limit":5},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":1,"values":["ЭдоОбщийУчастникиДО"]}],"soft":[]},"notes":"Поиск по точному имени — первый результат обязан быть точным"}
+// ─── Ловушки: правильный ответ — «такого нет» ──────────────────────────
+{"id":"mg-101","tool":"metadata_search","args":{"query":"ЗаведомоНесуществующийОбъектXYZ","limit":10},"expect":{"hard":[{"type":"field_equals","path":"total","value":0}],"soft":[]},"notes":"Ловушка. Пустой ответ здесь — правильный. Непустой означает, что нечёткий поиск тянет мусор"}
+{"id":"mg-102","tool":"metadata_object_details","args":{"full_name":"Справочник.ТакогоНетВообще"},"expect":{"hard":[{"type":"field_equals","path":"found","value":false}],"soft":[]},"notes":"Ловушка. Инструмент обязан сказать «не найдено», а не выдумать состав"}
+{"id":"mg-103","tool":"metadata_search","args":{"query":"заказ","subsystem":"НесуществующаяПодсистема","limit":10},"expect":{"hard":[{"type":"path_non_empty","path":"scope_warning"}],"soft":[]},"notes":"SCALE-1: пустота из-за неверного имени подсистемы обязана быть объяснена, а не молчалива"}
+// ─── Состав объекта: FIX-17 и TOOL-2 ──────────────────────────────────
+{"id":"mg-201","tool":"metadata_object_details","args":{"full_name":"Справочник.ЭдоОбщийУчастникиДО","include_subsystems":true},"expect":{"hard":[{"type":"field_equals","path":"found","value":true},{"type":"field_equals","path":"kind","value":"Справочник"}],"soft":[]},"notes":"FIX-17: поле kind приходило null у всех объектов"}
+{"id":"mg-202","tool":"metadata_object_attributes","args":{"object_full_name":"Справочник.ЭдоОбщийУчастникиДО"},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":20,"values":["НаименованиеПолное"]}],"soft":[{"type":"name_in_top_k","k":20,"values":["ИНН"]}]},"notes":"Состав подтверждён приёмкой 11.08. Устареет при правке справочника"}
+{"id":"mg-203","tool":"metadata_list_kinds","args":{},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":50,"values":["Справочник"]}],"soft":[{"type":"results_count_at_least","min":30}]},"notes":"FIX-17: инструмент возвращал список из одних null — то есть был бесполезен"}
+// ─── Подсистемы: FIX-16, три инструмента возвращали пустоту ───────────
+{"id":"mg-301","tool":"metadata_subsystems","args":{"limit":30},"expect":{"hard":[{"type":"non_empty"},{"type":"results_count_at_least","min":10}],"soft":[]},"notes":"FIX-16: members_count был 0 у всех 93 подсистем"}
+// ─── Код: слой 2 ──────────────────────────────────────────────────────
+{"id":"mg-401","tool":"code_callers","args":{"full_name":"Catalog.ЭдоДанныеМЧД.ManagerModule.НормальноеНаименованиеИП"},"expect":{"hard":[{"type":"non_empty"},{"type":"results_count_at_least","min":5}],"soft":[{"type":"results_count_at_least","min":7}]},"notes":"Приёмка 12.08 дала 7 вызывающих. min=5 с запасом на правки кода"}
+{"id":"mg-402","tool":"code_callees","args":{"full_name":"Catalog.ЭдоДанныеМЧД.ManagerModule.НормальноеНаименованиеИП"},"expect":{"hard":[{"type":"non_empty"}],"soft":[{"type":"results_count_at_least","min":2}]},"notes":"Приёмка дала 2 вызываемых: ШаблонНормализацииИпВНачалеСтроки, ШаблонУдаленияИпВКонцеСтроки"}
+{"id":"mg-403","tool":"code_callers","args":{"full_name":"CommonModule.НетТакогоМодуля.НетТакойПроцедуры"},"expect":{"hard":[{"type":"field_equals","path":"found","value":false}],"soft":[]},"notes":"Ловушка. Несуществующая процедура — не повод выдумывать вызывающих"}
+{"id":"mg-404","tool":"metadata_stats","args":{},"expect":{"hard":[{"type":"path_non_empty","path":"nodes"}],"soft":[{"type":"path_non_empty","path":"edges"}]},"notes":"Страховка: граф вообще собран и слой 2 на месте"}

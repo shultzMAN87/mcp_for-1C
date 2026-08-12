@@ -51,6 +51,10 @@ COPY mcp-metadata-graph-neo4j/graph_writer.py /app/graph_writer.py
 # при старте. Та же грабля, что с graph_state.py в Заходе 2 и с
 # query_parser.py в Заходе 3: новый модуль появился, COPY забыли.
 COPY mcp-metadata-graph-neo4j/progress_log.py /app/progress_log.py
+# PERF-8: частичный fingerprint — что изменилось в выгрузке с прошлого раза.
+COPY mcp-metadata-graph-neo4j/partial_fingerprint.py /app/partial_fingerprint.py
+COPY mcp-metadata-graph-neo4j/what_changed.py /app/what_changed.py
+COPY mcp-metadata-graph-neo4j/apply_changes.py /app/apply_changes.py
 COPY mcp-metadata-graph-neo4j/bsl_parser.py    /app/bsl_parser.py
 COPY mcp-metadata-graph-neo4j/bsl_resolver.py /app/bsl_resolver.py
 COPY mcp-metadata-graph-neo4j/incremental.py  /app/incremental.py

@@ -37,6 +37,7 @@ from subsystem_scope import (   # noqa: E402  (SCALE-1)
 from search_fulltext import (   # noqa: E402  (PERF-6)
     FULLTEXT_COUNT_CYPHER, FULLTEXT_CYPHER,
     build_fulltext_query, fulltext_where, is_missing_index_error,
+    order_by_relevance,
 )
 from graph_state import (            # noqa: E402
     GRAPH_OK, GRAPH_EMPTY, GRAPH_UNAVAILABLE,
@@ -265,7 +266,7 @@ def metadata_stats() -> str:
         "enum_values":      _n("MATCH (n:EnumValue) RETURN count(n) AS c"),
         "types":            _n("MATCH (n:Type) RETURN count(n) AS c"),
         "by_kind": _neo4j_rows(
-            "MATCH (n:MetadataObject) RETURN n.kind AS kind, count(n) AS count "
+            "MATCH (n:MetadataObject) WHERE NOT n:Module RETURN n.kind_ru AS kind, count(n) AS count "
             "ORDER BY count DESC"
         ),
     }
@@ -354,7 +355,9 @@ def metadata_search(query: str, kind: str = "", limit: int = 20, offset: int = 0
             total = _neo4j_count(
                 FULLTEXT_COUNT_CYPHER.format(where=where_ft), ft_params)
             rows = _neo4j_rows(
-                FULLTEXT_CYPHER.format(where=where_ft), ft_params)
+                FULLTEXT_CYPHER.format(
+                    where=where_ft, order_by=order_by_relevance()),
+                ft_params)
         except Exception as e:
             if not is_missing_index_error(e):
                 raise      # настоящая ошибка — не прячем её за деградацией
@@ -369,9 +372,10 @@ def metadata_search(query: str, kind: str = "", limit: int = 20, offset: int = 0
         clauses = ["NOT n:Module",
                    "(toLower(n.name) CONTAINS toLower($q) "
                    "OR toLower(n.synonym) CONTAINS toLower($q) "
-                   "OR toLower(n.full_name) CONTAINS toLower($q))"]
+                   "OR toLower(n.full_name_eng) CONTAINS toLower($q) "
+                   "OR toLower(n.full_name_ru) CONTAINS toLower($q))"]
         if kind:
-            clauses.append("(toLower(n.kind) = toLower($kind) "
+            clauses.append("(toLower(n.kind_ru) = toLower($kind) "
                            "OR toLower(n.kind_eng) = toLower($kind))")
         clauses = apply_scope(clauses, scope)
         where = "WHERE " + " AND ".join(clauses)
@@ -385,9 +389,9 @@ def metadata_search(query: str, kind: str = "", limit: int = 20, offset: int = 0
         rows = _neo4j_rows(f"""
             MATCH (n:MetadataObject)
             {where}
-            RETURN n.full_name as full_name, n.kind as kind, n.name as name,
+            RETURN n.full_name_eng as full_name, n.kind_ru as kind, n.name as name,
                    n.synonym as synonym
-            ORDER BY n.full_name
+            """ + order_by_relevance(with_score=False) + """
             SKIP $offset
             LIMIT $limit
         """, params)
@@ -438,7 +442,7 @@ def metadata_object_details(
     # Основные данные
     rows = _neo4j_rows("""
         MATCH (n:MetadataObject {full_name: $fn})
-        RETURN n.full_name as full_name, n.kind as kind, n.name as name,
+        RETURN n.full_name_eng as full_name, n.kind_ru as kind, n.name as name,
                n.synonym as synonym, n.kind_eng as kind_eng,
                n.attributes_json as attributes_json
     """, {"fn": full_name})
@@ -495,13 +499,13 @@ def metadata_object_details(
         out_rows = _neo4j_rows("""
             MATCH (n:MetadataObject {full_name: $fn})-[r]->(m:MetadataObject)
             RETURN type(r) as relation, r.context as context,
-                   m.full_name as target, m.kind as target_kind
+                   m.full_name_eng as target, m.kind_ru as target_kind
             LIMIT 10
         """, {"fn": full_name})
         in_rows = _neo4j_rows("""
             MATCH (n:MetadataObject {full_name: $fn})<-[r]-(m:MetadataObject)
             RETURN type(r) as relation, r.context as context,
-                   m.full_name as source, m.kind as source_kind
+                   m.full_name_eng as source, m.kind_ru as source_kind
             LIMIT 10
         """, {"fn": full_name})
         response["references_out_preview"] = out_rows
@@ -566,8 +570,8 @@ def metadata_references_from(full_name: str, limit: int = 20, offset: int = 0) -
     rows = _neo4j_rows("""
         MATCH (n:MetadataObject {full_name: $fn})-[r]->(m:MetadataObject)
         RETURN type(r) as relation, r.context as context,
-               m.full_name as target, m.kind as target_kind, m.synonym as target_synonym
-        ORDER BY m.full_name
+               m.full_name_eng as target, m.kind_ru as target_kind, m.synonym as target_synonym
+        ORDER BY m.full_name_eng
         SKIP $offset
         LIMIT $limit
     """, {"fn": full_name, "offset": p.offset, "limit": p.limit})
@@ -609,8 +613,8 @@ def metadata_references_to(full_name: str, limit: int = 20, offset: int = 0) -> 
     rows = _neo4j_rows("""
         MATCH (n:MetadataObject {full_name: $fn})<-[r]-(m:MetadataObject)
         RETURN type(r) as relation, r.context as context,
-               m.full_name as source, m.kind as source_kind, m.synonym as source_synonym
-        ORDER BY m.full_name
+               m.full_name_eng as source, m.kind_ru as source_kind, m.synonym as source_synonym
+        ORDER BY m.full_name_eng
         SKIP $offset
         LIMIT $limit
     """, {"fn": full_name, "offset": p.offset, "limit": p.limit})
@@ -654,7 +658,7 @@ def metadata_dependency_tree(full_name: str, depth: int = 2, limit: int = 50) ->
     rows = _neo4j_rows(f"""
         MATCH path = (n:MetadataObject {{full_name: $fn}})-[*1..{depth}]-(m:MetadataObject)
         WITH m, relationships(path) as rels, nodes(path) as nds
-        RETURN DISTINCT m.full_name as connected_object, m.kind as kind,
+        RETURN DISTINCT m.full_name_eng as connected_object, m.kind_ru as kind,
                [r in rels | type(r)] as relations,
                [nd in nds | nd.full_name] as path
         LIMIT $limit
@@ -682,7 +686,7 @@ def metadata_list_kinds() -> str:
     if _err:
         return _err
     rows = _neo4j_rows(
-        "MATCH (n:MetadataObject) RETURN DISTINCT n.kind as kind, count(n) as count ORDER BY count DESC"
+        "MATCH (n:MetadataObject) WHERE NOT n:Module RETURN DISTINCT n.kind_ru as kind, count(n) as count ORDER BY count DESC"
     )
     return json.dumps({
         "total_kinds": len(rows),
@@ -719,7 +723,7 @@ def metadata_list_objects(kind: str = "", limit: int = 50, offset: int = 0,
     clauses = []
     params = {"offset": p.offset, "limit": p.limit}
     if kind:
-        clauses.append("(toLower(n.kind) = toLower($kind) "
+        clauses.append("(toLower(n.kind_ru) = toLower($kind) "
                        "OR toLower(n.kind_eng) = toLower($kind))")
         params["kind"] = kind
     clauses = apply_scope(clauses, scope)

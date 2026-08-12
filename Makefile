@@ -20,6 +20,22 @@ help:
 	@echo "  make logs            Следить за логами всех сервисов"
 	@echo "  make clean           Остановить и удалить volume'ы (ОСТОРОЖНО: удалит данные)"
 	@echo ""
+	@echo "  make test            — все тесты одной командой (CI-1)"
+	@echo "  make test-full       — тесты + сверка графа с базой (BASE-1)"
+	@echo "  make baseline-update — перезаписать эталонные числа"
+
+test:
+	@echo "CI-1: прогон всех наборов тестов"
+	python3 scripts/run_all_tests.py
+
+test-full:
+	@echo "CI-1 + BASE-1: тесты и сверка графа с базой (нужен живой Neo4j)"
+	python3 scripts/run_all_tests.py --baseline
+
+baseline-update:
+	@echo "BASE-1: перезапись эталонных чисел ТЕКУЩИМ состоянием графа."
+	@echo "Делайте это только после того, как убедились, что числа верны."
+	python3 scripts/check_baseline.py --update
 
 check-prereqs:
 	@python3 scripts/check_prereqs.py

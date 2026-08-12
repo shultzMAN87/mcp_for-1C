@@ -273,7 +273,12 @@ def register_v3_code_tools(mcp, neo4j_query: Callable, neo4j_rows: Callable,
         cypher = (
             f"MATCH p = shortestPath((a:Callable {{id: $a}})-[:CALLS*1..{max_depth}]->(b:Callable {{id: $b}})) "
             "RETURN length(p) AS len, "
-            "       [n IN nodes(p) | {id: n.id, full_name: n.full_name, kind: n.kind}] AS path"
+            # FIX-17: full_name_eng/kind_ru — см. search_fulltext. Узлы на пути
+            # могут быть и :Callable (у них есть full_name), и :MetadataObject
+            # (у которых его нет), поэтому coalesce по обоим вариантам.
+            "       [n IN nodes(p) | {id: n.id, "
+            "         full_name: coalesce(n.full_name, n.full_name_eng), "
+            "         kind: coalesce(n.kind_ru, n.kind)}] AS path"
         )
         rows = neo4j_rows(cypher, {"a": from_id, "b": to_id})
 

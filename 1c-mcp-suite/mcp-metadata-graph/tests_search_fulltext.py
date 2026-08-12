@@ -14,8 +14,9 @@ from __future__ import annotations
 import unittest
 
 from search_fulltext import (FULLTEXT_COUNT_CYPHER, FULLTEXT_CYPHER,
-                             build_fulltext_query, escape_lucene,
-                             fulltext_where, is_missing_index_error)
+                             KIND_RANK, build_fulltext_query, escape_lucene,
+                             fulltext_where, is_missing_index_error,
+                             kind_rank_cypher, order_by_relevance)
 
 
 class TestEscaping(unittest.TestCase):
@@ -122,16 +123,20 @@ class TestWhereClause(unittest.TestCase):
 
     def test_cypher_templates_accept_where(self):
         for tpl in (FULLTEXT_CYPHER, FULLTEXT_COUNT_CYPHER):
-            built = tpl.format(where=fulltext_where("Справочник"))
+            kw = {"where": fulltext_where("Справочник")}
+            if "{order_by}" in tpl:
+                kw["order_by"] = order_by_relevance()
+            built = tpl.format(**kw)
             self.assertIn("db.index.fulltext.queryNodes", built)
             self.assertIn("NOT n:Module", built)
             self.assertNotIn("{where}", built)
 
     def test_page_query_orders_by_score(self):
-        built = FULLTEXT_CYPHER.format(where="")
+        built = FULLTEXT_CYPHER.format(where="", order_by=order_by_relevance())
         self.assertIn("ORDER BY score DESC", built)
         self.assertIn("SKIP $offset", built)
         self.assertIn("LIMIT $limit", built)
+        self.assertNotIn("{order_by}", built)
 
 
 class TestMissingIndexDetection(unittest.TestCase):
@@ -163,6 +168,73 @@ class TestMissingIndexDetection(unittest.TestCase):
     def test_accepts_exception_objects(self):
         err = RuntimeError("Neo4j: There is no such fulltext schema index")
         self.assertTrue(is_missing_index_error(err))
+
+
+class TestRelevanceOrdering(unittest.TestCase):
+    """
+    PERF-6b. Префиксный запрос Lucene КОНСТАНТЕН по весу, а имена в 1С —
+    CamelCase, то есть «ЗаказПокупателя» это один токен и точное совпадение
+    слова не срабатывает никогда. Значит все совпадения получают одинаковый
+    score, и порядок целиком определяет тай-брейк.
+
+    На боевой это выглядело так: по запросу «заказ» первыми шли
+    CommonPicture.ЗаказПокупателя и CommonPicture.ЗаказПоставщику — две
+    картинки-иконки, — потому что тай-брейком был алфавит по английскому
+    имени вида, а `CommonPicture` < `Document`.
+    """
+
+    def test_starts_with_beats_contains(self):
+        """Самый сильный сигнал: имя начинается с искомого слова."""
+        o = order_by_relevance()
+        self.assertIn("STARTS WITH toLower($q)", o)
+        # и стоит РАНЬШЕ веса вида
+        self.assertLess(o.index("STARTS WITH"), o.index("kind_eng"))
+
+    def test_data_objects_outrank_pictures(self):
+        c = kind_rank_cypher()
+        self.assertIn("'Document'", c)
+        self.assertIn("THEN 1", c)
+        self.assertIn("ELSE 4", c)
+        # Картинок и ролей в явных группах нет — они попадают в ELSE.
+        for noise in ("CommonPicture", "Role", "StyleItem"):
+            self.assertNotIn(f"'{noise}'", c, f"{noise} не должен быть выше 4")
+
+    def test_query_relevant_kinds_are_top_rank(self):
+        """Виды, о которых спрашивают при работе с запросами, — первая группа."""
+        for kind in ("Catalog", "Document", "InformationRegister",
+                     "AccumulationRegister", "Enum", "Sequence"):
+            self.assertIn(kind, KIND_RANK[1], kind)
+
+    def test_no_kind_appears_twice(self):
+        seen = []
+        for kinds in KIND_RANK.values():
+            seen += list(kinds)
+        self.assertEqual(len(seen), len(set(seen)), "вид в двух группах сразу")
+
+    def test_ordering_is_deterministic(self):
+        """
+        Последним ключом обязан быть уникальный: без него Neo4j не гарантирует
+        стабильный порядок при равных ключах, и пагинация начнёт задваивать и
+        терять строки на границах страниц.
+        """
+        self.assertTrue(order_by_relevance().rstrip().endswith("n.full_name_eng"))
+
+    def test_both_paths_sort_the_same(self):
+        """
+        Полнотекстовый и запасной пути должны сортировать одинаково, иначе
+        выдача меняется при переключении на CONTAINS — и объяснить это
+        пользователю будет нечем.
+        """
+        with_score = order_by_relevance(with_score=True)
+        without = order_by_relevance(with_score=False)
+        self.assertIn("score DESC", with_score)
+        self.assertNotIn("score", without)
+        self.assertEqual(with_score.replace("score DESC, ", ""), without)
+
+    def test_alias_and_param_are_honoured(self):
+        o = order_by_relevance(alias="m", param="query")
+        self.assertIn("toLower(m.name)", o)
+        self.assertIn("$query", o)
 
 
 if __name__ == "__main__":

@@ -36,12 +36,20 @@ SERVERS = {
     "help":  ("http://mcp-platform-help:8003/mcp", "http://localhost:8003/mcp"),
     "v8std": ("http://v8std-mcp:8765/mcp",         "http://localhost:8765/mcp"),
     "bsl":   ("http://mcp-bsl-checker:8002/mcp",   "http://localhost:8002/mcp"),
+    # EVAL-1. Два сервера, которые до Захода 4 не измерялись ничем. Проект
+    # мерил покрытие резолвера до сотых процента и нигде не мерил, отвечают
+    # ли инструменты по метаданным правильно. Все дефекты FIX-14/16/17
+    # нашлись руками — потому что автоматической проверки не существовало.
+    "meta":  ("http://mcp-metadata-graph:8001/mcp", "http://localhost:8001/mcp"),
+    "query": ("http://mcp-query-builder:8009/mcp",  "http://localhost:8009/mcp"),
 }
 # Датасет → сервер по умолчанию, чтобы не указывать --server каждый раз.
 DATASET_SERVER = {
     "platform_help.jsonl": "help",
     "v8std.jsonl": "v8std",
     "bsl_checker.jsonl": "bsl",
+    "metadata_graph.jsonl": "meta",
+    "query_builder.jsonl": "query",
 }
 
 

@@ -70,13 +70,91 @@ def build_fulltext_query(query: str, fuzzy: bool = True) -> str:
     return " OR ".join(parts)
 
 
+# PERF-6b. Тай-брейк при равном score.
+#
+# Почему он вообще нужен. Префиксный запрос Lucene (`заказ*`) —
+# КОНСТАНТНЫЙ по весу: все совпадения получают одинаковый score. А имена в
+# 1С — CamelCase, то есть «ЗаказПокупателя» это ОДИН токен, и точное
+# совпадение слова (`заказ^2`) не срабатывает никогда. Значит на типичном
+# запросе ранжирования по score просто нет: всё упирается в тай-брейк.
+#
+# Что было. Тай-брейком стояло `n.full_name_eng`, то есть алфавит по
+# английскому имени вида. `CommonPicture` < `DataProcessor` < `Document` —
+# и на запрос «заказ» первыми приходили две картинки-иконки, а документы
+# уходили на вторую страницу. Ровно та бесполезная выдача, от которой
+# PERF-6 должен был избавить.
+#
+# Три уровня, в порядке убывания надёжности признака:
+#
+#   1. Имя НАЧИНАЕТСЯ с искомого слова. Самый сильный сигнал:
+#      «ЗаказТоваров» релевантнее «ОбработкаИнтернетЗаказовКладовщиком»,
+#      хотя Lucene дал им одинаковый вес.
+#   2. Вид объекта. Справочники, документы и регистры — то, о чём
+#      спрашивают; картинки, роли и элементы стиля — почти никогда.
+#      Это не сокрытие: они остаются в выдаче, просто ниже.
+#   3. Алфавит — чтобы порядок был воспроизводимым между вызовами.
+#      Без него пагинация может задваивать и терять строки на границах
+#      страниц: Neo4j не обязан сохранять порядок при равных ключах.
+
+# Веса видов. Меньше — выше в выдаче.
+KIND_RANK = {
+    1: ("Catalog", "Document", "InformationRegister", "AccumulationRegister",
+        "AccountingRegister", "ChartOfAccounts", "ChartOfCharacteristicTypes",
+        "ChartOfCalculationTypes", "Enum", "Constant", "ExchangePlan",
+        "BusinessProcess", "Task", "DocumentJournal", "Sequence",
+        "CalculationRegister", "ExternalDataSource"),
+    2: ("CommonModule", "DataProcessor", "Report"),
+    3: ("Subsystem", "EventSubscription", "ScheduledJob", "DefinedType",
+        "FunctionalOption", "SessionParameter", "FilterCriterion",
+        "HTTPService", "WebService", "WSReference"),
+    # Всё остальное (Role, CommonPicture, StyleItem, Style, CommonTemplate,
+    # XDTOPackage, CommandGroup, CommonCommand, CommonForm, Language,
+    # SettingsStorage, DocumentNumerator) получает 4 по умолчанию.
+}
+
+
+def kind_rank_cypher(alias: str = "n") -> str:
+    """CASE-выражение веса вида для ORDER BY."""
+    parts = []
+    for rank, kinds in sorted(KIND_RANK.items()):
+        lst = ", ".join(f"'{k}'" for k in kinds)
+        parts.append(f"WHEN {alias}.kind_eng IN [{lst}] THEN {rank}")
+    return "CASE " + " ".join(parts) + " ELSE 4 END"
+
+
+def order_by_relevance(alias: str = "n", param: str = "q",
+                       with_score: bool = True) -> str:
+    """
+    Секция ORDER BY, одинаковая для полнотекстового и CONTAINS-путей.
+
+    Одинаковая намеренно: если пути сортируют по-разному, выдача меняется
+    при переключении на запасной путь — и объяснить это пользователю будет
+    нечем.
+    """
+    head = "score DESC, " if with_score else ""
+    return (
+        f"ORDER BY {head}"
+        f"CASE WHEN toLower({alias}.name) STARTS WITH toLower(${param}) "
+        f"THEN 0 ELSE 1 END, "
+        f"{kind_rank_cypher(alias)}, "
+        f"{alias}.name, {alias}.full_name_eng"
+    )
+
+
 # Запрос к индексу. `skip`/`limit` — постранично, как в CONTAINS-варианте.
+#
+# FIX-17. Здесь возвращались `n.full_name` и `n.kind` — свойств с такими
+# именами у узлов метаданных НЕТ. Writer пишет `full_name_eng`,
+# `full_name_ru`, `kind_eng`, `kind_ru` (см. write_meta_nodes). Cypher на
+# несуществующее свойство отдаёт null, а не ошибку, — поэтому поиск исправно
+# возвращал строки, у которых вид и полное имя всегда пустые. Тот же класс,
+# что FIX-14 и FIX-16: запрос разошёлся с тем, что реально лежит в графе.
 FULLTEXT_CYPHER = """
 CALL db.index.fulltext.queryNodes('meta_fulltext', $ftq) YIELD node AS n, score
 {where}
-RETURN n.full_name AS full_name, n.kind AS kind, n.name AS name,
+RETURN n.full_name_eng AS full_name, n.kind_ru AS kind, n.name AS name,
        n.synonym AS synonym, score
-ORDER BY score DESC, n.full_name
+{order_by}
 SKIP $offset LIMIT $limit
 """
 
@@ -102,7 +180,10 @@ def fulltext_where(kind: str = "", exclude_modules: bool = True,
     if exclude_modules:
         clauses.append("NOT n:Module")
     if kind:
-        clauses.append("(toLower(n.kind) = toLower($kind) "
+        # FIX-17: kind_ru, а не kind. С прежним условием фильтр по русскому
+        # имени вида («Справочник») не срабатывал никогда — сравнение шло с
+        # null, — и работал только английский.
+        clauses.append("(toLower(n.kind_ru) = toLower($kind) "
                        "OR toLower(n.kind_eng) = toLower($kind))")
     if scope:
         # SCALE-1: границы подсистемы. Импорт локальный — модуль поиска не
