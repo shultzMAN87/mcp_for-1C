@@ -1,0 +1,1215 @@
+{
+  "meta": {
+    "dataset": "/app/evals/datasets/metadata_graph.jsonl",
+    "endpoint": "http://mcp-metadata-graph:8001/mcp",
+    "started_at": "2026-08-12T21:56:49.724811+00:00",
+    "finished_at": "2026-08-12T21:57:00.134400+00:00",
+    "duration_s": 10.409589,
+    "examples_total": 16
+  },
+  "summary": {
+    "total": 16,
+    "hard_passed": 3,
+    "hard_pass_rate": 0.1875,
+    "soft_total": 6,
+    "soft_passed": 0,
+    "soft_pass_rate": 0.0,
+    "examples_with_mrr": 3,
+    "recall_at_1": 0.0,
+    "recall_at_5": 0.0,
+    "recall_at_10": 0.0,
+    "mrr": 0.0,
+    "latency_ms": {
+      "min": 123.2485830000769,
+      "median": 482.85981649996756,
+      "p95": 2414.322340799798,
+      "max": 3633.7446019997515
+    },
+    "search_type_dist": {
+      "unknown": 16
+    },
+    "transport_errors": 4,
+    "tool_errors": 0
+  },
+  "examples": [
+    {
+      "id": "mg-001",
+      "tool": "metadata_search",
+      "args": {
+        "query": "Контрагенты",
+        "limit": 10
+      },
+      "notes": "Целый токен в имени: точное совпадение должно давать высокий score",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 1112.6414549999026,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 3,
+            "values": [
+              "Контрагенты"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "results_count_at_least",
+          "passed": false,
+          "detail": {
+            "min": 5,
+            "actual": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 3,
+      "response_preview": {
+        "query": "Контрагенты",
+        "kind_filter": "",
+        "search_engine": "fulltext",
+        "total": 28,
+        "returned": 10,
+        "offset": 0,
+        "limit": 10,
+        "has_more": true,
+        "items": [
+          {
+            "full_name": "Catalog.Контрагенты",
+            "kind": "Справочник",
+            "name": "Контрагенты",
+            "synonym": "Контрагенты",
+            "score": 23.13104820251465
+          },
+          {
+            "full_name": "ExchangePlan.Контрагенты",
+            "kind": "ПланОбмена",
+            "name": "Контрагенты",
+            "synonym": "Контрагенты",
+            "score": 23.13104820251465
+          },
+          {
+            "full_name": "DataProcessor.АктионКонтрагенты",
+            "kind": "Обработка",
+            "name": "АктионКонтрагенты",
+            "synonym": "Актион контрагенты",
+            "score": 10.821520805358887
+          },
+          {
+            "full_name": "CommonPicture.СправочникКонтрагенты",
+            "kind": "ОбщаяКартинка",
+            "name": "СправочникКонтрагенты",
+            "synonym": "Справочник контрагенты",
+            "score": 10.821520805358887
+          },
+          {
+            "full_name": "InformationRegister.КонтрагентыКомиссионныхТоваров",
+            "kind": "РегистрСведений",
+            "name": "КонтрагентыКомиссионныхТоваров",
+            "synonym": "Контрагенты комиссионных товаров",
+            "score": 10.787955284118652
+          },
+          {
+            "full_name": "InformationRegister.КонтрагентыНаПроверку",
+            "kind": "РегистрСведений",
+            "name": "КонтрагентыНаПроверку",
+            "synonym": "Контрагенты на проверку",
+            "score": 10.787955284118652
+          },
+          {
+            "full_name": "Catalog.ЭдоКонтрагентыОрганизаций",
+            "kind": "Справочник",
+            "name": "ЭдоКонтрагентыОрганизаций",
+            "synonym": "ЭДО Контрагенты организаций",
+            "score": 9.787955284118652
+          },
+          {
+            "full_name": "CommonModule.АктионКонтрагентыСервер",
+            "kind": "ОбщийМодуль",
+            "name": "АктионКонтрагентыСервер",
+            "synonym": "Актион контрагенты сервер",
+            "score": 9.787955284118652
+          },
+          {
+            "full_name": "DataProcessor.ОбменДаннымиКонтрагенты",
+            "kind": "Обработка",
+            "name": "ОбменДаннымиКонтрагенты",
+            "synonym": "Обмен данными контрагенты",
+            "score": 9.787955284118652
+          },
+          {
+            "full_name": "InformationRegister.ЭдоКонтрагентыНаАвтонастройкуРаспределения",
+            "kind": "РегистрСведений",
+            "name": "ЭдоКонтрагентыНаАвтонастройкуРаспределения",
+            "synonym": "ЭДО Контрагенты на автонастройку распределения",
+            "score": 8.259955406188965
+          }
+        ],
+        "next_offset": 10,
+        "results": []
+      }
+    },
+    {
+      "id": "mg-002",
+      "tool": "metadata_search",
+      "args": {
+        "query": "заказ",
+        "limit": 10
+      },
+      "notes": "PERF-6b: в топ-5 обязан быть документ, а не CommonPicture. Именно этот случай был сломан",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 491.0115349998705,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "full_name_contains",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "substr": "Document.",
+            "match_rank": null,
+            "matched_full_name": null
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "results_count_at_least",
+          "passed": false,
+          "detail": {
+            "min": 20,
+            "actual": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "query": "заказ",
+        "kind_filter": "",
+        "search_engine": "fulltext",
+        "total": 180,
+        "returned": 10,
+        "offset": 0,
+        "limit": 10,
+        "has_more": true,
+        "items": [
+          {
+            "full_name": "Document.ЗаказТовара",
+            "kind": "Документ",
+            "name": "ЗаказТовара",
+            "synonym": "Заказ товара",
+            "score": 9.940649032592773
+          },
+          {
+            "full_name": "DataProcessor.ЗаказТоваров",
+            "kind": "Обработка",
+            "name": "ЗаказТоваров",
+            "synonym": "Заказ товаров",
+            "score": 9.940649032592773
+          },
+          {
+            "full_name": "CommonPicture.ЗаказПокупателя",
+            "kind": "ОбщаяКартинка",
+            "name": "ЗаказПокупателя",
+            "synonym": "Заказ покупателя",
+            "score": 9.940649032592773
+          },
+          {
+            "full_name": "CommonPicture.ЗаказПоставщику",
+            "kind": "ОбщаяКартинка",
+            "name": "ЗаказПоставщику",
+            "synonym": "Заказ поставщику",
+            "score": 9.940649032592773
+          },
+          {
+            "full_name": "Document.ЗаказЧерезКонтрагента",
+            "kind": "Документ",
+            "name": "ЗаказЧерезКонтрагента",
+            "synonym": "Заказ через контрагента",
+            "score": 9.105015754699707
+          },
+          {
+            "full_name": "DataProcessor.ЗаказДляФилиала",
+            "kind": "Обработка",
+            "name": "ЗаказДляФилиала",
+            "synonym": "Заказ для филиала",
+            "score": 9.105015754699707
+          },
+          {
+            "full_name": "Document.КлиентскийЗаказ",
+            "kind": "Документ",
+            "name": "КлиентскийЗаказ",
+            "synonym": "Клиентский заказ",
+            "score": 8.940649032592773
+          },
+          {
+            "full_name": "Document.ЗаказЗИПУПоставщика",
+            "kind": "Документ",
+            "name": "ЗаказЗИПУПоставщика",
+            "synonym": "Заказ ЗИП у поставщика",
+            "score": 8.428513526916504
+          },
+          {
+            "full_name": "Document.ЗаказКодовМаркировкиВЭД",
+            "kind": "Документ",
+            "name": "ЗаказКодовМаркировкиВЭД",
+            "synonym": "Заказ кодов маркировки ВЭД",
+            "score": 8.428513526916504
+          },
+          {
+            "full_name": "InformationRegister.ЗаказКодовМаркировкиОстатков",
+            "kind": "РегистрСведений",
+            "name": "ЗаказКодовМаркировкиОстатков",
+            "synonym": "Заказ кодов маркировки остатков",
+            "score": 8.428513526916504
+          }
+        ],
+        "next_offset": 10,
+        "results": []
+      }
+    },
+    {
+      "id": "mg-003",
+      "tool": "metadata_search",
+      "args": {
+        "query": "Контрагенты (ЕГРЮЛ)",
+        "limit": 10
+      },
+      "notes": "Спецсимволы Lucene: скобки не должны ронять поиск синтаксической ошибкой",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 129.94817500020872,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "query": "Контрагенты (ЕГРЮЛ)",
+        "kind_filter": "",
+        "search_engine": "fulltext",
+        "total": 28,
+        "returned": 10,
+        "offset": 0,
+        "limit": 10,
+        "has_more": true,
+        "items": [
+          {
+            "full_name": "Catalog.Контрагенты",
+            "kind": "Справочник",
+            "name": "Контрагенты",
+            "synonym": "Контрагенты",
+            "score": 23.13104820251465
+          },
+          {
+            "full_name": "ExchangePlan.Контрагенты",
+            "kind": "ПланОбмена",
+            "name": "Контрагенты",
+            "synonym": "Контрагенты",
+            "score": 23.13104820251465
+          },
+          {
+            "full_name": "DataProcessor.АктионКонтрагенты",
+            "kind": "Обработка",
+            "name": "АктионКонтрагенты",
+            "synonym": "Актион контрагенты",
+            "score": 10.821520805358887
+          },
+          {
+            "full_name": "CommonPicture.СправочникКонтрагенты",
+            "kind": "ОбщаяКартинка",
+            "name": "СправочникКонтрагенты",
+            "synonym": "Справочник контрагенты",
+            "score": 10.821520805358887
+          },
+          {
+            "full_name": "InformationRegister.КонтрагентыКомиссионныхТоваров",
+            "kind": "РегистрСведений",
+            "name": "КонтрагентыКомиссионныхТоваров",
+            "synonym": "Контрагенты комиссионных товаров",
+            "score": 10.787955284118652
+          },
+          {
+            "full_name": "InformationRegister.КонтрагентыНаПроверку",
+            "kind": "РегистрСведений",
+            "name": "КонтрагентыНаПроверку",
+            "synonym": "Контрагенты на проверку",
+            "score": 10.787955284118652
+          },
+          {
+            "full_name": "Catalog.ЭдоКонтрагентыОрганизаций",
+            "kind": "Справочник",
+            "name": "ЭдоКонтрагентыОрганизаций",
+            "synonym": "ЭДО Контрагенты организаций",
+            "score": 9.787955284118652
+          },
+          {
+            "full_name": "CommonModule.АктионКонтрагентыСервер",
+            "kind": "ОбщийМодуль",
+            "name": "АктионКонтрагентыСервер",
+            "synonym": "Актион контрагенты сервер",
+            "score": 9.787955284118652
+          },
+          {
+            "full_name": "DataProcessor.ОбменДаннымиКонтрагенты",
+            "kind": "Обработка",
+            "name": "ОбменДаннымиКонтрагенты",
+            "synonym": "Обмен данными контрагенты",
+            "score": 9.787955284118652
+          },
+          {
+            "full_name": "InformationRegister.ЭдоКонтрагентыНаАвтонастройкуРаспределения",
+            "kind": "РегистрСведений",
+            "name": "ЭдоКонтрагентыНаАвтонастройкуРаспределения",
+            "synonym": "ЭДО Контрагенты на автонастройку распределения",
+            "score": 8.259955406188965
+          }
+        ],
+        "next_offset": 10,
+        "results": []
+      }
+    },
+    {
+      "id": "mg-004",
+      "tool": "metadata_search",
+      "args": {
+        "query": "заказ",
+        "kind": "Справочник",
+        "limit": 10
+      },
+      "notes": "FIX-17: фильтр по РУССКОМУ имени вида не работал никогда — сравнивался с null",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 474.70809800006464,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "full_name_contains",
+          "passed": false,
+          "detail": {
+            "k": 10,
+            "substr": "Catalog.",
+            "match_rank": null,
+            "matched_full_name": null
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "query": "заказ",
+        "kind_filter": "Справочник",
+        "search_engine": "fulltext",
+        "total": 4,
+        "returned": 4,
+        "offset": 0,
+        "limit": 10,
+        "has_more": false,
+        "items": [
+          {
+            "full_name": "Catalog.ОсобыеОтметкиЗаказаТранспорта",
+            "kind": "Справочник",
+            "name": "ОсобыеОтметкиЗаказаТранспорта",
+            "synonym": "Особые отметки заказа транспорта",
+            "score": 2.028562068939209
+          },
+          {
+            "full_name": "Catalog.ПричиныОтказаОтИнтернетЗаказа",
+            "kind": "Справочник",
+            "name": "ПричиныОтказаОтИнтернетЗаказа",
+            "synonym": "Причины отказа от интернет заказа",
+            "score": 1.939141869544983
+          },
+          {
+            "full_name": "Catalog.КазахстанТоварыДляЗаказаИзТТРФ",
+            "kind": "Справочник",
+            "name": "КазахстанТоварыДляЗаказаИзТТРФ",
+            "synonym": "Товары для заказа из ТТ (Казахстан)",
+            "score": 1.8640258312225342
+          },
+          {
+            "full_name": "Catalog.ТочкиВыдачиЗаказов",
+            "kind": "Справочник",
+            "name": "ТочкиВыдачиЗаказов",
+            "synonym": "Точки выдачи заказов",
+            "score": 1.0
+          }
+        ],
+        "results": []
+      }
+    },
+    {
+      "id": "mg-005",
+      "tool": "metadata_search",
+      "args": {
+        "query": "ЭдоОбщийУчастникиДО",
+        "limit": 5
+      },
+      "notes": "Поиск по точному имени — первый результат обязан быть точным",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 123.2485830000769,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 1,
+            "values": [
+              "ЭдоОбщийУчастникиДО"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": 1,
+      "response_preview": {
+        "query": "ЭдоОбщийУчастникиДО",
+        "kind_filter": "",
+        "search_engine": "fulltext",
+        "total": 1,
+        "returned": 1,
+        "offset": 0,
+        "limit": 5,
+        "has_more": false,
+        "items": [
+          {
+            "full_name": "Catalog.ЭдоОбщийУчастникиДО",
+            "kind": "Справочник",
+            "name": "ЭдоОбщийУчастникиДО",
+            "synonym": "ЭДО Общий участники ДО",
+            "score": 11.580921173095703
+          }
+        ],
+        "results": []
+      }
+    },
+    {
+      "id": "mg-101",
+      "tool": "metadata_search",
+      "args": {
+        "query": "ЗаведомоНесуществующийОбъектXYZ",
+        "limit": 10
+      },
+      "notes": "Ловушка. Пустой ответ здесь — правильный. Непустой означает, что нечёткий поиск тянет мусор",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 287.18933299978744,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "total",
+            "expected": 0,
+            "actual": 0,
+            "found": true
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "query": "ЗаведомоНесуществующийОбъектXYZ",
+        "kind_filter": "",
+        "search_engine": "fulltext",
+        "total": 0,
+        "returned": 0,
+        "offset": 0,
+        "limit": 10,
+        "has_more": false,
+        "items": [],
+        "results": []
+      }
+    },
+    {
+      "id": "mg-102",
+      "tool": "metadata_object_details",
+      "args": {
+        "full_name": "Справочник.ТакогоНетВообще"
+      },
+      "notes": "Ловушка. Инструмент обязан сказать «не найдено», а не выдумать состав",
+      "ok": false,
+      "error": "json decode: Expecting value: line 1 column 1 (char 0)",
+      "is_error_flag": true,
+      "duration_ms": 19.21533599988834,
+      "search_type": null,
+      "hard": [],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": null
+    },
+    {
+      "id": "mg-103",
+      "tool": "metadata_search",
+      "args": {
+        "query": "заказ",
+        "subsystem": "НесуществующаяПодсистема",
+        "limit": 10
+      },
+      "notes": "SCALE-1: пустота из-за неверного имени подсистемы обязана быть объяснена, а не молчалива",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 1128.2597409999653,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "scope_warning",
+            "found": true,
+            "size": 175,
+            "type": "str"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "query": "заказ",
+        "kind_filter": "",
+        "search_engine": "fulltext",
+        "total": 0,
+        "returned": 0,
+        "offset": 0,
+        "limit": 10,
+        "has_more": false,
+        "items": [],
+        "subsystem_scope": "НесуществующаяПодсистема",
+        "scope_note": "Выдача ограничена подсистемой «НесуществующаяПодсистема» и вложенными в неё. Для поиска по всей конфигурации передайте subsystem=\"*\".",
+        "scope_warning": "В подсистеме «НесуществующаяПодсистема» ничего не найдено. Либо там правда нет таких объектов, либо имя подсистемы указано неверно — список доступных даёт metadata_subsystems.",
+        "results": []
+      }
+    },
+    {
+      "id": "mg-201",
+      "tool": "metadata_object_details",
+      "args": {
+        "full_name": "Справочник.ЭдоОбщийУчастникиДО",
+        "include_subsystems": true
+      },
+      "notes": "FIX-17: поле kind приходило null у всех объектов",
+      "ok": false,
+      "error": "json decode: Expecting value: line 1 column 1 (char 0)",
+      "is_error_flag": true,
+      "duration_ms": 25.331770999855507,
+      "search_type": null,
+      "hard": [],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": null
+    },
+    {
+      "id": "mg-202",
+      "tool": "metadata_object_attributes",
+      "args": {
+        "object_full_name": "Справочник.ЭдоОбщийУчастникиДО"
+      },
+      "notes": "Состав подтверждён приёмкой 11.08. Устареет при правке справочника",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 178.2370810001339,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 20,
+            "values": [
+              "НаименованиеПолное"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 20,
+            "values": [
+              "ИНН"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 20,
+      "response_preview": {
+        "found": false,
+        "error": "Объект 'Справочник.ЭдоОбщийУчастникиДО' не найден",
+        "results": []
+      }
+    },
+    {
+      "id": "mg-203",
+      "tool": "metadata_list_kinds",
+      "args": {},
+      "notes": "FIX-17: инструмент возвращал список из одних null — то есть был бесполезен",
+      "ok": false,
+      "error": "json decode: Expecting value: line 1 column 1 (char 0)",
+      "is_error_flag": true,
+      "duration_ms": 24.987925000004907,
+      "search_type": null,
+      "hard": [],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": null
+    },
+    {
+      "id": "mg-301",
+      "tool": "metadata_subsystems",
+      "args": {
+        "limit": 30
+      },
+      "notes": "FIX-16: members_count был 0 у всех 93 подсистем",
+      "ok": false,
+      "error": "json decode: Expecting value: line 1 column 1 (char 0)",
+      "is_error_flag": true,
+      "duration_ms": 19.310362999931385,
+      "search_type": null,
+      "hard": [],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": null
+    },
+    {
+      "id": "mg-401",
+      "tool": "code_callers",
+      "args": {
+        "full_name": "Catalog.ЭдоДанныеМЧД.ManagerModule.НормальноеНаименованиеИП"
+      },
+      "notes": "Приёмка 12.08 дала 7 вызывающих. min=5 с запасом на правки кода",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 1416.6132179998385,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "results_count_at_least",
+          "passed": false,
+          "detail": {
+            "min": 5,
+            "actual": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "results_count_at_least",
+          "passed": false,
+          "detail": {
+            "min": 7,
+            "actual": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "found": true,
+        "target": "Catalog.ЭдоДанныеМЧД.ManagerModule.НормальноеНаименованиеИП",
+        "depth": 1,
+        "callers": [
+          {
+            "id": "Catalog.ЭдоДанныеМЧД.ManagerModule.ПредставлениеОрганизацииДоверителяСУчетомПД",
+            "full_name": "Catalog.ЭдоДанныеМЧД.ManagerModule.ПредставлениеОрганизацииДоверителяСУчетомПД",
+            "module_id": "Catalog.ЭдоДанныеМЧД.ManagerModule",
+            "kind": "Function",
+            "is_export": false,
+            "min_distance": 1
+          },
+          {
+            "id": "CommonModule.ЭдоДиадокОперацииВызовСервера.СформироватьНаименованиеИндивидуальныйПредприниматель",
+            "full_name": "CommonModule.ЭдоДиадокОперацииВызовСервера.СформироватьНаименованиеИндивидуальныйПредприниматель",
+            "module_id": "CommonModule.ЭдоДиадокОперацииВызовСервера",
+            "kind": "Function",
+            "is_export": false,
+            "min_distance": 1
+          },
+          {
+            "id": "DataProcessor.ДиадокЭДО.ObjectModule.глЭдо_ФоновыеЗадания_ОбновитьСправочникКонтрагентовОрганизаций_ПолучитьНаименованиеИП",
+            "full_name": "DataProcessor.ДиадокЭДО.ObjectModule.глЭдо_ФоновыеЗадания_ОбновитьСправочникКонтрагентовОрганизаций_ПолучитьНаименованиеИП",
+            "module_id": "DataProcessor.ДиадокЭДО.ObjectModule",
+            "kind": "Function",
+            "is_export": false,
+            "min_distance": 1
+          },
+          {
+            "id": "DataProcessor.ДиадокЭДО.ObjectModule.глЭдо_ФоновыеЗадания_ОбновитьЭлементСправочникаКонтрагентов_ПолучитьНаименование",
+            "full_name": "DataProcessor.ДиадокЭДО.ObjectModule.глЭдо_ФоновыеЗадания_ОбновитьЭлементСправочникаКонтрагентов_ПолучитьНаименование",
+            "module_id": "DataProcessor.ДиадокЭДО.ObjectModule",
+            "kind": "Function",
+            "is_export": false,
+            "min_distance": 1
+          },
+          {
+            "id": "DataProcessor.ЭдоОбработкаДанныхМЧД.ManagerModule.ВыполнитьЗаполнениеДанныхМчдВерсии1_0_ФСС",
+            "full_name": "DataProcessor.ЭдоОбработкаДанныхМЧД.ManagerModule.ВыполнитьЗаполнениеДанныхМчдВерсии1_0_ФСС",
+            "module_id": "DataProcessor.ЭдоОбработкаДанныхМЧД.ManagerModule",
+            "kind": "Procedure",
+            "is_export": false,
+            "min_distance": 1
+          },
+          {
+            "id": "DataProcessor.ЭдоОбработкаДанныхМЧД.ManagerModule.ЗаполнитьСведенияОДоверителеИП",
+            "full_name": "DataProcessor.ЭдоОбработкаДанныхМЧД.ManagerModule.ЗаполнитьСведенияОДоверителеИП",
+            "module_id": "DataProcessor.ЭдоОбработкаДанныхМЧД.ManagerModule",
+            "kind": "Procedure",
+            "is_export": false,
+            "min_distance": 1
+          },
+          {
+            "id": "Document.УниверсальныйЭлектронныйДокументПоставщика.ObjectModule.НормализоватьНаименованиеИП",
+            "full_name": "Document.УниверсальныйЭлектронныйДокументПоставщика.ObjectModule.НормализоватьНаименованиеИП",
+            "module_id": "Document.УниверсальныйЭлектронныйДокументПоставщика.ObjectModule",
+            "kind": "Function",
+            "is_export": false,
+            "min_distance": 1
+          }
+        ],
+        "total": 7,
+        "results": []
+      }
+    },
+    {
+      "id": "mg-402",
+      "tool": "code_callees",
+      "args": {
+        "full_name": "Catalog.ЭдоДанныеМЧД.ManagerModule.НормальноеНаименованиеИП"
+      },
+      "notes": "Приёмка дала 2 вызываемых: ШаблонНормализацииИпВНачалеСтроки, ШаблонУдаленияИпВКонцеСтроки",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 1038.6863959997754,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "results_count_at_least",
+          "passed": false,
+          "detail": {
+            "min": 2,
+            "actual": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "found": true,
+        "source": "Catalog.ЭдоДанныеМЧД.ManagerModule.НормальноеНаименованиеИП",
+        "depth": 1,
+        "callees": [
+          {
+            "id": "Catalog.ЭдоДанныеМЧД.ManagerModule.ШаблонНормализацииИпВНачалеСтроки",
+            "full_name": "Catalog.ЭдоДанныеМЧД.ManagerModule.ШаблонНормализацииИпВНачалеСтроки",
+            "module_id": "Catalog.ЭдоДанныеМЧД.ManagerModule",
+            "kind": "Function",
+            "is_export": true,
+            "min_distance": 1
+          },
+          {
+            "id": "Catalog.ЭдоДанныеМЧД.ManagerModule.ШаблонУдаленияИпВКонцеСтроки",
+            "full_name": "Catalog.ЭдоДанныеМЧД.ManagerModule.ШаблонУдаленияИпВКонцеСтроки",
+            "module_id": "Catalog.ЭдоДанныеМЧД.ManagerModule",
+            "kind": "Function",
+            "is_export": true,
+            "min_distance": 1
+          }
+        ],
+        "total": 2,
+        "results": []
+      }
+    },
+    {
+      "id": "mg-403",
+      "tool": "code_callers",
+      "args": {
+        "full_name": "CommonModule.НетТакогоМодуля.НетТакойПроцедуры"
+      },
+      "notes": "Ловушка. Несуществующая процедура — не повод выдумывать вызывающих",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 135.050339999907,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "found",
+            "expected": false,
+            "actual": false,
+            "found": true
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "found": false,
+        "error": "Callable 'CommonModule.НетТакогоМодуля.НетТакойПроцедуры' не найден",
+        "results": []
+      }
+    },
+    {
+      "id": "mg-404",
+      "tool": "metadata_stats",
+      "args": {},
+      "notes": "Страховка: граф вообще собран и слой 2 на месте",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 3633.7446019997515,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "path_non_empty",
+          "passed": false,
+          "detail": {
+            "path": "nodes",
+            "found": false,
+            "size": null,
+            "type": null
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "path_non_empty",
+          "passed": false,
+          "detail": {
+            "path": "edges",
+            "found": false,
+            "size": null,
+            "type": null
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "metadata": {
+          "objects": 16590,
+          "attributes": 42763,
+          "tabular_sections": 1872,
+          "forms": 8202,
+          "enum_values": 5996,
+          "types": 2018,
+          "by_kind": [
+            {
+              "kind": "РегистрСведений",
+              "count": 2247
+            },
+            {
+              "kind": "Роль",
+              "count": 1897
+            },
+            {
+              "kind": "Обработка",
+              "count": 1091
+            },
+            {
+              "kind": "РегламентноеЗадание",
+              "count": 974
+            },
+            {
+              "kind": "Перечисление",
+              "count": 778
+            },
+            {
+              "kind": "Справочник",
+              "count": 667
+            },
+            {
+              "kind": "ОбщийМодуль",
+              "count": 642
+            },
+            {
+              "kind": "Отчет",
+              "count": 554
+            },
+            {
+              "kind": "Документ",
+              "count": 475
+            },
+            {
+              "kind": "ОбщаяКартинка",
+              "count": 346
+            },
+            {
+              "kind": "Константа",
+              "count": 142
+            },
+            {
+              "kind": "РегистрНакопления",
+              "count": 140
+            },
+            {
+              "kind": "ПодпискаНаСобытие",
+              "count": 107
+            },
+            {
+              "kind": "ПланВидовХарактеристик",
+              "count": 96
+            },
+            {
+              "kind": "Подсистема",
+              "count": 93
+            },
+            {
+              "kind": "ОбщаяФорма",
+              "count": 82
+            },
+            {
+              "kind": "ПланОбмена",
+              "count": 82
+            },
+            {
+              "kind": "HTTPСервис",
+              "count": 64
+            },
+            {
+              "kind": "ОпределяемыйТип",
+              "count": 39
+            },
+            {
+              "kind": "ПакетXDTO",
+              "count": 38
+            },
+            {
+              "kind": "ОбщаяКоманда",
+              "count": 36
+            },
+            {
+              "kind": "ПараметрСеанса",
+              "count": 33
+            },
+            {
+              "kind": "ОбщийМакет",
+              "count": 25
+            },
+            {
+              "kind": "ВнешнийИсточникДанных",
+              "count": 21
+            },
+            {
+              "kind": "WSСсылка",
+              "count": 18
+            },
+            {
+              "kind": "ЭлементСтиля",
+              "count": 9
+            },
+            {
+              "kind": "Стиль",
+              "count": 9
+            },
+            {
+              "kind": "НумераторДокументов",
+              "count": 8
+            },
+            {
+              "kind": "WebСервис",
+              "count": 7
+            },
+            {
+              "kind": "РегистрБухгалтерии",
+              "count": 7
+            },
+            {
+              "kind": "КритерийОтбора",
+              "count": 5
+            },
+            {
+              "kind": "ГруппаКоманд",
+              "count": 4
+            },
+            {
+              "kind": "БизнесПроцесс",
+              "count": 2
+            },
+            {
+              "kind": "Задача",
+              "count": 2
+            },
+            {
+              "kind": "ПланСчетов",
+              "count": 2
+            },
+            {
+              "kind": "Язык",
+              "count": 2
+            },
+            {
+              "kind": "ХранилищеНастроек",
+              "count": 1
+            },
+            {
+              "kind": "ФункциональнаяОпция",
+              "count": 1
+            },
+            {
+              "kind": "Последовательность",
+              "count": 1
+            }
+          ]
+        },
+        "code": {
+          "modules": 14041,
+          "callables": 231113,
+          "callsites": 722233,
+          "callsites_resolved": 428645,
+          "callsites_unresolved": 43990,
+          "callsites_object_method": 249598,
+          "resolve_coverage_pct": 90.69
+        },
+        "relations": {
+          "CALL_SITE": 722233,
+          "RESOLVES_TO_CALLEE": 428645,
+          "CALLS": 351441,
+          "HAS_PARAM": 348746,
+          "HAS_METHOD": 231085,
+          "OPERATES_ON": 67890,
+          "OF_TYPE": 47651,
+          "HAS_ATTRIBUTE": 42763,
+          "INFERRED_TYPE": 24384,
+          "HAS_FORM": 8202,
+          "HAS_VALUE": 5996,
+          "CONTAINS": 3489,
+          "HAS_TABULAR_SECTION": 1872,
+          "RESOLVES_TO": 1729,
+          "BASED_ON": 847,
+          "OWNED_BY": 82
+        },
+        "graph_empty": false,
+        "results": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "_комментарий": "BASE-1. Эталонные числа графа. Обновлять командой `python3 scripts/check_baseline.py --update` ПОСЛЕ того, как убедились, что новые числа верны, а не просто новые.",
+  "_как_получено": "docker compose up -d --force-recreate metadata-indexer (METADATA_FORCE_XML=true), затем этот скрипт с --update",
+  "tolerance_pct": 5.0,
+  "counts": {
+    "MetadataObject": 10747,
+    "Attribute": 42763,
+    "Form": 8202,
+    "Module": 14041,
+    "Callable": 231113,
+    "CallSite": 722233,
+    "Parameter": 348746,
+    "Subsystem": 93,
+    "rel_HAS_METHOD": 231085,
+    "rel_HAS_ATTRIBUTE": 42763,
+    "rel_CONTAINS": 3489,
+    "rel_CALLS": 351441,
+    "rel_CALL_SITE": 722233,
+    "orphan_Callable": 28
+  },
+  "fingerprints": {
+    "metadata_xml": {
+      "value": "d205c809f044372d7f26e638d10989c1a60b1d3e9f4dfcf548159d9c4db34eb9",
+      "mode": "stat"
+    },
+    "bsl_source": {
+      "value": "796fed02220c3fda40b986d271ca13499b11ca50df90be953b893f85f14ead10",
+      "mode": "stat"
+    },
+    "partial_owners_000": {
+      "value": null,
+      "mode": null
+    },
+    "partial_owners_001": {
+      "value": null,
+      "mode": null
+    },
+    "partial_owners_002": {
+      "value": null,
+      "mode": null
+    },
+    "partial_owners_003": {
+      "value": null,
+      "mode": null
+    },
+    "partial_owners_004": {
+      "value": null,
+      "mode": null
+    }
+  }
+}

@@ -88,7 +88,10 @@ def subsystem_scope_cypher(alias: str = "n", param: str = "subsys") -> str:
     return (
         f"EXISTS {{ MATCH (sub:MetadataObject {{kind_eng: 'Subsystem'}}) "
         f"WHERE (sub.name = ${param} OR sub.full_name_eng = ${param} "
-        f"OR sub.full_name_ru = ${param}) "
+        f"OR sub.full_name_ru = ${param} "
+        # FIX-18: full_name_ru хранится во множественном числе вида
+        # («Подсистемы.X»), а пишут обычно единственное («Подсистема.X»).
+        f"OR (sub.kind_ru + '.' + sub.name) = ${param}) "
         f"MATCH (sub)-[:PARENT_OF*0..{SUBSYSTEM_MAX_DEPTH}]->"
         f"(:MetadataObject)-[:CONTAINS]->({alias}) }}"
     )

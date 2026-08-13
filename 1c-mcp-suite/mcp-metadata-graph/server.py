@@ -524,6 +524,7 @@ def metadata_object_details(
         sub_rows = _neo4j_rows("""
             MATCH (s:MetadataObject {kind_eng: 'Subsystem'})-[:CONTAINS]->(n:MetadataObject)
             WHERE n.full_name_eng = $fn OR n.full_name_ru = $fn
+                  OR (n.kind_ru + '.' + n.name) = $fn
             RETURN s.name as subsystem
             ORDER BY s.name
         """, {"fn": full_name})
@@ -851,7 +852,9 @@ def metadata_subsystem_members(
     # от него угадывать форму значило бы возвращать пустоту на верный запрос.
     match_sub = ("MATCH (s:MetadataObject {kind_eng: 'Subsystem'}) "
                  "WHERE s.name = $name OR s.full_name_eng = $name "
-                 "OR s.full_name_ru = $name ")
+                 "OR s.full_name_ru = $name "
+                 # FIX-18: единственное число вида — «Подсистема.X».
+                 "OR (s.kind_ru + '.' + s.name) = $name ")
 
     total = _neo4j_count(
         match_sub + "MATCH (s)-[:CONTAINS]->(m:MetadataObject) RETURN count(m)",

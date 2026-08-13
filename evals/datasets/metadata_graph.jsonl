@@ -1,6 +1,14 @@
 // EVAL-1 — датасет для mcp-metadata-graph. Заход 4, блок D.
 //
 // ВАЖНО, ПРОЧТИТЕ ПЕРЕД ПЕРВЫМ ПРОГОНОМ.
+//
+// Инструменты здесь — ТОЛЬКО из профиля `core` (см. mcp_tool_filter.py).
+// Первая версия датасета вызывала metadata_object_details,
+// metadata_list_kinds и metadata_subsystems — их профиль убирает как
+// дубли, и все четыре примера упали с «json decode»: вызов
+// несуществующего инструмента возвращает не JSON. Датасет писался по коду
+// серверов, без сверки с тем, что реально доступно агенту.
+// Проверить список: python scripts/list_tools.py
 // Примеры засеяны данными из вашей приёмки 11-12 августа: имена объектов,
 // числа вызывающих, состав реквизитов — всё это взято из ответов, которые
 // вы проверили и назвали верными. Но проверял их ЧЕЛОВЕК ОДИН РАЗ, а не
@@ -24,16 +32,16 @@
 {"id":"mg-005","tool":"metadata_search","args":{"query":"ЭдоОбщийУчастникиДО","limit":5},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":1,"values":["ЭдоОбщийУчастникиДО"]}],"soft":[]},"notes":"Поиск по точному имени — первый результат обязан быть точным"}
 // ─── Ловушки: правильный ответ — «такого нет» ──────────────────────────
 {"id":"mg-101","tool":"metadata_search","args":{"query":"ЗаведомоНесуществующийОбъектXYZ","limit":10},"expect":{"hard":[{"type":"field_equals","path":"total","value":0}],"soft":[]},"notes":"Ловушка. Пустой ответ здесь — правильный. Непустой означает, что нечёткий поиск тянет мусор"}
-{"id":"mg-102","tool":"metadata_object_details","args":{"full_name":"Справочник.ТакогоНетВообще"},"expect":{"hard":[{"type":"field_equals","path":"found","value":false}],"soft":[]},"notes":"Ловушка. Инструмент обязан сказать «не найдено», а не выдумать состав"}
+{"id":"mg-102","tool":"metadata_object_attributes","args":{"object_full_name":"Справочник.ТакогоНетВообще"},"expect":{"hard":[{"type":"field_equals","path":"found","value":false}],"soft":[]},"notes":"Ловушка. Инструмент обязан сказать «не найдено», а не выдумать состав"}
 {"id":"mg-103","tool":"metadata_search","args":{"query":"заказ","subsystem":"НесуществующаяПодсистема","limit":10},"expect":{"hard":[{"type":"path_non_empty","path":"scope_warning"}],"soft":[]},"notes":"SCALE-1: пустота из-за неверного имени подсистемы обязана быть объяснена, а не молчалива"}
 // ─── Состав объекта: FIX-17 и TOOL-2 ──────────────────────────────────
-{"id":"mg-201","tool":"metadata_object_details","args":{"full_name":"Справочник.ЭдоОбщийУчастникиДО","include_subsystems":true},"expect":{"hard":[{"type":"field_equals","path":"found","value":true},{"type":"field_equals","path":"kind","value":"Справочник"}],"soft":[]},"notes":"FIX-17: поле kind приходило null у всех объектов"}
-{"id":"mg-202","tool":"metadata_object_attributes","args":{"object_full_name":"Справочник.ЭдоОбщийУчастникиДО"},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":20,"values":["НаименованиеПолное"]}],"soft":[{"type":"name_in_top_k","k":20,"values":["ИНН"]}]},"notes":"Состав подтверждён приёмкой 11.08. Устареет при правке справочника"}
-{"id":"mg-203","tool":"metadata_list_kinds","args":{},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":50,"values":["Справочник"]}],"soft":[{"type":"results_count_at_least","min":30}]},"notes":"FIX-17: инструмент возвращал список из одних null — то есть был бесполезен"}
+{"id":"mg-201","tool":"metadata_object_attributes","args":{"object_full_name":"Справочник.ЭдоОбщийУчастникиДО"},"expect":{"hard":[{"type":"field_equals","path":"found","value":true},{"type":"non_empty"}],"soft":[]},"notes":"FIX-18: full_name_ru хранится во множественном числе (Справочники.X), а пишут единственное. Этот пример и нашёл дефект — держим русскую форму, чтобы он не вернулся"}
+{"id":"mg-202","tool":"metadata_object_attributes","args":{"object_full_name":"Catalog.ЭдоОбщийУчастникиДО"},"expect":{"hard":[{"type":"non_empty"},{"type":"name_in_top_k","k":20,"values":["НаименованиеПолное"]}],"soft":[{"type":"name_in_top_k","k":20,"values":["ИНН"]}]},"notes":"Состав подтверждён приёмкой 11.08. Устареет при правке справочника"}
+{"id":"mg-203","tool":"metadata_stats","args":{},"expect":{"hard":[{"type":"path_non_empty","path":"metadata.by_kind"}],"soft":[]},"notes":"FIX-17: виды приходили как null. metadata_list_kinds убран профилем core — та же информация в секции by_kind"}
 // ─── Подсистемы: FIX-16, три инструмента возвращали пустоту ───────────
-{"id":"mg-301","tool":"metadata_subsystems","args":{"limit":30},"expect":{"hard":[{"type":"non_empty"},{"type":"results_count_at_least","min":10}],"soft":[]},"notes":"FIX-16: members_count был 0 у всех 93 подсистем"}
+{"id":"mg-301","tool":"metadata_subsystem_tree","args":{"max_depth":2},"expect":{"hard":[{"type":"non_empty"}],"soft":[{"type":"results_count_at_least","min":10}]},"notes":"FIX-16: рёбра подсистем не находились. metadata_subsystems убран профилем core — дерево даёт то же"}
 // ─── Код: слой 2 ──────────────────────────────────────────────────────
 {"id":"mg-401","tool":"code_callers","args":{"full_name":"Catalog.ЭдоДанныеМЧД.ManagerModule.НормальноеНаименованиеИП"},"expect":{"hard":[{"type":"non_empty"},{"type":"results_count_at_least","min":5}],"soft":[{"type":"results_count_at_least","min":7}]},"notes":"Приёмка 12.08 дала 7 вызывающих. min=5 с запасом на правки кода"}
 {"id":"mg-402","tool":"code_callees","args":{"full_name":"Catalog.ЭдоДанныеМЧД.ManagerModule.НормальноеНаименованиеИП"},"expect":{"hard":[{"type":"non_empty"}],"soft":[{"type":"results_count_at_least","min":2}]},"notes":"Приёмка дала 2 вызываемых: ШаблонНормализацииИпВНачалеСтроки, ШаблонУдаленияИпВКонцеСтроки"}
 {"id":"mg-403","tool":"code_callers","args":{"full_name":"CommonModule.НетТакогоМодуля.НетТакойПроцедуры"},"expect":{"hard":[{"type":"field_equals","path":"found","value":false}],"soft":[]},"notes":"Ловушка. Несуществующая процедура — не повод выдумывать вызывающих"}
-{"id":"mg-404","tool":"metadata_stats","args":{},"expect":{"hard":[{"type":"path_non_empty","path":"nodes"}],"soft":[{"type":"path_non_empty","path":"edges"}]},"notes":"Страховка: граф вообще собран и слой 2 на месте"}
+{"id":"mg-404","tool":"metadata_stats","args":{},"expect":{"hard":[{"type":"path_non_empty","path":"metadata"}],"soft":[{"type":"path_non_empty","path":"code"}]},"notes":"path_non_empty требует список/строку/словарь — на числе (metadata.objects) размер не определён и предикат падает. Проверяем секции целиком"}

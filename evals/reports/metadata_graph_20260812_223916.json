@@ -1,0 +1,2577 @@
+{
+  "meta": {
+    "dataset": "/app/evals/datasets/metadata_graph.jsonl",
+    "endpoint": "http://mcp-metadata-graph:8001/mcp",
+    "started_at": "2026-08-12T22:39:09.536049+00:00",
+    "finished_at": "2026-08-12T22:39:16.503670+00:00",
+    "duration_s": 6.967621,
+    "examples_total": 16
+  },
+  "summary": {
+    "total": 16,
+    "hard_passed": 12,
+    "hard_pass_rate": 0.75,
+    "soft_total": 7,
+    "soft_passed": 5,
+    "soft_pass_rate": 0.7142857142857143,
+    "examples_with_mrr": 3,
+    "recall_at_1": 0.0,
+    "recall_at_5": 0.0,
+    "recall_at_10": 0.0,
+    "mrr": 0.0,
+    "latency_ms": {
+      "min": 30.91333799966378,
+      "median": 96.86792399998012,
+      "p95": 1580.647370749375,
+      "max": 3141.1888220000037
+    },
+    "search_type_dist": {
+      "unknown": 16
+    },
+    "transport_errors": 0,
+    "tool_errors": 0
+  },
+  "examples": [
+    {
+      "id": "mg-001",
+      "tool": "metadata_search",
+      "args": {
+        "query": "Контрагенты",
+        "limit": 10
+      },
+      "notes": "Целый токен в имени: точное совпадение должно давать высокий score",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 136.46851900011825,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 10
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 3,
+            "values": [
+              "Контрагенты"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 3
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "results_count_at_least",
+          "passed": true,
+          "detail": {
+            "min": 5,
+            "actual": 10
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 3,
+      "response_preview": {
+        "query": "Контрагенты",
+        "kind_filter": "",
+        "search_engine": "fulltext",
+        "total": 28,
+        "returned": 10,
+        "offset": 0,
+        "limit": 10,
+        "has_more": true,
+        "items": [
+          {
+            "full_name": "Catalog.Контрагенты",
+            "kind": "Справочник",
+            "name": "Контрагенты",
+            "synonym": "Контрагенты",
+            "score": 23.13104820251465
+          },
+          {
+            "full_name": "ExchangePlan.Контрагенты",
+            "kind": "ПланОбмена",
+            "name": "Контрагенты",
+            "synonym": "Контрагенты",
+            "score": 23.13104820251465
+          },
+          {
+            "full_name": "DataProcessor.АктионКонтрагенты",
+            "kind": "Обработка",
+            "name": "АктионКонтрагенты",
+            "synonym": "Актион контрагенты",
+            "score": 10.821520805358887
+          },
+          {
+            "full_name": "CommonPicture.СправочникКонтрагенты",
+            "kind": "ОбщаяКартинка",
+            "name": "СправочникКонтрагенты",
+            "synonym": "Справочник контрагенты",
+            "score": 10.821520805358887
+          },
+          {
+            "full_name": "InformationRegister.КонтрагентыКомиссионныхТоваров",
+            "kind": "РегистрСведений",
+            "name": "КонтрагентыКомиссионныхТоваров",
+            "synonym": "Контрагенты комиссионных товаров",
+            "score": 10.787955284118652
+          },
+          {
+            "full_name": "InformationRegister.КонтрагентыНаПроверку",
+            "kind": "РегистрСведений",
+            "name": "КонтрагентыНаПроверку",
+            "synonym": "Контрагенты на проверку",
+            "score": 10.787955284118652
+          },
+          {
+            "full_name": "Catalog.ЭдоКонтрагентыОрганизаций",
+            "kind": "Справочник",
+            "name": "ЭдоКонтрагентыОрганизаций",
+            "synonym": "ЭДО Контрагенты организаций",
+            "score": 9.787955284118652
+          },
+          {
+            "full_name": "CommonModule.АктионКонтрагентыСервер",
+            "kind": "ОбщийМодуль",
+            "name": "АктионКонтрагентыСервер",
+            "synonym": "Актион контрагенты сервер",
+            "score": 9.787955284118652
+          },
+          {
+            "full_name": "DataProcessor.ОбменДаннымиКонтрагенты",
+            "kind": "Обработка",
+            "name": "ОбменДаннымиКонтрагенты",
+            "synonym": "Обмен данными контрагенты",
+            "score": 9.787955284118652
+          },
+          {
+            "full_name": "InformationRegister.ЭдоКонтрагентыНаАвтонастройкуРаспределения",
+            "kind": "РегистрСведений",
+            "name": "ЭдоКонтрагентыНаАвтонастройкуРаспределения",
+            "synonym": "ЭДО Контрагенты на автонастройку распределения",
+            "score": 8.259955406188965
+          }
+        ],
+        "next_offset": 10,
+        "results": []
+      }
+    },
+    {
+      "id": "mg-002",
+      "tool": "metadata_search",
+      "args": {
+        "query": "заказ",
+        "limit": 10
+      },
+      "notes": "PERF-6b: в топ-5 обязан быть документ, а не CommonPicture. Именно этот случай был сломан",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 93.56661600031657,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 10
+          },
+          "match_rank": null
+        },
+        {
+          "type": "full_name_contains",
+          "passed": true,
+          "detail": {
+            "k": 5,
+            "substr": "Document.",
+            "match_rank": 1,
+            "matched_full_name": "Document.ЗаказТовара"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "results_count_at_least",
+          "passed": false,
+          "detail": {
+            "min": 20,
+            "actual": 10
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "query": "заказ",
+        "kind_filter": "",
+        "search_engine": "fulltext",
+        "total": 180,
+        "returned": 10,
+        "offset": 0,
+        "limit": 10,
+        "has_more": true,
+        "items": [
+          {
+            "full_name": "Document.ЗаказТовара",
+            "kind": "Документ",
+            "name": "ЗаказТовара",
+            "synonym": "Заказ товара",
+            "score": 9.940649032592773
+          },
+          {
+            "full_name": "DataProcessor.ЗаказТоваров",
+            "kind": "Обработка",
+            "name": "ЗаказТоваров",
+            "synonym": "Заказ товаров",
+            "score": 9.940649032592773
+          },
+          {
+            "full_name": "CommonPicture.ЗаказПокупателя",
+            "kind": "ОбщаяКартинка",
+            "name": "ЗаказПокупателя",
+            "synonym": "Заказ покупателя",
+            "score": 9.940649032592773
+          },
+          {
+            "full_name": "CommonPicture.ЗаказПоставщику",
+            "kind": "ОбщаяКартинка",
+            "name": "ЗаказПоставщику",
+            "synonym": "Заказ поставщику",
+            "score": 9.940649032592773
+          },
+          {
+            "full_name": "Document.ЗаказЧерезКонтрагента",
+            "kind": "Документ",
+            "name": "ЗаказЧерезКонтрагента",
+            "synonym": "Заказ через контрагента",
+            "score": 9.105015754699707
+          },
+          {
+            "full_name": "DataProcessor.ЗаказДляФилиала",
+            "kind": "Обработка",
+            "name": "ЗаказДляФилиала",
+            "synonym": "Заказ для филиала",
+            "score": 9.105015754699707
+          },
+          {
+            "full_name": "Document.КлиентскийЗаказ",
+            "kind": "Документ",
+            "name": "КлиентскийЗаказ",
+            "synonym": "Клиентский заказ",
+            "score": 8.940649032592773
+          },
+          {
+            "full_name": "Document.ЗаказЗИПУПоставщика",
+            "kind": "Документ",
+            "name": "ЗаказЗИПУПоставщика",
+            "synonym": "Заказ ЗИП у поставщика",
+            "score": 8.428513526916504
+          },
+          {
+            "full_name": "Document.ЗаказКодовМаркировкиВЭД",
+            "kind": "Документ",
+            "name": "ЗаказКодовМаркировкиВЭД",
+            "synonym": "Заказ кодов маркировки ВЭД",
+            "score": 8.428513526916504
+          },
+          {
+            "full_name": "InformationRegister.ЗаказКодовМаркировкиОстатков",
+            "kind": "РегистрСведений",
+            "name": "ЗаказКодовМаркировкиОстатков",
+            "synonym": "Заказ кодов маркировки остатков",
+            "score": 8.428513526916504
+          }
+        ],
+        "next_offset": 10,
+        "results": []
+      }
+    },
+    {
+      "id": "mg-003",
+      "tool": "metadata_search",
+      "args": {
+        "query": "Контрагенты (ЕГРЮЛ)",
+        "limit": 10
+      },
+      "notes": "Спецсимволы Lucene: скобки не должны ронять поиск синтаксической ошибкой",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 96.37624200058781,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 10
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "query": "Контрагенты (ЕГРЮЛ)",
+        "kind_filter": "",
+        "search_engine": "fulltext",
+        "total": 28,
+        "returned": 10,
+        "offset": 0,
+        "limit": 10,
+        "has_more": true,
+        "items": [
+          {
+            "full_name": "Catalog.Контрагенты",
+            "kind": "Справочник",
+            "name": "Контрагенты",
+            "synonym": "Контрагенты",
+            "score": 23.13104820251465
+          },
+          {
+            "full_name": "ExchangePlan.Контрагенты",
+            "kind": "ПланОбмена",
+            "name": "Контрагенты",
+            "synonym": "Контрагенты",
+            "score": 23.13104820251465
+          },
+          {
+            "full_name": "DataProcessor.АктионКонтрагенты",
+            "kind": "Обработка",
+            "name": "АктионКонтрагенты",
+            "synonym": "Актион контрагенты",
+            "score": 10.821520805358887
+          },
+          {
+            "full_name": "CommonPicture.СправочникКонтрагенты",
+            "kind": "ОбщаяКартинка",
+            "name": "СправочникКонтрагенты",
+            "synonym": "Справочник контрагенты",
+            "score": 10.821520805358887
+          },
+          {
+            "full_name": "InformationRegister.КонтрагентыКомиссионныхТоваров",
+            "kind": "РегистрСведений",
+            "name": "КонтрагентыКомиссионныхТоваров",
+            "synonym": "Контрагенты комиссионных товаров",
+            "score": 10.787955284118652
+          },
+          {
+            "full_name": "InformationRegister.КонтрагентыНаПроверку",
+            "kind": "РегистрСведений",
+            "name": "КонтрагентыНаПроверку",
+            "synonym": "Контрагенты на проверку",
+            "score": 10.787955284118652
+          },
+          {
+            "full_name": "Catalog.ЭдоКонтрагентыОрганизаций",
+            "kind": "Справочник",
+            "name": "ЭдоКонтрагентыОрганизаций",
+            "synonym": "ЭДО Контрагенты организаций",
+            "score": 9.787955284118652
+          },
+          {
+            "full_name": "CommonModule.АктионКонтрагентыСервер",
+            "kind": "ОбщийМодуль",
+            "name": "АктионКонтрагентыСервер",
+            "synonym": "Актион контрагенты сервер",
+            "score": 9.787955284118652
+          },
+          {
+            "full_name": "DataProcessor.ОбменДаннымиКонтрагенты",
+            "kind": "Обработка",
+            "name": "ОбменДаннымиКонтрагенты",
+            "synonym": "Обмен данными контрагенты",
+            "score": 9.787955284118652
+          },
+          {
+            "full_name": "InformationRegister.ЭдоКонтрагентыНаАвтонастройкуРаспределения",
+            "kind": "РегистрСведений",
+            "name": "ЭдоКонтрагентыНаАвтонастройкуРаспределения",
+            "synonym": "ЭДО Контрагенты на автонастройку распределения",
+            "score": 8.259955406188965
+          }
+        ],
+        "next_offset": 10,
+        "results": []
+      }
+    },
+    {
+      "id": "mg-004",
+      "tool": "metadata_search",
+      "args": {
+        "query": "заказ",
+        "kind": "Справочник",
+        "limit": 10
+      },
+      "notes": "FIX-17: фильтр по РУССКОМУ имени вида не работал никогда — сравнивался с null",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 99.33678599918494,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 4
+          },
+          "match_rank": null
+        },
+        {
+          "type": "full_name_contains",
+          "passed": true,
+          "detail": {
+            "k": 10,
+            "substr": "Catalog.",
+            "match_rank": 1,
+            "matched_full_name": "Catalog.ОсобыеОтметкиЗаказаТранспорта"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "query": "заказ",
+        "kind_filter": "Справочник",
+        "search_engine": "fulltext",
+        "total": 4,
+        "returned": 4,
+        "offset": 0,
+        "limit": 10,
+        "has_more": false,
+        "items": [
+          {
+            "full_name": "Catalog.ОсобыеОтметкиЗаказаТранспорта",
+            "kind": "Справочник",
+            "name": "ОсобыеОтметкиЗаказаТранспорта",
+            "synonym": "Особые отметки заказа транспорта",
+            "score": 2.028562068939209
+          },
+          {
+            "full_name": "Catalog.ПричиныОтказаОтИнтернетЗаказа",
+            "kind": "Справочник",
+            "name": "ПричиныОтказаОтИнтернетЗаказа",
+            "synonym": "Причины отказа от интернет заказа",
+            "score": 1.939141869544983
+          },
+          {
+            "full_name": "Catalog.КазахстанТоварыДляЗаказаИзТТРФ",
+            "kind": "Справочник",
+            "name": "КазахстанТоварыДляЗаказаИзТТРФ",
+            "synonym": "Товары для заказа из ТТ (Казахстан)",
+            "score": 1.8640258312225342
+          },
+          {
+            "full_name": "Catalog.ТочкиВыдачиЗаказов",
+            "kind": "Справочник",
+            "name": "ТочкиВыдачиЗаказов",
+            "synonym": "Точки выдачи заказов",
+            "score": 1.0
+          }
+        ],
+        "results": []
+      }
+    },
+    {
+      "id": "mg-005",
+      "tool": "metadata_search",
+      "args": {
+        "query": "ЭдоОбщийУчастникиДО",
+        "limit": 5
+      },
+      "notes": "Поиск по точному имени — первый результат обязан быть точным",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 97.35960599937243,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 1
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 1,
+            "values": [
+              "ЭдоОбщийУчастникиДО"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 1
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": 1,
+      "response_preview": {
+        "query": "ЭдоОбщийУчастникиДО",
+        "kind_filter": "",
+        "search_engine": "fulltext",
+        "total": 1,
+        "returned": 1,
+        "offset": 0,
+        "limit": 5,
+        "has_more": false,
+        "items": [
+          {
+            "full_name": "Catalog.ЭдоОбщийУчастникиДО",
+            "kind": "Справочник",
+            "name": "ЭдоОбщийУчастникиДО",
+            "synonym": "ЭДО Общий участники ДО",
+            "score": 11.580921173095703
+          }
+        ],
+        "results": []
+      }
+    },
+    {
+      "id": "mg-101",
+      "tool": "metadata_search",
+      "args": {
+        "query": "ЗаведомоНесуществующийОбъектXYZ",
+        "limit": 10
+      },
+      "notes": "Ловушка. Пустой ответ здесь — правильный. Непустой означает, что нечёткий поиск тянет мусор",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 79.77069899970957,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "total",
+            "expected": 0,
+            "actual": 0,
+            "found": true
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "query": "ЗаведомоНесуществующийОбъектXYZ",
+        "kind_filter": "",
+        "search_engine": "fulltext",
+        "total": 0,
+        "returned": 0,
+        "offset": 0,
+        "limit": 10,
+        "has_more": false,
+        "items": [],
+        "results": []
+      }
+    },
+    {
+      "id": "mg-102",
+      "tool": "metadata_object_attributes",
+      "args": {
+        "object_full_name": "Справочник.ТакогоНетВообще"
+      },
+      "notes": "Ловушка. Инструмент обязан сказать «не найдено», а не выдумать состав",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 46.710142000847554,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "found",
+            "expected": false,
+            "actual": false,
+            "found": true
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "found": false,
+        "error": "Объект 'Справочник.ТакогоНетВообще' не найден",
+        "results": []
+      }
+    },
+    {
+      "id": "mg-103",
+      "tool": "metadata_search",
+      "args": {
+        "query": "заказ",
+        "subsystem": "НесуществующаяПодсистема",
+        "limit": 10
+      },
+      "notes": "SCALE-1: пустота из-за неверного имени подсистемы обязана быть объяснена, а не молчалива",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 103.48396400058846,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "scope_warning",
+            "found": true,
+            "size": 175,
+            "type": "str"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "query": "заказ",
+        "kind_filter": "",
+        "search_engine": "fulltext",
+        "total": 0,
+        "returned": 0,
+        "offset": 0,
+        "limit": 10,
+        "has_more": false,
+        "items": [],
+        "subsystem_scope": "НесуществующаяПодсистема",
+        "scope_note": "Выдача ограничена подсистемой «НесуществующаяПодсистема» и вложенными в неё. Для поиска по всей конфигурации передайте subsystem=\"*\".",
+        "scope_warning": "В подсистеме «НесуществующаяПодсистема» ничего не найдено. Либо там правда нет таких объектов, либо имя подсистемы указано неверно — список доступных даёт metadata_subsystems.",
+        "results": []
+      }
+    },
+    {
+      "id": "mg-201",
+      "tool": "metadata_object_attributes",
+      "args": {
+        "object_full_name": "Catalog.ЭдоОбщийУчастникиДО"
+      },
+      "notes": "Каноническая форма id: русское Справочник.X инструмент не нашёл, хотя запрос его допускает — стоит проверить отдельно",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 1060.4668869991656,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "field_equals",
+          "passed": false,
+          "detail": {
+            "path": "found",
+            "expected": true,
+            "actual": null,
+            "found": false
+          },
+          "match_rank": null
+        },
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 10
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "object": "Catalog.ЭдоОбщийУчастникиДО",
+        "direct_attributes": [
+          {
+            "name": "Адрес",
+            "synonym": "Адрес",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "CatalogRef",
+                "target": "Catalog.ЭдоОбщийАдреса",
+                "resolved": "Catalog.ЭдоОбщийАдреса"
+              }
+            ]
+          },
+          {
+            "name": "ВидУчастника",
+            "synonym": "Вид участника",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "EnumRef",
+                "target": "Enum.ЭдоВидыКонтрагентов",
+                "resolved": "Enum.ЭдоВидыКонтрагентов"
+              }
+            ]
+          },
+          {
+            "name": "ИНН",
+            "synonym": "ИНН",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "String",
+                "target": null,
+                "resolved": null
+              }
+            ]
+          },
+          {
+            "name": "ИдУчастника",
+            "synonym": "ИД Участника",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "String",
+                "target": null,
+                "resolved": null
+              }
+            ]
+          },
+          {
+            "name": "КПП",
+            "synonym": "КПП",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "String",
+                "target": null,
+                "resolved": null
+              }
+            ]
+          },
+          {
+            "name": "НаименованиеПолное",
+            "synonym": "Наименование полное",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "String",
+                "target": null,
+                "resolved": null
+              }
+            ]
+          },
+          {
+            "name": "ОГРН",
+            "synonym": "ОГРН",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "String",
+                "target": null,
+                "resolved": null
+              }
+            ]
+          },
+          {
+            "name": "ОКПО",
+            "synonym": "ОКПО",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "String",
+                "target": null,
+                "resolved": null
+              }
+            ]
+          },
+          {
+            "name": "ОрганизацияЭДО",
+            "synonym": "Организация ЭДО",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "CatalogRef",
+                "target": "Catalog.ОрганизацииЭДО",
+                "resolved": "Catalog.ОрганизацииЭДО"
+              }
+            ]
+          },
+          {
+            "name": "ХешДанных",
+            "synonym": "Хеш данных",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "String",
+                "target": null,
+                "resolved": null
+              }
+            ]
+          }
+        ],
+        "direct_count": 10,
+        "tabular_sections": [
+          {
+            "ts_name": "БанковскиеРеквизиты",
+            "ts_synonym": "Банковские реквизиты",
+            "attributes": [
+              {
+                "synonym": "Вид данных",
+                "types": [
+                  {
+                    "kind": "ChartOfCharacteristicTypesRef",
+                    "target": "ChartOfCharacteristicTypes.ЭдоОбщийВидыБанковскихРеквизитовУчастниковДО",
+                    "resolved": "ChartOfCharacteristicTypes.ЭдоОбщийВидыБанковскихРеквизитовУчастниковДО"
+                  }
+                ],
+                "role": "attribute",
+                "name": "ВидДанных"
+              },
+              {
+                "synonym": "Данные",
+                "types": [
+                  {
+                    "kind": "Unknown",
+                    "target": null,
+                    "resolved": null
+                  }
+                ],
+                "role": "attribute",
+                "name": "Данные"
+              }
+            ]
+          },
+          {
+            "ts_name": "ДляУчастниковДО",
+            "ts_synonym": "Для участников ДО",
+            "attributes": [
+              {
+                "synonym": "ИННУчастника",
+                "types": [
+                  {
+                    "kind": "String",
+                    "target": null,
+                    "resolved": null
+                  }
+                ],
+                "role": "attribute",
+                "name": "ИННУчастника"
+              },
+              {
+                "synonym": "Информация для участника",
+                "types": [
+                  {
+                    "kind": "String",
+                    "target": null,
+                    "resolved": null
+                  }
+                ],
+                "role": "attribute",
+                "name": "ИнформацияДляУчастника"
+              }
+            ]
+          },
+          {
+            "ts_name": "ДополнительныеДанные",
+            "ts_synonym": "Дополнительные данные",
+            "attributes": [
+              {
+                "synonym": "Данные",
+                "types": [
+                  {
+                    "kind": "Unknown",
+                    "target": null,
+                    "resolved": null
+                  }
+                ],
+                "role": "attribute",
+                "name": "Данные"
+              },
+              {
+                "synonym": "Вид данных",
+                "types": [
+                  {
+                    "kind": "ChartOfCharacteristicTypesRef",
+                    "target": "ChartOfCharacteristicTypes.ЭдоОбщийВидыДопДанныхУчастниковДО",
+                    "resolved": "ChartOfCharacteristicTypes.ЭдоОбщийВидыДопДанныхУчастниковДО"
+                  }
+                ],
+                "role": "attribute",
+                "name": "ВидДанных"
+              }
+            ]
+          },
+          {
+            "ts_name": "КонтактныеДанные",
+            "ts_synonym": "Контактные данные",
+            "attributes": [
+              {
+                "synonym": "Данные",
+                "types": [
+                  {
+                    "kind": "String",
+                    "target": null,
+                    "resolved": null
+                  }
+                ],
+                "role": "attribute",
+                "name": "Данные"
+              },
+              {
+                "synonym": "Вид данных",
+                "types": [
+                  {
+                    "kind": "EnumRef",
+                    "target": "Enum.ЭдоОбщийВидыКонтактныхДанных",
+                    "resolved": "Enum.ЭдоОбщийВидыКонтактныхДанных"
+                  }
+                ],
+                "role": "attribute",
+                "name": "ВидДанных"
+              }
+            ]
+          }
+        ],
+        "tabular_section_count": 4,
+        "tabular_attribute_count": 8,
+        "results": []
+      }
+    },
+    {
+      "id": "mg-202",
+      "tool": "metadata_object_attributes",
+      "args": {
+        "object_full_name": "Catalog.ЭдоОбщийУчастникиДО"
+      },
+      "notes": "Состав подтверждён приёмкой 11.08. Устареет при правке справочника",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 84.38538300015352,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 10
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 20,
+            "values": [
+              "НаименованиеПолное"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 10
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 20,
+            "values": [
+              "ИНН"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 10
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 20,
+      "response_preview": {
+        "object": "Catalog.ЭдоОбщийУчастникиДО",
+        "direct_attributes": [
+          {
+            "name": "Адрес",
+            "synonym": "Адрес",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "CatalogRef",
+                "target": "Catalog.ЭдоОбщийАдреса",
+                "resolved": "Catalog.ЭдоОбщийАдреса"
+              }
+            ]
+          },
+          {
+            "name": "ВидУчастника",
+            "synonym": "Вид участника",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "EnumRef",
+                "target": "Enum.ЭдоВидыКонтрагентов",
+                "resolved": "Enum.ЭдоВидыКонтрагентов"
+              }
+            ]
+          },
+          {
+            "name": "ИНН",
+            "synonym": "ИНН",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "String",
+                "target": null,
+                "resolved": null
+              }
+            ]
+          },
+          {
+            "name": "ИдУчастника",
+            "synonym": "ИД Участника",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "String",
+                "target": null,
+                "resolved": null
+              }
+            ]
+          },
+          {
+            "name": "КПП",
+            "synonym": "КПП",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "String",
+                "target": null,
+                "resolved": null
+              }
+            ]
+          },
+          {
+            "name": "НаименованиеПолное",
+            "synonym": "Наименование полное",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "String",
+                "target": null,
+                "resolved": null
+              }
+            ]
+          },
+          {
+            "name": "ОГРН",
+            "synonym": "ОГРН",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "String",
+                "target": null,
+                "resolved": null
+              }
+            ]
+          },
+          {
+            "name": "ОКПО",
+            "synonym": "ОКПО",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "String",
+                "target": null,
+                "resolved": null
+              }
+            ]
+          },
+          {
+            "name": "ОрганизацияЭДО",
+            "synonym": "Организация ЭДО",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "CatalogRef",
+                "target": "Catalog.ОрганизацииЭДО",
+                "resolved": "Catalog.ОрганизацииЭДО"
+              }
+            ]
+          },
+          {
+            "name": "ХешДанных",
+            "synonym": "Хеш данных",
+            "role": "attribute",
+            "is_master": false,
+            "indexing": "DontIndex",
+            "types": [
+              {
+                "kind": "String",
+                "target": null,
+                "resolved": null
+              }
+            ]
+          }
+        ],
+        "direct_count": 10,
+        "tabular_sections": [
+          {
+            "ts_name": "БанковскиеРеквизиты",
+            "ts_synonym": "Банковские реквизиты",
+            "attributes": [
+              {
+                "synonym": "Вид данных",
+                "types": [
+                  {
+                    "kind": "ChartOfCharacteristicTypesRef",
+                    "target": "ChartOfCharacteristicTypes.ЭдоОбщийВидыБанковскихРеквизитовУчастниковДО",
+                    "resolved": "ChartOfCharacteristicTypes.ЭдоОбщийВидыБанковскихРеквизитовУчастниковДО"
+                  }
+                ],
+                "role": "attribute",
+                "name": "ВидДанных"
+              },
+              {
+                "synonym": "Данные",
+                "types": [
+                  {
+                    "kind": "Unknown",
+                    "target": null,
+                    "resolved": null
+                  }
+                ],
+                "role": "attribute",
+                "name": "Данные"
+              }
+            ]
+          },
+          {
+            "ts_name": "ДляУчастниковДО",
+            "ts_synonym": "Для участников ДО",
+            "attributes": [
+              {
+                "synonym": "ИННУчастника",
+                "types": [
+                  {
+                    "kind": "String",
+                    "target": null,
+                    "resolved": null
+                  }
+                ],
+                "role": "attribute",
+                "name": "ИННУчастника"
+              },
+              {
+                "synonym": "Информация для участника",
+                "types": [
+                  {
+                    "kind": "String",
+                    "target": null,
+                    "resolved": null
+                  }
+                ],
+                "role": "attribute",
+                "name": "ИнформацияДляУчастника"
+              }
+            ]
+          },
+          {
+            "ts_name": "ДополнительныеДанные",
+            "ts_synonym": "Дополнительные данные",
+            "attributes": [
+              {
+                "synonym": "Данные",
+                "types": [
+                  {
+                    "kind": "Unknown",
+                    "target": null,
+                    "resolved": null
+                  }
+                ],
+                "role": "attribute",
+                "name": "Данные"
+              },
+              {
+                "synonym": "Вид данных",
+                "types": [
+                  {
+                    "kind": "ChartOfCharacteristicTypesRef",
+                    "target": "ChartOfCharacteristicTypes.ЭдоОбщийВидыДопДанныхУчастниковДО",
+                    "resolved": "ChartOfCharacteristicTypes.ЭдоОбщийВидыДопДанныхУчастниковДО"
+                  }
+                ],
+                "role": "attribute",
+                "name": "ВидДанных"
+              }
+            ]
+          },
+          {
+            "ts_name": "КонтактныеДанные",
+            "ts_synonym": "Контактные данные",
+            "attributes": [
+              {
+                "synonym": "Данные",
+                "types": [
+                  {
+                    "kind": "String",
+                    "target": null,
+                    "resolved": null
+                  }
+                ],
+                "role": "attribute",
+                "name": "Данные"
+              },
+              {
+                "synonym": "Вид данных",
+                "types": [
+                  {
+                    "kind": "EnumRef",
+                    "target": "Enum.ЭдоОбщийВидыКонтактныхДанных",
+                    "resolved": "Enum.ЭдоОбщийВидыКонтактныхДанных"
+                  }
+                ],
+                "role": "attribute",
+                "name": "ВидДанных"
+              }
+            ]
+          }
+        ],
+        "tabular_section_count": 4,
+        "tabular_attribute_count": 8,
+        "results": []
+      }
+    },
+    {
+      "id": "mg-203",
+      "tool": "metadata_stats",
+      "args": {},
+      "notes": "FIX-17: виды приходили как null. metadata_list_kinds убран профилем core — та же информация в секции by_kind",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 3141.1888220000037,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "metadata.by_kind",
+            "found": true,
+            "size": 39,
+            "type": "list"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "metadata": {
+          "objects": 16590,
+          "attributes": 42763,
+          "tabular_sections": 1872,
+          "forms": 8202,
+          "enum_values": 5996,
+          "types": 2018,
+          "by_kind": [
+            {
+              "kind": "РегистрСведений",
+              "count": 2247
+            },
+            {
+              "kind": "Роль",
+              "count": 1897
+            },
+            {
+              "kind": "Обработка",
+              "count": 1091
+            },
+            {
+              "kind": "РегламентноеЗадание",
+              "count": 974
+            },
+            {
+              "kind": "Перечисление",
+              "count": 778
+            },
+            {
+              "kind": "Справочник",
+              "count": 667
+            },
+            {
+              "kind": "ОбщийМодуль",
+              "count": 642
+            },
+            {
+              "kind": "Отчет",
+              "count": 554
+            },
+            {
+              "kind": "Документ",
+              "count": 475
+            },
+            {
+              "kind": "ОбщаяКартинка",
+              "count": 346
+            },
+            {
+              "kind": "Константа",
+              "count": 142
+            },
+            {
+              "kind": "РегистрНакопления",
+              "count": 140
+            },
+            {
+              "kind": "ПодпискаНаСобытие",
+              "count": 107
+            },
+            {
+              "kind": "ПланВидовХарактеристик",
+              "count": 96
+            },
+            {
+              "kind": "Подсистема",
+              "count": 93
+            },
+            {
+              "kind": "ОбщаяФорма",
+              "count": 82
+            },
+            {
+              "kind": "ПланОбмена",
+              "count": 82
+            },
+            {
+              "kind": "HTTPСервис",
+              "count": 64
+            },
+            {
+              "kind": "ОпределяемыйТип",
+              "count": 39
+            },
+            {
+              "kind": "ПакетXDTO",
+              "count": 38
+            },
+            {
+              "kind": "ОбщаяКоманда",
+              "count": 36
+            },
+            {
+              "kind": "ПараметрСеанса",
+              "count": 33
+            },
+            {
+              "kind": "ОбщийМакет",
+              "count": 25
+            },
+            {
+              "kind": "ВнешнийИсточникДанных",
+              "count": 21
+            },
+            {
+              "kind": "WSСсылка",
+              "count": 18
+            },
+            {
+              "kind": "ЭлементСтиля",
+              "count": 9
+            },
+            {
+              "kind": "Стиль",
+              "count": 9
+            },
+            {
+              "kind": "НумераторДокументов",
+              "count": 8
+            },
+            {
+              "kind": "WebСервис",
+              "count": 7
+            },
+            {
+              "kind": "РегистрБухгалтерии",
+              "count": 7
+            },
+            {
+              "kind": "КритерийОтбора",
+              "count": 5
+            },
+            {
+              "kind": "ГруппаКоманд",
+              "count": 4
+            },
+            {
+              "kind": "БизнесПроцесс",
+              "count": 2
+            },
+            {
+              "kind": "Задача",
+              "count": 2
+            },
+            {
+              "kind": "ПланСчетов",
+              "count": 2
+            },
+            {
+              "kind": "Язык",
+              "count": 2
+            },
+            {
+              "kind": "ХранилищеНастроек",
+              "count": 1
+            },
+            {
+              "kind": "ФункциональнаяОпция",
+              "count": 1
+            },
+            {
+              "kind": "Последовательность",
+              "count": 1
+            }
+          ]
+        },
+        "code": {
+          "modules": 14041,
+          "callables": 231113,
+          "callsites": 722233,
+          "callsites_resolved": 428645,
+          "callsites_unresolved": 43990,
+          "callsites_object_method": 249598,
+          "resolve_coverage_pct": 90.69
+        },
+        "relations": {
+          "CALL_SITE": 722233,
+          "RESOLVES_TO_CALLEE": 428645,
+          "CALLS": 351441,
+          "HAS_PARAM": 348746,
+          "HAS_METHOD": 231085,
+          "OPERATES_ON": 67890,
+          "OF_TYPE": 47651,
+          "HAS_ATTRIBUTE": 42763,
+          "INFERRED_TYPE": 24384,
+          "HAS_FORM": 8202,
+          "HAS_VALUE": 5996,
+          "CONTAINS": 3489,
+          "HAS_TABULAR_SECTION": 1872,
+          "RESOLVES_TO": 1729,
+          "BASED_ON": 847,
+          "OWNED_BY": 82
+        },
+        "graph_empty": false,
+        "results": []
+      }
+    },
+    {
+      "id": "mg-301",
+      "tool": "metadata_subsystem_tree",
+      "args": {
+        "max_depth": 2
+      },
+      "notes": "FIX-16: рёбра подсистем не находились. metadata_subsystems убран профилем core — дерево даёт то же",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 80.325019999691,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 93
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "results_count_at_least",
+          "passed": true,
+          "detail": {
+            "min": 10,
+            "actual": 93
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "root": "(все корневые)",
+        "count": 93,
+        "items": [
+          {
+            "name": "CRMКорпоративногоОтдела",
+            "full_name": "Subsystem.CRMКорпоративногоОтдела",
+            "depth": 0,
+            "root": "Subsystem.CRMКорпоративногоОтдела"
+          },
+          {
+            "name": "CoreDNS",
+            "full_name": "Subsystem.CoreDNS",
+            "depth": 0,
+            "root": "Subsystem.CoreDNS"
+          },
+          {
+            "name": "DIBD",
+            "full_name": "Subsystem.DIBD",
+            "depth": 0,
+            "root": "Subsystem.DIBD"
+          },
+          {
+            "name": "Администрирование_Интерфейс",
+            "full_name": "Subsystem.Администрирование_Интерфейс",
+            "depth": 0,
+            "root": "Subsystem.Администрирование_Интерфейс"
+          },
+          {
+            "name": "АдминистрированиеКластера",
+            "full_name": "Subsystem.АдминистрированиеКластера",
+            "depth": 0,
+            "root": "Subsystem.АдминистрированиеКластера"
+          },
+          {
+            "name": "Аудит_Интерфейс",
+            "full_name": "Subsystem.Аудит_Интерфейс",
+            "depth": 0,
+            "root": "Subsystem.Аудит_Интерфейс"
+          },
+          {
+            "name": "БанкКасса",
+            "full_name": "Subsystem.БанкКасса",
+            "depth": 0,
+            "root": "Subsystem.БанкКасса"
+          },
+          {
+            "name": "Бухгалтерия",
+            "full_name": "Subsystem.Бухгалтерия",
+            "depth": 0,
+            "root": "Subsystem.Бухгалтерия"
+          },
+          {
+            "name": "Бухгалтерия_Интерфейс",
+            "full_name": "Subsystem.Бухгалтерия_Интерфейс",
+            "depth": 0,
+            "root": "Subsystem.Бухгалтерия_Интерфейс"
+          },
+          {
+            "name": "ВЭД",
+            "full_name": "Subsystem.ВЭД",
+            "depth": 0,
+            "root": "Subsystem.ВЭД"
+          },
+          {
+            "name": "ВзаимодействиеСAD",
+            "full_name": "Subsystem.ВзаимодействиеСAD",
+            "depth": 0,
+            "root": "Subsystem.ВзаимодействиеСAD"
+          },
+          {
+            "name": "ВнешниеКомпоненты",
+            "full_name": "Subsystem.ВнешниеКомпоненты",
+            "depth": 0,
+            "root": "Subsystem.ВнешниеКомпоненты"
+          },
+          {
+            "name": "ВнешниеПриложения",
+            "full_name": "Subsystem.ВнешниеПриложения",
+            "depth": 0,
+            "root": "Subsystem.ВнешниеПриложения"
+          },
+          {
+            "name": "ВнешниеФайловыеДанные",
+            "full_name": "Subsystem.ВнешниеФайловыеДанные",
+            "depth": 0,
+            "root": "Subsystem.ВнешниеФайловыеДанные"
+          },
+          {
+            "name": "Гарантия",
+            "full_name": "Subsystem.Гарантия",
+            "depth": 0,
+            "root": "Subsystem.Гарантия"
+          },
+          {
+            "name": "ГеораспределенныеИБД",
+            "full_name": "Subsystem.ГеораспределенныеИБД",
+            "depth": 0,
+            "root": "Subsystem.ГеораспределенныеИБД"
+          },
+          {
+            "name": "ГруппыВнешнихИсточниковДанных",
+            "full_name": "Subsystem.ГруппыВнешнихИсточниковДанных",
+            "depth": 0,
+            "root": "Subsystem.ГруппыВнешнихИсточниковДанных"
+          },
+          {
+            "name": "ДНС_Администрирование",
+            "full_name": "Subsystem.ДНС_Администрирование",
+            "depth": 0,
+            "root": "Subsystem.ДНС_Администрирование"
+          },
+          {
+            "name": "ДепартаментФорматов",
+            "full_name": "Subsystem.ДепартаментФорматов",
+            "depth": 0,
+            "root": "Subsystem.ДепартаментФорматов"
+          },
+          {
+            "name": "ДепартаментФорматов_Интерфейс",
+            "full_name": "Subsystem.ДепартаментФорматов_Интерфейс",
+            "depth": 0,
+            "root": "Subsystem.ДепартаментФорматов_Интерфейс"
+          },
+          {
+            "name": "ДлительныеОперации",
+            "full_name": "Subsystem.ДлительныеОперации",
+            "depth": 0,
+            "root": "Subsystem.ДлительныеОперации"
+          },
+          {
+            "name": "ДокументарнаяПрослеживаемость",
+            "full_name": "Subsystem.ДокументарнаяПрослеживаемость",
+            "depth": 0,
+            "root": "Subsystem.ДокументарнаяПрослеживаемость"
+          },
+          {
+            "name": "ДокументыКомерция",
+            "full_name": "Subsystem.ДокументыКомерция",
+            "depth": 0,
+            "root": "Subsystem.ДокументыКомерция"
+          },
+          {
+            "name": "Доставка3_0",
+            "full_name": "Subsystem.Доставка3_0",
+            "depth": 0,
+            "root": "Subsystem.Доставка3_0"
+          },
+          {
+            "name": "Доставка_Интерфейс",
+            "full_name": "Subsystem.Доставка_Интерфейс",
+            "depth": 0,
+            "root": "Subsystem.Доставка_Интерфейс"
+          },
+          {
+            "name": "ЗакупкаТовара",
+            "full_name": "Subsystem.ЗакупкаТовара",
+            "depth": 0,
+            "root": "Subsystem.ЗакупкаТовара"
+          },
+          {
+            "name": "ИнтерфейсВЭД",
+            "full_name": "Subsystem.ИнтерфейсВЭД",
+            "depth": 0,
+            "root": "Subsystem.ИнтерфейсВЭД"
+          },
+          {
+            "name": "ИсторияДанных",
+            "full_name": "Subsystem.ИсторияДанных",
+            "depth": 0,
+            "root": "Subsystem.ИсторияДанных"
+          },
+          {
+            "name": "Казахстан",
+            "full_name": "Subsystem.Казахстан",
+            "depth": 0,
+            "root": "Subsystem.Казахстан"
+          },
+          {
+            "name": "Коммерция_Интерфейс",
+            "full_name": "Subsystem.Коммерция_Интерфейс",
+            "depth": 0,
+            "root": "Subsystem.Коммерция_Интерфейс"
+          },
+          {
+            "name": "КонвертацияДанных",
+            "full_name": "Subsystem.КонвертацияДанных",
+            "depth": 0,
+            "root": "Subsystem.КонвертацияДанных"
+          },
+          {
+            "name": "КредитныйБрокер",
+            "full_name": "Subsystem.КредитныйБрокер",
+            "depth": 0,
+            "root": "Subsystem.КредитныйБрокер"
+          },
+          {
+            "name": "Логистика",
+            "full_name": "Subsystem.Логистика",
+            "depth": 0,
+            "root": "Subsystem.Логистика"
+          },
+          {
+            "name": "Логистика_Интерфейс",
+            "full_name": "Subsystem.Логистика_Интерфейс",
+            "depth": 0,
+            "root": "Subsystem.Логистика_Интерфейс"
+          },
+          {
+            "name": "Магазин_Интерфейс",
+            "full_name": "Subsystem.Магазин_Интерфейс",
+            "depth": 0,
+            "root": "Subsystem.Магазин_Интерфейс"
+          },
+          {
+            "name": "МаркетингИРеклама_Интерфейс",
+            "full_name": "Subsystem.МаркетингИРеклама_Интерфейс",
+            "depth": 0,
+            "root": "Subsystem.МаркетингИРеклама_Интерфейс"
+          },
+          {
+            "name": "МаркировкаВЭД",
+            "full_name": "Subsystem.МаркировкаВЭД",
+            "depth": 0,
+            "root": "Subsystem.МаркировкаВЭД"
+          },
+          {
+            "name": "МеждународнаяСеть",
+            "full_name": "Subsystem.МеждународнаяСеть",
+            "depth": 0,
+            "root": "Subsystem.МеждународнаяСеть"
+          },
+          {
+            "name": "МетрикиGraphite",
+            "full_name": "Subsystem.МетрикиGraphite",
+            "depth": 0,
+            "root": "Subsystem.МетрикиGraphite"
+          },
+          {
+            "name": "Направление_Коммерция",
+            "full_name": "Subsystem.Направление_Коммерция",
+            "depth": 0,
+            "root": "Subsystem.Направление_Коммерция"
+          },
+          {
+            "name": "Направление_ОнлайнПродажи",
+            "full_name": "Subsystem.Направление_ОнлайнПродажи",
+            "depth": 0,
+            "root": "Subsystem.Направление_ОнлайнПродажи"
+          },
+          {
+            "name": "Направление_Персонал",
+            "full_name": "Subsystem.Направление_Персонал",
+            "depth": 0,
+            "root": "Subsystem.Направление_Персонал"
+          },
+          {
+            "name": "Направление_ФинансоваяСлужбаРозничныеПроцессы",
+            "full_name": "Subsystem.Направление_ФинансоваяСлужбаРозничныеПроцессы",
+            "depth": 0,
+            "root": "Subsystem.Направление_ФинансоваяСлужбаРозничныеПроцессы"
+          },
+          {
+            "name": "НастройкиБезопасностьСотрудники",
+            "full_name": "Subsystem.НастройкиБезопасностьСотрудники",
+            "depth": 0,
+            "root": "Subsystem.НастройкиБезопасностьСотрудники"
+          },
+          {
+            "name": "НастройкиКомпьютерныхСетей",
+            "full_name": "Subsystem.НастройкиКомпьютерныхСетей",
+            "depth": 0,
+            "root": "Subsystem.НастройкиКомпьютерныхСетей"
+          },
+          {
+            "name": "ОбменДанными",
+            "full_name": "Subsystem.ОбменДанными",
+            "depth": 0,
+            "root": "Subsystem.ОбменДанными"
+          },
+          {
+            "name": "ОбменДаннымиВыгрузкаПорциямиМетаданных",
+            "full_name": "Subsystem.ОбменДаннымиВыгрузкаПорциямиМетаданных",
+            "depth": 0,
+            "root": "Subsystem.ОбменДаннымиВыгрузкаПорциямиМетаданных"
+          },
+          {
+            "name": "ОбменДаннымиФФС",
+            "full_name": "Subsystem.ОбменДаннымиФФС",
+            "depth": 0,
+            "root": "Subsystem.ОбменДаннымиФФС"
+          },
+          {
+            "name": "ОповещенияОСобытиях",
+            "full_name": "Subsystem.ОповещенияОСобытиях",
+            "depth": 0,
+            "root": "Subsystem.ОповещенияОСобытиях"
+          },
+          {
+            "name": "ОпросИспользованияФорм",
+            "full_name": "Subsystem.ОпросИспользованияФорм",
+            "depth": 0,
+            "root": "Subsystem.ОпросИспользованияФорм"
+          },
+          {
+            "name": "Отчеты",
+            "full_name": "Subsystem.Отчеты",
+            "depth": 0,
+            "root": "Subsystem.Отчеты"
+          },
+          {
+            "name": "ОценкаПоставщиковФФС",
+            "full_name": "Subsystem.ОценкаПоставщиковФФС",
+            "depth": 0,
+            "root": "Subsystem.ОценкаПоставщиковФФС"
+          },
+          {
+            "name": "ОчисткаРегиона",
+            "full_name": "Subsystem.ОчисткаРегиона",
+            "depth": 0,
+            "root": "Subsystem.ОчисткаРегиона"
+          },
+          {
+            "name": "Персонал_Интерфейс",
+            "full_name": "Subsystem.Персонал_Интерфейс",
+            "depth": 0,
+            "root": "Subsystem.Персонал_Интерфейс"
+          },
+          {
+            "name": "ПланировщикЗаданий",
+            "full_name": "Subsystem.ПланировщикЗаданий",
+            "depth": 0,
+            "root": "Subsystem.ПланировщикЗаданий"
+          },
+          {
+            "name": "ПодключаемоеОборудование",
+            "full_name": "Subsystem.ПодключаемоеОборудование",
+            "depth": 0,
+            "root": "Subsystem.ПодключаемоеОборудование"
+          },
+          {
+            "name": "ПорталКотировок",
+            "full_name": "Subsystem.ПорталКотировок",
+            "depth": 0,
+            "root": "Subsystem.ПорталКотировок"
+          },
+          {
+            "name": "Предприятие",
+            "full_name": "Subsystem.Предприятие",
+            "depth": 0,
+            "root": "Subsystem.Предприятие"
+          },
+          {
+            "name": "ПредставленияЗапросов",
+            "full_name": "Subsystem.ПредставленияЗапросов",
+            "depth": 0,
+            "root": "Subsystem.ПредставленияЗапросов"
+          },
+          {
+            "name": "ПрограммныйИнтерфейс",
+            "full_name": "Subsystem.ПрограммныйИнтерфейс",
+            "depth": 0,
+            "root": "Subsystem.ПрограммныйИнтерфейс"
+          },
+          {
+            "name": "Продажа",
+            "full_name": "Subsystem.Продажа",
+            "depth": 0,
+            "root": "Subsystem.Продажа"
+          },
+          {
+            "name": "Производство_Интерфейс",
+            "full_name": "Subsystem.Производство_Интерфейс",
+            "depth": 0,
+            "root": "Subsystem.Производство_Интерфейс"
+          },
+          {
+            "name": "РаботаССеллерами",
+            "full_name": "Subsystem.РаботаССеллерами",
+            "depth": 0,
+            "root": "Subsystem.РаботаССеллерами"
+          },
+          {
+            "name": "РаботаЮрлицВЭД",
+            "full_name": "Subsystem.РаботаЮрлицВЭД",
+            "depth": 0,
+            "root": "Subsystem.РаботаЮрлицВЭД"
+          },
+          {
+            "name": "РазработкаЯдраУФ",
+            "full_name": "Subsystem.РазработкаЯдраУФ",
+            "depth": 0,
+            "root": "Subsystem.РазработкаЯдраУФ"
+          },
+          {
+            "name": "Рассылки",
+            "full_name": "Subsystem.Рассылки",
+            "depth": 0,
+            "root": "Subsystem.Рассылки"
+          },
+          {
+            "name": "РасчетыСПоставщиками",
+            "full_name": "Subsystem.РасчетыСПоставщиками",
+            "depth": 0,
+            "root": "Subsystem.РасчетыСПоставщиками"
+          },
+          {
+            "name": "РозничныеПроцессы",
+            "full_name": "Subsystem.РозничныеПроцессы",
+            "depth": 0,
+            "root": "Subsystem.РозничныеПроцессы"
+          },
+          {
+            "name": "СМС",
+            "full_name": "Subsystem.СМС",
+            "depth": 0,
+            "root": "Subsystem.СМС"
+          },
+          {
+            "name": "СервисПЭП",
+            "full_name": "Subsystem.СервисПЭП",
+            "depth": 0,
+            "root": "Subsystem.СервисПЭП"
+          },
+          {
+            "name": "СервиснаяШинаПредприятия",
+            "full_name": "Subsystem.СервиснаяШинаПредприятия",
+            "depth": 0,
+            "root": "Subsystem.СервиснаяШинаПредприятия"
+          },
+          {
+            "name": "СервисныйЦентр_Интерфейс",
+            "full_name": "Subsystem.СервисныйЦентр_Интерфейс",
+            "depth": 0,
+            "root": "Subsystem.СервисныйЦентр_Интерфейс"
+          },
+          {
+            "name": "СистемаОцифровкиДокументов",
+            "full_name": "Subsystem.СистемаОцифровкиДокументов",
+            "depth": 0,
+            "root": "Subsystem.СистемаОцифровкиДокументов"
+          },
+          {
+            "name": "СистемаПоручений",
+            "full_name": "Subsystem.СистемаПоручений",
+            "depth": 0,
+            "root": "Subsystem.СистемаПоручений"
+          },
+          {
+            "name": "Склад",
+            "full_name": "Subsystem.Склад",
+            "depth": 0,
+            "root": "Subsystem.Склад"
+          },
+          {
+            "name": "СлужбаПоРаботеСФинОрганизациями",
+            "full_name": "Subsystem.СлужбаПоРаботеСФинОрганизациями",
+            "depth": 0,
+            "root": "Subsystem.СлужбаПоРаботеСФинОрганизациями"
+          },
+          {
+            "name": "СлужбаПоддержки",
+            "full_name": "Subsystem.СлужбаПоддержки",
+            "depth": 0,
+            "root": "Subsystem.СлужбаПоддержки"
+          },
+          {
+            "name": "СотовыеОператоры",
+            "full_name": "Subsystem.СотовыеОператоры",
+            "depth": 0,
+            "root": "Subsystem.СотовыеОператоры"
+          },
+          {
+            "name": "Удалить_МеждународнаяРеализация",
+            "full_name": "Subsystem.Удалить_МеждународнаяРеализация",
+            "depth": 0,
+            "root": "Subsystem.Удалить_МеждународнаяРеализация"
+          },
+          {
+            "name": "УдалитьКазахстан",
+            "full_name": "Subsystem.УдалитьКазахстан",
+            "depth": 0,
+            "root": "Subsystem.УдалитьКазахстан"
+          },
+          {
+            "name": "УниверсальнаяОчередьДанных",
+            "full_name": "Subsystem.УниверсальнаяОчередьДанных",
+            "depth": 0,
+            "root": "Subsystem.УниверсальнаяОчередьДанных"
+          },
+          {
+            "name": "УправлениеНормативноСправочнойИнформацией",
+            "full_name": "Subsystem.УправлениеНормативноСправочнойИнформацией",
+            "depth": 0,
+            "root": "Subsystem.УправлениеНормативноСправочнойИнформацией"
+          },
+          {
+            "name": "УправлениеПечатью",
+            "full_name": "Subsystem.УправлениеПечатью",
+            "depth": 0,
+            "root": "Subsystem.УправлениеПечатью"
+          },
+          {
+            "name": "УправлениеРисками",
+            "full_name": "Subsystem.УправлениеРисками",
+            "depth": 0,
+            "root": "Subsystem.УправлениеРисками"
+          },
+          {
+            "name": "УправлениеСистемойВзаимодействия",
+            "full_name": "Subsystem.УправлениеСистемойВзаимодействия",
+            "depth": 0,
+            "root": "Subsystem.УправлениеСистемойВзаимодействия"
+          },
+          {
+            "name": "УчетныеЗаписиПользователей",
+            "full_name": "Subsystem.УчетныеЗаписиПользователей",
+            "depth": 0,
+            "root": "Subsystem.УчетныеЗаписиПользователей"
+          },
+          {
+            "name": "ФФС_ВЭД",
+            "full_name": "Subsystem.ФФС_ВЭД",
+            "depth": 0,
+            "root": "Subsystem.ФФС_ВЭД"
+          },
+          {
+            "name": "ФинансовыйУчет",
+            "full_name": "Subsystem.ФинансовыйУчет",
+            "depth": 0,
+            "root": "Subsystem.ФинансовыйУчет"
+          },
+          {
+            "name": "ФинансовыйУчет_Интерфейс",
+            "full_name": "Subsystem.ФинансовыйУчет_Интерфейс",
+            "depth": 0,
+            "root": "Subsystem.ФинансовыйУчет_Интерфейс"
+          },
+          {
+            "name": "Функциональность",
+            "full_name": "Subsystem.Функциональность",
+            "depth": 0,
+            "root": "Subsystem.Функциональность"
+          },
+          {
+            "name": "ЭДО",
+            "full_name": "Subsystem.ЭДО",
+            "depth": 0,
+            "root": "Subsystem.ЭДО"
+          },
+          {
+            "name": "ЭДО_Интерфейс",
+            "full_name": "Subsystem.ЭДО_Интерфейс",
+            "depth": 0,
+            "root": "Subsystem.ЭДО_Интерфейс"
+          },
+          {
+            "name": "ЭСД_Эксплуатация_Tools",
+            "full_name": "Subsystem.ЭСД_Эксплуатация_Tools",
+            "depth": 0,
+            "root": "Subsystem.ЭСД_Эксплуатация_Tools"
+          }
+        ],
+        "results": []
+      }
+    },
+    {
+      "id": "mg-401",
+      "tool": "code_callers",
+      "args": {
+        "full_name": "Catalog.ЭдоДанныеМЧД.ManagerModule.НормальноеНаименованиеИП"
+      },
+      "notes": "Приёмка 12.08 дала 7 вызывающих. min=5 с запасом на правки кода",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 795.4433760005486,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 7
+          },
+          "match_rank": null
+        },
+        {
+          "type": "results_count_at_least",
+          "passed": true,
+          "detail": {
+            "min": 5,
+            "actual": 7
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "results_count_at_least",
+          "passed": true,
+          "detail": {
+            "min": 7,
+            "actual": 7
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "found": true,
+        "target": "Catalog.ЭдоДанныеМЧД.ManagerModule.НормальноеНаименованиеИП",
+        "depth": 1,
+        "callers": [
+          {
+            "id": "Catalog.ЭдоДанныеМЧД.ManagerModule.ПредставлениеОрганизацииДоверителяСУчетомПД",
+            "full_name": "Catalog.ЭдоДанныеМЧД.ManagerModule.ПредставлениеОрганизацииДоверителяСУчетомПД",
+            "module_id": "Catalog.ЭдоДанныеМЧД.ManagerModule",
+            "kind": "Function",
+            "is_export": false,
+            "min_distance": 1
+          },
+          {
+            "id": "CommonModule.ЭдоДиадокОперацииВызовСервера.СформироватьНаименованиеИндивидуальныйПредприниматель",
+            "full_name": "CommonModule.ЭдоДиадокОперацииВызовСервера.СформироватьНаименованиеИндивидуальныйПредприниматель",
+            "module_id": "CommonModule.ЭдоДиадокОперацииВызовСервера",
+            "kind": "Function",
+            "is_export": false,
+            "min_distance": 1
+          },
+          {
+            "id": "DataProcessor.ДиадокЭДО.ObjectModule.глЭдо_ФоновыеЗадания_ОбновитьСправочникКонтрагентовОрганизаций_ПолучитьНаименованиеИП",
+            "full_name": "DataProcessor.ДиадокЭДО.ObjectModule.глЭдо_ФоновыеЗадания_ОбновитьСправочникКонтрагентовОрганизаций_ПолучитьНаименованиеИП",
+            "module_id": "DataProcessor.ДиадокЭДО.ObjectModule",
+            "kind": "Function",
+            "is_export": false,
+            "min_distance": 1
+          },
+          {
+            "id": "DataProcessor.ДиадокЭДО.ObjectModule.глЭдо_ФоновыеЗадания_ОбновитьЭлементСправочникаКонтрагентов_ПолучитьНаименование",
+            "full_name": "DataProcessor.ДиадокЭДО.ObjectModule.глЭдо_ФоновыеЗадания_ОбновитьЭлементСправочникаКонтрагентов_ПолучитьНаименование",
+            "module_id": "DataProcessor.ДиадокЭДО.ObjectModule",
+            "kind": "Function",
+            "is_export": false,
+            "min_distance": 1
+          },
+          {
+            "id": "DataProcessor.ЭдоОбработкаДанныхМЧД.ManagerModule.ВыполнитьЗаполнениеДанныхМчдВерсии1_0_ФСС",
+            "full_name": "DataProcessor.ЭдоОбработкаДанныхМЧД.ManagerModule.ВыполнитьЗаполнениеДанныхМчдВерсии1_0_ФСС",
+            "module_id": "DataProcessor.ЭдоОбработкаДанныхМЧД.ManagerModule",
+            "kind": "Procedure",
+            "is_export": false,
+            "min_distance": 1
+          },
+          {
+            "id": "DataProcessor.ЭдоОбработкаДанныхМЧД.ManagerModule.ЗаполнитьСведенияОДоверителеИП",
+            "full_name": "DataProcessor.ЭдоОбработкаДанныхМЧД.ManagerModule.ЗаполнитьСведенияОДоверителеИП",
+            "module_id": "DataProcessor.ЭдоОбработкаДанныхМЧД.ManagerModule",
+            "kind": "Procedure",
+            "is_export": false,
+            "min_distance": 1
+          },
+          {
+            "id": "Document.УниверсальныйЭлектронныйДокументПоставщика.ObjectModule.НормализоватьНаименованиеИП",
+            "full_name": "Document.УниверсальныйЭлектронныйДокументПоставщика.ObjectModule.НормализоватьНаименованиеИП",
+            "module_id": "Document.УниверсальныйЭлектронныйДокументПоставщика.ObjectModule",
+            "kind": "Function",
+            "is_export": false,
+            "min_distance": 1
+          }
+        ],
+        "total": 7,
+        "results": []
+      }
+    },
+    {
+      "id": "mg-402",
+      "tool": "code_callees",
+      "args": {
+        "full_name": "Catalog.ЭдоДанныеМЧД.ManagerModule.НормальноеНаименованиеИП"
+      },
+      "notes": "Приёмка дала 2 вызываемых: ШаблонНормализацииИпВНачалеСтроки, ШаблонУдаленияИпВКонцеСтроки",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 851.9359700003406,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": true,
+          "detail": {
+            "hits_count": 2
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "results_count_at_least",
+          "passed": true,
+          "detail": {
+            "min": 2,
+            "actual": 2
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "found": true,
+        "source": "Catalog.ЭдоДанныеМЧД.ManagerModule.НормальноеНаименованиеИП",
+        "depth": 1,
+        "callees": [
+          {
+            "id": "Catalog.ЭдоДанныеМЧД.ManagerModule.ШаблонНормализацииИпВНачалеСтроки",
+            "full_name": "Catalog.ЭдоДанныеМЧД.ManagerModule.ШаблонНормализацииИпВНачалеСтроки",
+            "module_id": "Catalog.ЭдоДанныеМЧД.ManagerModule",
+            "kind": "Function",
+            "is_export": true,
+            "min_distance": 1
+          },
+          {
+            "id": "Catalog.ЭдоДанныеМЧД.ManagerModule.ШаблонУдаленияИпВКонцеСтроки",
+            "full_name": "Catalog.ЭдоДанныеМЧД.ManagerModule.ШаблонУдаленияИпВКонцеСтроки",
+            "module_id": "Catalog.ЭдоДанныеМЧД.ManagerModule",
+            "kind": "Function",
+            "is_export": true,
+            "min_distance": 1
+          }
+        ],
+        "total": 2,
+        "results": []
+      }
+    },
+    {
+      "id": "mg-403",
+      "tool": "code_callers",
+      "args": {
+        "full_name": "CommonModule.НетТакогоМодуля.НетТакойПроцедуры"
+      },
+      "notes": "Ловушка. Несуществующая процедура — не повод выдумывать вызывающих",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 70.54389899985836,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "found",
+            "expected": false,
+            "actual": false,
+            "found": true
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "found": false,
+        "error": "Callable 'CommonModule.НетТакогоМодуля.НетТакойПроцедуры' не найден",
+        "results": []
+      }
+    },
+    {
+      "id": "mg-404",
+      "tool": "metadata_stats",
+      "args": {},
+      "notes": "path_non_empty требует список/строку/словарь — на числе (metadata.objects) размер не определён и предикат падает. Проверяем секции целиком",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 30.91333799966378,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "metadata",
+            "found": true,
+            "size": 7,
+            "type": "dict"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "code",
+            "found": true,
+            "size": 7,
+            "type": "dict"
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "metadata": {
+          "objects": 16590,
+          "attributes": 42763,
+          "tabular_sections": 1872,
+          "forms": 8202,
+          "enum_values": 5996,
+          "types": 2018,
+          "by_kind": [
+            {
+              "kind": "РегистрСведений",
+              "count": 2247
+            },
+            {
+              "kind": "Роль",
+              "count": 1897
+            },
+            {
+              "kind": "Обработка",
+              "count": 1091
+            },
+            {
+              "kind": "РегламентноеЗадание",
+              "count": 974
+            },
+            {
+              "kind": "Перечисление",
+              "count": 778
+            },
+            {
+              "kind": "Справочник",
+              "count": 667
+            },
+            {
+              "kind": "ОбщийМодуль",
+              "count": 642
+            },
+            {
+              "kind": "Отчет",
+              "count": 554
+            },
+            {
+              "kind": "Документ",
+              "count": 475
+            },
+            {
+              "kind": "ОбщаяКартинка",
+              "count": 346
+            },
+            {
+              "kind": "Константа",
+              "count": 142
+            },
+            {
+              "kind": "РегистрНакопления",
+              "count": 140
+            },
+            {
+              "kind": "ПодпискаНаСобытие",
+              "count": 107
+            },
+            {
+              "kind": "ПланВидовХарактеристик",
+              "count": 96
+            },
+            {
+              "kind": "Подсистема",
+              "count": 93
+            },
+            {
+              "kind": "ОбщаяФорма",
+              "count": 82
+            },
+            {
+              "kind": "ПланОбмена",
+              "count": 82
+            },
+            {
+              "kind": "HTTPСервис",
+              "count": 64
+            },
+            {
+              "kind": "ОпределяемыйТип",
+              "count": 39
+            },
+            {
+              "kind": "ПакетXDTO",
+              "count": 38
+            },
+            {
+              "kind": "ОбщаяКоманда",
+              "count": 36
+            },
+            {
+              "kind": "ПараметрСеанса",
+              "count": 33
+            },
+            {
+              "kind": "ОбщийМакет",
+              "count": 25
+            },
+            {
+              "kind": "ВнешнийИсточникДанных",
+              "count": 21
+            },
+            {
+              "kind": "WSСсылка",
+              "count": 18
+            },
+            {
+              "kind": "ЭлементСтиля",
+              "count": 9
+            },
+            {
+              "kind": "Стиль",
+              "count": 9
+            },
+            {
+              "kind": "НумераторДокументов",
+              "count": 8
+            },
+            {
+              "kind": "WebСервис",
+              "count": 7
+            },
+            {
+              "kind": "РегистрБухгалтерии",
+              "count": 7
+            },
+            {
+              "kind": "КритерийОтбора",
+              "count": 5
+            },
+            {
+              "kind": "ГруппаКоманд",
+              "count": 4
+            },
+            {
+              "kind": "БизнесПроцесс",
+              "count": 2
+            },
+            {
+              "kind": "Задача",
+              "count": 2
+            },
+            {
+              "kind": "ПланСчетов",
+              "count": 2
+            },
+            {
+              "kind": "Язык",
+              "count": 2
+            },
+            {
+              "kind": "ХранилищеНастроек",
+              "count": 1
+            },
+            {
+              "kind": "ФункциональнаяОпция",
+              "count": 1
+            },
+            {
+              "kind": "Последовательность",
+              "count": 1
+            }
+          ]
+        },
+        "code": {
+          "modules": 14041,
+          "callables": 231113,
+          "callsites": 722233,
+          "callsites_resolved": 428645,
+          "callsites_unresolved": 43990,
+          "callsites_object_method": 249598,
+          "resolve_coverage_pct": 90.69
+        },
+        "relations": {
+          "CALL_SITE": 722233,
+          "RESOLVES_TO_CALLEE": 428645,
+          "CALLS": 351441,
+          "HAS_PARAM": 348746,
+          "HAS_METHOD": 231085,
+          "OPERATES_ON": 67890,
+          "OF_TYPE": 47651,
+          "HAS_ATTRIBUTE": 42763,
+          "INFERRED_TYPE": 24384,
+          "HAS_FORM": 8202,
+          "HAS_VALUE": 5996,
+          "CONTAINS": 3489,
+          "HAS_TABULAR_SECTION": 1872,
+          "RESOLVES_TO": 1729,
+          "BASED_ON": 847,
+          "OWNED_BY": 82
+        },
+        "graph_empty": false,
+        "results": []
+      }
+    }
+  ]
+}

@@ -106,6 +106,35 @@ def owner_of(rel_path: str) -> Optional[str]:
     return None
 
 
+def is_upsertable(rel_path: str) -> bool:
+    """
+    Умеет ли `incremental.upsert_file` обработать этот файл.
+
+    Точечное обновление принимает только .bsl и ВЕРХНЕУРОВНЕВЫЙ XML объекта
+    (`Catalogs/Контрагенты.xml`). Вложенные XML — формы, макеты — не
+    самостоятельные объекты: они описаны внутри верхнего XML, и
+    upsert_xml_file возвращает по ним `skipped`.
+
+    Отсеиваем их заранее, а не отправляем в базу ради отказа: у одной
+    обработки таких файлов бывает десяток, и каждый — лишний круг по сети
+    плюс строка в логе о том, что всё идёт по плану.
+
+    На полноту обновления это не влияет. Правка формы меняет отпечаток
+    РОДИТЕЛЬСКОГО объекта (см. owner_of), а вместе с ним переобновляются и
+    модули форм — там и читаются реквизиты формы, которые нужны резолверу.
+    """
+    rel = rel_path.replace("\\", "/")
+    low = rel.lower()
+    if low.endswith(".bsl"):
+        return True
+    if not low.endswith(".xml"):
+        return False
+    parts = rel.split("/")
+    if parts and parts[0] == "tests-extension":
+        parts = parts[1:]
+    return len(parts) == 2 and parts[0] in KIND_BY_DIR
+
+
 def scan_workspace(root: Path, keep_files: bool = False) -> tuple[dict[str, str], dict]:
     """
     Один обход дерева → отпечаток на каждого владельца.
@@ -121,6 +150,19 @@ def scan_workspace(root: Path, keep_files: bool = False) -> tuple[dict[str, str]
     """
     t0 = time.monotonic()
     per_owner: dict[str, list[str]] = {}
+    # PERF-8b. Заодно копим строки для ОБЩЕГО fingerprint'а по расширениям —
+    # того самого, на который смотрит indexer.py.
+    #
+    # Зачем. Частичное обновление не трогало ключи `metadata_xml` и
+    # `bsl_source`, поэтому следующий старт контейнеров видел расхождение и
+    # запускал полную двухчасовую переиндексацию — отменяя всю экономию.
+    # Считать их отдельным проходом значило бы платить второй обход диска
+    # (те же 3–12 минут), а данные для них собираются здесь же.
+    #
+    # ВАЖНО: в общий отпечаток входят ВСЕ файлы с расширением, включая те,
+    # у которых нет владельца (их 2 625). Иначе значение не совпало бы с
+    # тем, что считает индексер, и расхождение осталось бы вечным.
+    global_lines: dict[str, list[str]] = {".xml": [], ".bsl": []}
     files = skipped = 0
     total_bytes = 0
 
@@ -143,24 +185,35 @@ def scan_workspace(root: Path, keep_files: bool = False) -> tuple[dict[str, str]
                 if not entry.is_file(follow_symlinks=False):
                     continue
                 low = rel.lower()
-                if not (low.endswith(".xml") or low.endswith(".bsl")):
-                    continue
-                owner = owner_of(rel)
-                if owner is None:
-                    skipped += 1
+                suffix = ".xml" if low.endswith(".xml") else (
+                    ".bsl" if low.endswith(".bsl") else None)
+                if suffix is None:
                     continue
                 st = entry.stat(follow_symlinks=False)
+                owner = owner_of(rel)
             except OSError:
+                continue
+
+            line = f"{rel}\t{st.st_size}\t{st.st_mtime_ns}"
+            global_lines[suffix].append(line)
+
+            if owner is None:
+                skipped += 1
                 continue
             files += 1
             total_bytes += st.st_size
-            per_owner.setdefault(owner, []).append(
-                f"{rel}\t{st.st_size}\t{st.st_mtime_ns}")
+            per_owner.setdefault(owner, []).append(line)
 
     digests = {}
     for owner, lines in per_owner.items():
         lines.sort()
         digests[owner] = hashlib.sha256(
+            "\n".join(lines).encode("utf-8")).hexdigest()
+
+    global_digests = {}
+    for suffix, lines in global_lines.items():
+        lines.sort()
+        global_digests[suffix] = hashlib.sha256(
             "\n".join(lines).encode("utf-8")).hexdigest()
 
     meta = {
@@ -169,6 +222,8 @@ def scan_workspace(root: Path, keep_files: bool = False) -> tuple[dict[str, str]
         "skipped":     skipped,
         "bytes":       total_bytes,
         "elapsed_sec": time.monotonic() - t0,
+        # PERF-8b: значения для ключей metadata_xml / bsl_source индексера.
+        "global_digests": global_digests,
     }
     if keep_files:
         meta["files_by_owner"] = {

@@ -223,5 +223,64 @@ class TestLabelledMatches(unittest.TestCase):
                               f"перебор узлов на каждую строку (PERF-4)")
 
 
+class TestRussianNameForms(unittest.TestCase):
+    """
+    FIX-18. `full_name_ru` хранится во МНОЖЕСТВЕННОМ числе вида —
+    «Справочники.Контрагенты» (см. metadata_xml: full_name_ru строится из
+    kind_ru_plural). А в языке запросов 1С пишут единственное:
+    «Справочник.Контрагенты». Инструменты принимали только множественное,
+    и обращение к объекту в самой естественной для разработчика форме
+    молча возвращало «не найдено».
+
+    Нашлось датасетом EVAL-1 — ради такого он и заводился.
+    """
+
+    def _files_matching_by_full_name(self):
+        for fname in SERVER_FILES:
+            src = _read(HERE / fname)
+            if "full_name_ru" in src:
+                yield fname, src
+
+    def test_singular_form_accepted_everywhere(self):
+        """
+        Везде, где ищут по full_name_ru, должна приниматься и форма
+        «<ВидЕдинственное>.<Имя>».
+        """
+        for fname, src in self._files_matching_by_full_name():
+            for num, line in _code_lines(src):
+                if "full_name_ru = $" not in line:
+                    continue
+                # Условие может занимать несколько строк — смотрим окно.
+                window = "\n".join(src.split("\n")[num - 1:num + 4])
+                self.assertIn(
+                    "kind_ru + '.' + ", window,
+                    f"{fname}:{num}: поиск по русскому имени не принимает "
+                    f"единственное число вида (FIX-18)")
+
+
+class TestFoundFlagSymmetry(unittest.TestCase):
+    """
+    FIX-19. `found` возвращался только при неудаче, а на успешном ответе
+    отсутствовал: агент, проверяющий это поле, получал null и мог решить,
+    что объекта нет, — притом что состав лежал рядом в том же ответе.
+
+    Асимметричный признак хуже отсутствующего: он выглядит надёжным.
+    Нашлось на EVAL-1, где пример вернул реквизиты и одновременно
+    «не найден».
+    """
+
+    FILES = ["server_v3_tools.py", "server_v3_code_tools.py"]
+
+    def test_negative_branch_has_positive_counterpart(self):
+        for fname in self.FILES:
+            src = _read(HERE / fname)
+            neg = len(re.findall(r'"found":\s*False', src))
+            pos = len(re.findall(r'"found":\s*[Tt]rue', src))
+            self.assertGreaterEqual(
+                pos, neg,
+                f"{fname}: веток «не найдено» {neg}, а «найдено» лишь {pos} — "
+                f"часть успешных ответов молчит о found (FIX-19)")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

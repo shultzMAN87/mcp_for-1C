@@ -21,8 +21,8 @@ import unittest
 from pathlib import Path
 
 from partial_fingerprint import (FP_CHUNK_PREFIX, ROOT_KEY, build_plan,
-                                 dependent_owners, owner_of, read_stored,
-                                 scan_workspace, write_stored)
+                                 dependent_owners, is_upsertable, owner_of,
+                                 read_stored, scan_workspace, write_stored)
 
 
 class TestOwnerMapping(unittest.TestCase):
@@ -410,6 +410,109 @@ class TestScanFiles(unittest.TestCase):
         a, _ = scan_workspace(self.root)
         b, _ = scan_workspace(self.root, keep_files=True)
         self.assertEqual(a, b)
+
+
+class TestUpsertableFilter(unittest.TestCase):
+    """
+    Что имеет смысл отправлять в incremental.upsert_file.
+
+    Точечное обновление принимает только .bsl и верхнеуровневый XML
+    объекта. Вложенные XML — формы, макеты — возвращаются со статусом
+    `skipped`. У одной обработки таких файлов бывает десяток, и без
+    фильтра каждый прогон слал бы их в базу ради отказа, а лог заполнялся
+    бы сообщениями о том, что всё идёт по плану.
+    """
+
+    def test_top_level_object_xml_is_upsertable(self):
+        self.assertTrue(is_upsertable("Catalogs/Контрагенты.xml"))
+        self.assertTrue(is_upsertable("DataProcessors/Обработка.xml"))
+
+    def test_any_bsl_is_upsertable(self):
+        for rel in ("CommonModules/Общий/Ext/Module.bsl",
+                    "Catalogs/К/Ext/ObjectModule.bsl",
+                    "Catalogs/К/Forms/Ф/Ext/Form/Module.bsl"):
+            self.assertTrue(is_upsertable(rel), rel)
+
+    def test_nested_xml_is_not(self):
+        for rel in ("Catalogs/К/Forms/Ф/Ext/Form.xml",
+                    "Catalogs/К/Ext/Predefined.xml",
+                    "DataProcessors/О/Templates/М/Ext/Template.xml"):
+            self.assertFalse(is_upsertable(rel), rel)
+
+    def test_unknown_kind_dir_is_not(self):
+        self.assertFalse(is_upsertable("НеизвестныйКаталог/Файл.xml"))
+
+    def test_other_extensions_are_not(self):
+        self.assertFalse(is_upsertable("CommonPictures/И/Ext/Picture.png"))
+
+    def test_tests_extension_prefix_handled(self):
+        self.assertTrue(is_upsertable("tests-extension/Catalogs/К.xml"))
+
+    def test_nested_xml_still_belongs_to_parent(self):
+        """
+        Фильтр не должен ломать полноту: вложенный XML по-прежнему меняет
+        отпечаток родителя, а значит правка формы всё равно вызовет
+        переобновление объекта и его модулей.
+        """
+        rel = "Catalogs/К/Forms/Ф/Ext/Form.xml"
+        self.assertFalse(is_upsertable(rel))
+        self.assertEqual(owner_of(rel), "Catalog.К")
+
+
+class TestGlobalFingerprint(unittest.TestCase):
+    """
+    PERF-8b. Тот же обход считает и общий отпечаток — тот, на который
+    смотрит indexer.py.
+
+    Без этого частичное обновление отменялось само: индексер видел
+    расхождение и запускал полную двухчасовую переиндексацию при первом же
+    старте контейнеров. Режим, после которого приходится ждать два часа,
+    хуже, чем его отсутствие.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        for rel in ("Catalogs/К.xml", "Catalogs/К/Ext/ObjectModule.bsl",
+                    "CommonModules/О/Ext/Module.bsl",
+                    "НетТакогоВида/Что.xml"):
+            p = self.root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("x", encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_matches_indexer_exactly(self):
+        """
+        Значение обязано совпадать с тем, что считает сам индексер, —
+        иначе расхождение осталось бы вечным и полная переиндексация
+        запускалась бы каждый раз.
+        """
+        from graph_writer import fingerprint_workspace_multi
+        _, meta = scan_workspace(self.root)
+        theirs, _ = fingerprint_workspace_multi(self.root, (".xml", ".bsl"))
+        self.assertEqual(meta["global_digests"], theirs)
+
+    def test_includes_ownerless_files(self):
+        """
+        Файлы без владельца (их 2 625 на боевой) в общий отпечаток входят,
+        хотя в частичный не попадают. Если их пропустить, значения
+        разойдутся с индексером.
+        """
+        _, meta = scan_workspace(self.root)
+        self.assertGreater(meta["skipped"], 0, "нужен файл без владельца")
+        before = dict(meta["global_digests"])
+        (self.root / "НетТакогоВида" / "Что.xml").write_text("изменено", encoding="utf-8")
+        _, after = scan_workspace(self.root)
+        self.assertNotEqual(before[".xml"], after["global_digests"][".xml"])
+
+    def test_owner_change_moves_both(self):
+        _, before = scan_workspace(self.root)
+        (self.root / "CommonModules/О/Ext/Module.bsl").write_text("другое", encoding="utf-8")
+        d2, after = scan_workspace(self.root)
+        self.assertNotEqual(before["global_digests"][".bsl"],
+                            after["global_digests"][".bsl"])
 
 
 if __name__ == "__main__":

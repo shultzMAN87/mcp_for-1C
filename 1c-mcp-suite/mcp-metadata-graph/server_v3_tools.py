@@ -78,6 +78,8 @@ def register_v3_tools(mcp, neo4j_query: Callable, neo4j_rows: Callable,
         rows = neo4j_rows(
             "MATCH (m:MetadataObject) "
             "WHERE m.full_name_eng = $fn OR m.full_name_ru = $fn OR m.id = $fn "
+            # FIX-18: единственное число вида — «Справочник.X».
+            "   OR (m.kind_ru + '.' + m.name) = $fn "
             "RETURN m.id AS id, m.full_name_eng AS fne LIMIT 1",
             {"fn": object_full_name},
         )
@@ -175,8 +177,10 @@ def register_v3_tools(mcp, neo4j_query: Callable, neo4j_rows: Callable,
         rows = neo4j_rows(
             f"""
             MATCH (a:MetadataObject), (b:MetadataObject)
-            WHERE (a.full_name_eng = $a OR a.full_name_ru = $a OR a.id = $a)
-              AND (b.full_name_eng = $b OR b.full_name_ru = $b OR b.id = $b)
+            WHERE (a.full_name_eng = $a OR a.full_name_ru = $a OR a.id = $a
+                   OR (a.kind_ru + '.' + a.name) = $a)
+              AND (b.full_name_eng = $b OR b.full_name_ru = $b OR b.id = $b
+                   OR (b.kind_ru + '.' + b.name) = $b)
             WITH a, b LIMIT 1
             MATCH p = shortestPath((a)-[:HAS_ATTRIBUTE|HAS_TABULAR_SECTION|OF_TYPE|RESOLVES_TO*1..{int(max_depth)}]-(b))
             WITH p LIMIT {int(limit)}
@@ -238,6 +242,8 @@ def register_v3_tools(mcp, neo4j_query: Callable, neo4j_rows: Callable,
         rows = neo4j_rows(
             "MATCH (m:MetadataObject) "
             "WHERE m.full_name_eng = $fn OR m.full_name_ru = $fn OR m.id = $fn "
+            # FIX-18: единственное число вида — «Справочник.X».
+            "   OR (m.kind_ru + '.' + m.name) = $fn "
             "RETURN m.id AS id LIMIT 1",
             {"fn": object_full_name},
         )
@@ -277,6 +283,7 @@ def register_v3_tools(mcp, neo4j_query: Callable, neo4j_rows: Callable,
 
         end = offset + len(items)
         return json.dumps({
+            "found":   True,          # FIX-19: симметрично ветке «не найдено»
             "object":  target_id,
             "total":   total,
             "returned": len(items),
@@ -306,6 +313,8 @@ def register_v3_tools(mcp, neo4j_query: Callable, neo4j_rows: Callable,
         rows = neo4j_rows(
             "MATCH (m:MetadataObject) "
             "WHERE m.full_name_eng = $fn OR m.full_name_ru = $fn OR m.id = $fn "
+            # FIX-18: единственное число вида — «Справочник.X».
+            "   OR (m.kind_ru + '.' + m.name) = $fn "
             "RETURN m.id AS id LIMIT 1",
             {"fn": object_full_name},
         )
@@ -332,6 +341,15 @@ def register_v3_tools(mcp, neo4j_query: Callable, neo4j_rows: Callable,
         )
 
         result = {
+            # FIX-19. Поле `found` возвращалось ТОЛЬКО при неудаче, а на
+            # успешном ответе отсутствовало. Проверяющий его агент получал
+            # null и мог заключить, что объект не найден, — притом что
+            # состав лежит рядом в том же ответе. Асимметричный признак
+            # хуже отсутствующего: он выглядит надёжным.
+            #
+            # Нашлось на EVAL-1: пример с русской формой имени вернул
+            # реквизиты и одновременно «не найден».
+            "found":            True,
             "object":           oid,
             "direct_attributes": direct,
             "direct_count":     len(direct),

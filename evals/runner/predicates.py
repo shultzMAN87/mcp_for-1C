@@ -33,12 +33,38 @@ class PredicateOutcome:
     match_rank: int | None = None
 
 
+# Ключи, под которыми серверы отдают список найденного.
+#
+# EVAL-1. Раньше здесь был только `results` — так отвечают platform-help,
+# v8std и bsl-checker. Но metadata-graph отдаёт `items`, и на его ответах
+# все предикаты видели пустой список: датасет провалился бы целиком, а
+# выглядело бы это как «инструменты сломаны», хотя сломан был бы раннер.
+#
+# Порядок важен: берём первый ключ, под которым лежит список. Складывать
+# их нельзя — сервер мог бы вернуть оба и результат задвоился бы.
+#
+# Список пришлось расширять по факту первого прогона: разные инструменты
+# называют «список найденного» по-своему, и предполагать единое имя было
+# наивно. Проверять надо было ДО того, как писать датасет, — иначе провал
+# раннера неотличим от провала инструментов, что на первом прогоне и
+# произошло: пять примеров упали, и выглядело это как сломанный поиск.
+_HIT_KEYS = (
+    "results",            # platform-help, v8std, bsl-checker
+    "items",              # metadata_search, metadata_list_objects, metadata_subsystems
+    "hits",
+    "callers", "callees",  # code_callers / code_callees
+    "direct_attributes",   # metadata_object_attributes
+    "members",             # metadata_subsystem_members
+)
+
+
 def _hits(result: Any) -> list[dict]:
     if not isinstance(result, dict):
         return []
-    r = result.get("results")
-    if isinstance(r, list):
-        return [h for h in r if isinstance(h, dict)]
+    for key in _HIT_KEYS:
+        r = result.get(key)
+        if isinstance(r, list):
+            return [h for h in r if isinstance(h, dict)]
     return []
 
 
@@ -92,6 +118,13 @@ def _pred_name_in_top_k(pred: dict, result: Any) -> PredicateOutcome:
             # старые датасеты ведут себя ровно как раньше.
             _norm(h.get("id")),
             _norm(h.get("title")),
+            # EVAL-1: metadata-graph отдаёт короткое имя в `name`. Без этого
+            # ключа поиск, вернувший «Контрагенты» ПЕРВЫМ результатом со
+            # score 23.13, считался промахом — предикат просто не смотрел
+            # туда, где лежит ответ. Диагностика, молчащая о том, что она
+            # не умеет мерить, хуже её отсутствия: два прогона выглядели
+            # как дефект ранжирования, которого не было.
+            _norm(h.get("name")),
         )
         for c in candidates:
             if c and c in wanted:

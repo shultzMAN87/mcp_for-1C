@@ -110,6 +110,8 @@ def register_v3_code_tools(mcp, neo4j_query: Callable, neo4j_rows: Callable,
         rows = neo4j_rows(
             "MATCH (m:MetadataObject) "
             "WHERE m.id = $q OR m.full_name_eng = $q OR m.full_name_ru = $q "
+            # FIX-18: единственное число вида — «Справочник.X».
+            "   OR (m.kind_ru + '.' + m.name) = $q "
             "RETURN m.id AS id LIMIT 1",
             {"q": name_or_id},
         )
