@@ -22,7 +22,7 @@ import unittest
 
 from graph_state import (
     GRAPH_OK, GRAPH_EMPTY, GRAPH_UNAVAILABLE,
-    graph_state, graph_error, make_guard,
+    graph_state, graph_error, make_guard, make_state_probe,
     NON_CONFIG_CALL_REASONS, NON_CONFIG_REASONS_CYPHER,
 )
 
@@ -236,6 +236,38 @@ class TestGuardFastFail(unittest.TestCase):
         for _ in range(3):
             self.assertEqual(json.loads(guard())["error"], "graph_empty")
         self.assertEqual(calls["n"], 3, "пустое состояние закешировалось")
+
+    def test_probe_and_guard_share_one_cache(self):
+        """
+        B-1, вторая половина. Замер 15 августа: после первой правки поиск
+        стал отвечать за 15 мс, а `metadata_stats` продолжал платить
+        3 850 мс — он спрашивает состояние напрямую, а не через guard,
+        потому что ему нужно различать пустой граф и мёртвую базу.
+
+        Кеш был написан, а трое потребителей из четырёх им не пользовались.
+        Проверяем, что теперь он один на всех.
+        """
+        query, calls = self._counting_query(exc=OSError("нет связи"))
+        probe = make_state_probe(query, recheck_sec=30)
+        guard = make_guard(probe=probe)
+
+        probe()
+        guard()
+        probe()
+        guard()
+
+        self.assertEqual(calls["n"], 1,
+                         "у пробы и guard-а разные кеши — инструменты "
+                         "состояния снова ждут таймаут")
+
+    def test_probe_returns_state_not_json(self):
+        """
+        Проба отдаёт пару, а не готовый ответ: тем, кто её зовёт, нужно
+        РАЗЛИЧАТЬ пустой граф и мёртвую базу, а guard блокирует оба.
+        """
+        query, _ = self._counting_query(count=0)
+        state, _detail = make_state_probe(query)()
+        self.assertEqual(state, GRAPH_EMPTY)
 
     def test_reset_clears_the_cache(self):
         query, calls = self._counting_query(exc=OSError("нет связи"))

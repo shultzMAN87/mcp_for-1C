@@ -273,58 +273,20 @@ class TestTallyBook(unittest.TestCase):
 
 class TestModuleIsDelivered(unittest.TestCase):
     """
-    HYG-2 в миниатюре: два Dockerfile обязаны копировать этот модуль.
+    B-6: список образов здесь больше не живёт.
 
-    Забытая строка COPY — самостоятельный жанр в этом проекте: так уже было
-    с `graph_state.py` (Заход 2), `query_parser.py` (Заход 3) и
-    `progress_log.py` (Заход 4). Отказ при этом выглядит как падение на
-    импорте при старте контейнера, то есть в лучшем случае через сборку и
-    подъём стека. Проверка стоит четырёх строк.
+    Было две проверки со своим перечнем Dockerfile — и точно такие же лежали
+    в tests_refusal и tests_bsl_health, каждая со своим списком. Проверка
+    «модуль X импортируется сервером Y, значит COPY обязан быть» сама стала
+    тем списком, который надо помнить.
+
+    Теперь карту «импортёр → образ» строит tests_delivery.py по исходникам,
+    а здесь остаётся вопрос про конкретный модуль: меня-то довезли?
     """
 
-    DOCKERFILES = ("Dockerfile.python", "Dockerfile.embeddings")
-
-    def test_copy_line_present(self):
-        for name in self.DOCKERFILES:
-            path = ROOT / name
-            self.assertTrue(path.exists(), f"нет {name}")
-            text = path.read_text(encoding="utf-8")
-            self.assertRegex(
-                text, r"COPY\s+shortfall\.py",
-                f"{name}: нет COPY shortfall.py — модуль не доедет в образ",
-            )
-
-    def test_importers_are_covered(self):
-        """
-        Каждый модуль, импортирующий shortfall, лежит в образе, куда
-        shortfall копируется. Проверяем грубо: имя файла-импортёра
-        встречается хотя бы в одном Dockerfile, где есть COPY shortfall.py.
-        """
-        importers = []
-        for path in ROOT.rglob("*.py"):
-            if "__pycache__" in path.parts or path.name.startswith("tests_"):
-                continue
-            if path.name == "shortfall.py":
-                continue
-            text = path.read_text(encoding="utf-8", errors="replace")
-            if re.search(r"^\s*from shortfall import|^\s*import shortfall", text, re.M):
-                importers.append(path.name)
-
-        covered = set()
-        for name in self.DOCKERFILES:
-            text = (ROOT / name).read_text(encoding="utf-8")
-            if not re.search(r"COPY\s+shortfall\.py", text):
-                continue
-            for line in text.splitlines():
-                if line.strip().startswith("COPY"):
-                    covered.update(Path(part).name for part in line.split()[1:])
-
-        for name in importers:
-            self.assertIn(
-                name, covered,
-                f"{name} импортирует shortfall, но не копируется ни в один "
-                f"образ, где есть COPY shortfall.py",
-            )
+    def test_delivered_everywhere_it_is_imported(self):
+        from tests_delivery import assert_delivered
+        assert_delivered(self, "shortfall.py")
 
 
 if __name__ == "__main__":

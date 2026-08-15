@@ -33,6 +33,9 @@ RUN mkdir -p /opt/bsl-language-server && \
 ENV BSL_LS_JAR=/opt/bsl-language-server/bsl-ls.jar
 
 COPY mcp-bsl-checker/server.py /app/server.py
+# B-7: состояние анализатора (bsl_stats). Без этой строки сервер падает на
+# импорте при старте; отсутствие ловит tests_bsl_health.py.
+COPY mcp-bsl-checker/bsl_health.py /app/bsl_health.py
 COPY mcp_auth.py /app/mcp_auth.py
 # TR-1: у bsl-checker свой образ, но точка входа общая
 COPY mcp_http.py /app/mcp_http.py

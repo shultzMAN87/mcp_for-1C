@@ -18,6 +18,7 @@ import-пути между server-side и indexer-side нет.
   GRAPH_OK / GRAPH_EMPTY / GRAPH_UNAVAILABLE — состояния графа
   graph_state(neo4j_query)  → (состояние, деталь)
   graph_error(state, detail) → JSON-ответ для нерабочего состояния
+  make_state_probe(...)     → probe() → (состояние, деталь), с кешем
   make_guard(neo4j_query)   → guard() → None | JSON-ответ
   NON_CONFIG_CALL_REASONS / NON_CONFIG_REASONS_CYPHER — FIX-4/4.1
 """
@@ -128,7 +129,57 @@ def graph_error(state, detail=""):
 GRAPH_RECHECK_SEC = int(os.environ.get("GRAPH_RECHECK_SEC", "30"))
 
 
-def make_guard(neo4j_query, recheck_sec=None):
+def make_state_probe(neo4j_query, recheck_sec=None):
+    """
+    Возвращает probe() → (состояние, деталь) с кешем «недоступна».
+
+    B-1, вторая половина. Первая правка положила кеш внутрь `make_guard`,
+    и замер 15 августа показал результат: медиана вызова при мёртвой Neo4j
+    15 мс против 3 850. Но три примера остались медленными —
+    `metadata_stats` (×3 в датасете) ходит не через guard, а напрямую через
+    `graph_state()`, потому что ему нужно РАЗЛИЧАТЬ пустой граф и мёртвую
+    базу: на пустом он обязан отвечать, а guard блокирует оба состояния.
+
+    То же самое и у `metadata_reload`, и у watch-инструментов.
+
+    То есть кеш был написан, а трое из четырёх потребителей состояния им не
+    пользовались — ровно тот узор, ради которого затевался `AUDIT-2`, и он
+    воспроизвёлся внутри правки по его же результатам. Поэтому кеш теперь
+    живёт здесь, а `make_guard` — тонкая надстройка над ним.
+    """
+    recheck = GRAPH_RECHECK_SEC if recheck_sec is None else recheck_sec
+    cache = {"detail": "", "at": 0.0, "active": False}
+
+    def probe():
+        if cache["active"]:
+            left = recheck - (time.monotonic() - cache["at"])
+            if left > 0:
+                # Кешированный ответ обязан называть себя кешированным.
+                # Урок приёмки 15 августа: metadata_stats отдавал из кеша
+                # картину здоровья работающего графа в момент, когда графа
+                # не было, и по ответу это было никак не видно.
+                note = (f"Ответ из кеша: Neo4j признана недоступной "
+                        f"{recheck - left:.0f} с назад, следующая проверка "
+                        f"через {left:.0f} с. Сеть не опрашивалась.")
+                detail = cache["detail"]
+                return GRAPH_UNAVAILABLE, (f"{detail} | {note}" if detail else note)
+            cache["active"] = False
+
+        state, detail = graph_state(neo4j_query)
+        if state == GRAPH_UNAVAILABLE:
+            cache.update(detail=detail, at=time.monotonic(), active=True)
+        else:
+            cache.update(detail="", at=0.0, active=False)
+        return state, detail
+
+    def reset():
+        cache.update(detail="", at=0.0, active=False)
+
+    probe.reset = reset
+    return probe
+
+
+def make_guard(neo4j_query=None, recheck_sec=None, probe=None):
     """Возвращает guard(): None если граф готов, иначе готовый JSON-ответ.
 
     Единая точка для всех инструментов, которым нужен наполненный граф.
@@ -141,38 +192,17 @@ def make_guard(neo4j_query, recheck_sec=None):
     У возвращённой функции есть `reset()`: сбрасывает кеш. Нужен тестам и
     ручной диагностике; в рабочем пути не зовётся.
     """
-    recheck = GRAPH_RECHECK_SEC if recheck_sec is None else recheck_sec
-    cache = {"detail": "", "at": 0.0, "active": False}
+    probe = probe or make_state_probe(neo4j_query, recheck_sec)
 
     def guard():
-        if cache["active"]:
-            left = recheck - (time.monotonic() - cache["at"])
-            if left > 0:
-                # Кешированный отказ обязан называть себя кешированным.
-                # Урок приёмки 15 августа: metadata_stats отдавал из кеша
-                # картину здоровья работающего графа в момент, когда графа
-                # не было, и по ответу это было никак не видно.
-                detail = cache["detail"]
-                note = (f"Ответ из кеша: Neo4j признана недоступной "
-                        f"{recheck - left:.0f} с назад, следующая проверка "
-                        f"через {left:.0f} с. Сеть не опрашивалась.")
-                return graph_error(
-                    GRAPH_UNAVAILABLE,
-                    f"{detail} | {note}" if detail else note,
-                )
-            cache["active"] = False
-
-        state, detail = graph_state(neo4j_query)
-        if state == GRAPH_UNAVAILABLE:
-            cache.update(detail=detail, at=time.monotonic(), active=True)
-        else:
-            cache.update(detail="", at=0.0, active=False)
+        state, detail = probe()
         return None if state == GRAPH_OK else graph_error(state, detail)
 
-    def reset():
-        cache.update(detail="", at=0.0, active=False)
-
-    guard.reset = reset
+    # Кеш общий: передайте тот же probe инструментам, которым нужно
+    # различать пустой граф и мёртвую базу, и они получат быстрый отказ
+    # даром.
+    guard.probe = probe
+    guard.reset = probe.reset
     return guard
 
 

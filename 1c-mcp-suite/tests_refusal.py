@@ -261,24 +261,14 @@ class TestInstall(unittest.TestCase):
 
 class TestDeliveredToImages(unittest.TestCase):
     """
-    Та же проверка, что у `shortfall.py`: модуль должен доехать в каждый
-    образ, чей сервер его импортирует. Забытая строка COPY — отдельный
-    жанр в этом проекте, и стоит она подъёма всего стека.
+    B-6: перечень из трёх Dockerfile отсюда убран — его теперь незачем
+    держать в голове. Карту «кто импортирует → в каком образе лежит» строит
+    tests_delivery.py по исходникам, здесь остаётся вопрос про этот модуль.
     """
 
-    DOCKERFILES = ("Dockerfile.python", "Dockerfile.embeddings", "Dockerfile.bsl")
-
-    def test_copy_line_present(self):
-        import re
-        from pathlib import Path
-        root = Path(__file__).resolve().parent
-        for name in self.DOCKERFILES:
-            path = root / name
-            self.assertTrue(path.exists(), f"нет {name}")
-            self.assertRegex(
-                path.read_text(encoding="utf-8"), r"COPY\s+refusal\.py",
-                f"{name}: нет COPY refusal.py — сервер упадёт на импорте",
-            )
+    def test_delivered_everywhere_it_is_imported(self):
+        from tests_delivery import assert_delivered
+        assert_delivered(self, "refusal.py")
 
 
 if __name__ == "__main__":

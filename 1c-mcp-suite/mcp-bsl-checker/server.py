@@ -5,7 +5,8 @@ MCP-сервер: Проверка синтаксиса BSL
 Поддерживает:
   - проверку синтаксиса фрагмента кода
   - анализ файла .bsl
-  - список доступных диагностик
+  - анализ каталога
+  - `bsl_stats` — состояние самого анализатора (B-7)
 
 STD-5: мост к стандартам разработки
 ────────────────────────────────────
@@ -29,6 +30,7 @@ import os
 import json
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 import logging
 
@@ -44,6 +46,10 @@ except ImportError:  # pragma: no cover — путь только для лок�
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from refusal import install_answerable_field, refusal
 
+# B-7: состояние анализатора. Лежит рядом с server.py и в образе тоже
+# попадает в /app, поэтому импорт прямой.
+from bsl_health import AnalysisLog, health_report
+
 mcp = FastMCP("1C BSL Syntax Checker")
 
 # OBS-1. Одна строка вместо правки каждого `return json.dumps(...)`: поле
@@ -55,6 +61,12 @@ logger = logging.getLogger(__name__)
 BSL_LS_JAR = os.environ.get("BSL_LS_JAR", "/opt/bsl-language-server/bsl-ls.jar")
 BSL_LS_CONFIG = os.environ.get("BSL_LS_CONFIG", "")
 JAVA_OPTS = os.environ.get("JAVA_OPTS", "-Xmx512m")
+JAVA_CMD = os.environ.get("BSL_JAVA_CMD", "java")
+ANALYSIS_TIMEOUT_SEC = int(os.environ.get("BSL_ANALYSIS_TIMEOUT_SEC", "120"))
+
+# B-7: чем ответит bsl_stats на вопрос «как ты себя чувствуешь». Пополняется
+# в одном месте — в `_run_analysis`, ниже.
+_analysis_log = AnalysisLog()
 
 # STD-5. Подсказка агенту одинаковая во всех трёх инструментах — держим одной
 # строкой, чтобы формулировка не разъехалась при первой же правке.
@@ -120,16 +132,37 @@ def _std_lookup(diagnostics: list) -> dict:
 REPORT_NAME = "bsl-json.json"
 
 
-def _run_analysis(src_path: str, config_path: str = "") -> dict:
+def _run_analysis_inner(src_path: str, config_path: str = "") -> dict:
     """
     Запускает BSL Language Server в режиме анализа.
 
     Возвращает либо разобранный отчёт, либо dict с ключом `error` — второе
     вызывающий код обязан отличать от пустого списка диагностик.
     """
+    # B-7. Отсутствующий jar до этой правки приезжал как `report_missing`:
+    # java стартовала, писала «Unable to access jarfile» в stderr и уходила
+    # с ненулевым кодом, а отчёта не было. Технически честно (stderr и код
+    # возврата в ответе лежали), по смыслу неверно — «анализатор не создал
+    # отчёт» и «анализатора нет» лечатся разными командами, а различать их
+    # приходилось чтением чужого stderr.
+    #
+    # Проверка стоит один stat и делает диагноз точным: `linter_missing`
+    # ровно там, где линтера действительно нет.
+    if not Path(BSL_LS_JAR).exists():
+        return refusal(
+            "linter_missing",
+            f"BSL Language Server не найден: {BSL_LS_JAR}",
+            meaning=(
+                "Это НЕ значит, что замечаний нет. Анализатор не "
+                "запускался вообще."
+            ),
+            hint="Вызовите bsl_stats — он покажет, что именно отсутствует, "
+                 "java или jar.",
+        )
+
     with tempfile.TemporaryDirectory() as outdir:
         cmd = [
-            "java", *JAVA_OPTS.split(),
+            JAVA_CMD, *JAVA_OPTS.split(),
             "-jar", BSL_LS_JAR,
             "--analyze",
             "--srcDir", src_path,
@@ -141,7 +174,8 @@ def _run_analysis(src_path: str, config_path: str = "") -> dict:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=120
+                cmd, capture_output=True, text=True,
+                timeout=ANALYSIS_TIMEOUT_SEC,
             )
         except subprocess.TimeoutExpired:
             # OBS-1: до этой правки все четыре отказа анализатора и «файла
@@ -152,7 +186,7 @@ def _run_analysis(src_path: str, config_path: str = "") -> dict:
             # правило, исполнить которое было невозможно.
             return refusal(
                 "analysis_timeout",
-                "Анализ не уложился в 120 секунд и был прерван.",
+                f"Анализ не уложился в {ANALYSIS_TIMEOUT_SEC} с и был прерван.",
                 meaning=(
                     "Это НЕ значит, что замечаний нет. Проверка не "
                     "завершилась, про код сейчас не известно ничего — не "
@@ -205,6 +239,53 @@ def _run_analysis(src_path: str, config_path: str = "") -> dict:
                 ),
                 report_path=str(report_path),
             )
+
+
+def _run_analysis(src_path: str, config_path: str = "") -> dict:
+    """
+    То же самое, плюс запись исхода в журнал для `bsl_stats`.
+
+    Учёт вынесен в обёртку, а не расставлен по пяти точкам возврата внутри:
+    иначе следующая ветка отказа появится без записи, и счётчик тихо
+    разойдётся с действительностью. Это ровно тот жанр, из-за которого в
+    проекте четырежды расходились списки, которые надо помнить руками.
+    """
+    t0 = time.monotonic()
+    result = _run_analysis_inner(src_path, config_path)
+    elapsed = time.monotonic() - t0
+    if isinstance(result, dict) and "error" in result:
+        _analysis_log.record_fail(result.get("error", ""),
+                                  result.get("message", ""), elapsed)
+    else:
+        _analysis_log.record_ok(elapsed)
+    return result
+
+
+@mcp.tool()
+def bsl_stats() -> str:
+    """
+    Состояние анализатора: доступна ли java, на месте ли jar BSL Language
+    Server и какой он версии, чем закончились последние запуски анализа.
+
+    Спрашивать этим инструментом дёшево и быстро — в отличие от самой
+    проверки кода, которая при мёртвом анализаторе отвечает отказом только
+    через таймаут. Если `linter_available: false`, ответы `bsl_check_*`
+    будут отказами, а не «замечаний не найдено».
+
+    B-7: инструмент состояния был у трёх серверов набора из пяти. Отсутствие
+    четвёртого стоило двух минут ожидания, чтобы услышать «java не найдена».
+    """
+    return json.dumps(
+        health_report(
+            jar_path=BSL_LS_JAR,
+            java_cmd=JAVA_CMD,
+            java_opts=JAVA_OPTS,
+            analysis_timeout_sec=ANALYSIS_TIMEOUT_SEC,
+            config_path=BSL_LS_CONFIG,
+            log=_analysis_log,
+        ),
+        ensure_ascii=False, indent=2,
+    )
 
 
 @mcp.tool()

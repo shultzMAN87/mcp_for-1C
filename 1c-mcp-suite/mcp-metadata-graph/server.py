@@ -42,7 +42,7 @@ from search_fulltext import (   # noqa: E402  (PERF-6)
 )
 from graph_state import (            # noqa: E402
     GRAPH_OK, GRAPH_EMPTY, GRAPH_UNAVAILABLE,
-    graph_state, graph_error, make_guard,
+    graph_state, graph_error, make_guard, make_state_probe,
     NON_CONFIG_CALL_REASONS, NON_CONFIG_REASONS_CYPHER,
 )
 # OBS-1: единый словарь отказа. Формат родился здесь (FIX-3) и переехал
@@ -193,15 +193,23 @@ def _neo4j_available():
 # Модуль без зависимости от FastMCP — только так серверную логику получилось
 # накрыть юнит-тестами (tests_graph_state.py): импорт server.py поднимает
 # FastMCP и требует NEO4J_PASSWORD.
-_graph_state = lambda: graph_state(_neo4j_query)          # noqa: E731
-_graph_error = graph_error
 def _neo4j_probe(cypher, parameters=None):
     """Проба живости: тот же запрос, но с коротким таймаутом (B-2)."""
     return _neo4j_query(cypher, parameters, timeout=NEO4J_PROBE_TIMEOUT_SEC)
 
 
-# B-1: guard теперь кеширует вердикт «недоступна» — см. make_guard().
-_graph_guard = make_guard(_neo4j_probe)
+# B-1: состояние графа спрашивается через общую пробу с кешем «недоступна».
+# Тот же объект отдаётся guard-у ниже — кеш у них один на двоих, иначе
+# инструменты, которым нужно различать пустой граф и мёртвую базу
+# (metadata_stats, metadata_reload, watch-инструменты), продолжали бы
+# платить полный таймаут на каждом вызове. Замер 15 августа: у них
+# оставалось 3 850 мс там, где остальные ушли на 15 мс.
+_graph_probe = make_state_probe(_neo4j_probe)
+_graph_state = _graph_probe
+_graph_error = graph_error
+
+# guard — тонкая надстройка над той же пробой.
+_graph_guard = make_guard(probe=_graph_probe)
 
 
 def _neo4j_rows(cypher, params=None):

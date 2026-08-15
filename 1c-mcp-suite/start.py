@@ -15,8 +15,15 @@ from pathlib import Path
 
 import uvicorn
 
-# Все серверы, собираемые из Dockerfile.python. bsl-checker здесь не значится:
-# у него свой образ (Dockerfile.bsl) и своя точка входа.
+# Серверы, которые умеет поднимать эта точка входа. Сам start.py едет в ДВА
+# образа, и каждый из них поднимает своё:
+#   Dockerfile.python     — metadata-graph и query-builder;
+#   Dockerfile.embeddings — platform-help (там же torch, qdrant-client и
+#                           модель эмбеддингов).
+# bsl-checker здесь не значится: у него свой образ (Dockerfile.bsl) и своя
+# точка входа. Раньше комментарий утверждал, что все три собираются из
+# Dockerfile.python, — это перестало быть правдой, когда справка переехала
+# в отдельный образ (B-6).
 SERVERS = {
     "metadata-graph":   ("mcp_metadata_graph",  8001),
     "platform-help":    ("mcp_platform_help",   8003),

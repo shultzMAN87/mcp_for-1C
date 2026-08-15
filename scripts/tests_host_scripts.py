@@ -122,5 +122,67 @@ class TestActuallySurvivesNarrowConsole(unittest.TestCase):
         # дошёл до конца, а не оборвался на печати.
 
 
+class TestSuiteCounting(unittest.TestCase):
+    """
+    A-5, третье состояние: набор запустился и не сказал, сколько проверок
+    отработало.
+
+    Приёмка 16 августа: `evals/runner/tests.py` написан не на unittest, в
+    его выводе нет строки «Ran N tests», и итог выглядел как
+
+        OK   tests.py    0 тестов   2.1 с
+
+    То есть пять настоящих проверок не попали ни в общее число, ни в чьё-то
+    внимание. А набор, который сломался бы так, что выходит с нулём
+    проверок и кодом 0, выглядел бы ровно так же — это тот самый жанр
+    «отказ, притворившийся успехом», ради которого затевался весь заход.
+    """
+
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import run_all_tests
+        self.mod = run_all_tests
+
+    def _run_fake(self, body: str):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "tests_fake.py"
+            path.write_text(body, encoding="utf-8")
+            return self.mod.run_one(path)
+
+    def test_unittest_output_is_counted(self):
+        ok, n, _, _, _, _, how = self._run_fake(
+            "import unittest\n"
+            "class T(unittest.TestCase):\n"
+            "    def test_a(self): pass\n"
+            "    def test_b(self): pass\n"
+            "unittest.main(verbosity=2)\n"
+        )
+        self.assertTrue(ok)
+        self.assertEqual(n, 2)
+        self.assertEqual(how, "unittest")
+
+    def test_progress_format_is_counted(self):
+        """Формат `evals/runner/tests.py`: пять функций и печать прогресса."""
+        ok, n, _, _, _, _, how = self._run_fake(
+            'print("[1/5] predicates: OK")\n'
+            'print("[5/5] run_one + report: OK")\n'
+        )
+        self.assertTrue(ok)
+        self.assertEqual(n, 5, "прогресс-строки не посчитаны")
+        self.assertEqual(how, "прогресс-строки")
+
+    def test_silent_success_is_not_counted_as_tests(self):
+        """
+        Набор, который ничего не сказал, не должен добавлять к общему числу
+        придуманных проверок. Ноль здесь — честный ответ «неизвестно», и
+        именно он выносится отдельным числом в итоговую строку.
+        """
+        ok, n, _, _, _, _, how = self._run_fake('print("готово")\n')
+        self.assertTrue(ok)
+        self.assertEqual(n, 0)
+        self.assertEqual(how, "")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

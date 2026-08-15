@@ -133,7 +133,8 @@ def find_suites() -> list[Path]:
 
 def run_one(path: Path) -> tuple[bool, int, int, float, str, str | None]:
     """
-    Возвращает (успех, тестов, пропущено, секунд, хвост вывода).
+    Возвращает (успех, тестов, пропущено, секунд, хвост вывода, чего не
+    хватило, чем посчитано).
 
     unittest пишет результат в stderr — читаем оба потока.
     """
@@ -165,6 +166,29 @@ def run_one(path: Path) -> tuple[bool, int, int, float, str, str | None]:
     m = re.search(r"skipped=(\d+)", output)
     skipped = int(m.group(1)) if m else 0
 
+    # A-5, третье состояние. Было два: «прошло» и «не запускался». Приёмка
+    # 16 августа показала третье — набор запустился, вернул ноль и был
+    # засчитан успехом:
+    #
+    #     OK   tests.py    0 тестов   2.1 с
+    #
+    # `evals/runner/tests.py` написан не на unittest: пять функций с
+    # assert'ами и печатью «[5/5] ... OK». Строки «Ran N tests» в его выводе
+    # нет, поэтому счётчик читал ноль. Пять настоящих проверок не попадали
+    # ни в число 833, ни в чьё-либо внимание — а набор, который сломался бы
+    # так, что выходит с нулём и кодом 0, выглядел бы ровно так же.
+    #
+    # Учим второй формат: строки вида «[3/5] что-то: OK».
+    if not total:
+        progress = re.findall(r"^\s*\[(\d+)/(\d+)\]", output, re.M)
+        if progress:
+            total = int(progress[-1][1])
+            counted_by = "прогресс-строки"
+        else:
+            counted_by = ""
+    else:
+        counted_by = "unittest"
+
     # Набор может требовать зависимостей, которых нет вне его контейнера
     # (evals/runner тянет пакет `mcp`). Это НЕ провал — но и не успех:
     # такой набор просто не проверялся, и говорить об этом надо прямо.
@@ -177,7 +201,7 @@ def run_one(path: Path) -> tuple[bool, int, int, float, str, str | None]:
 
     ok = proc.returncode == 0
     tail = "" if ok else "\n".join(output.strip().split("\n")[-25:])
-    return ok, total, skipped, elapsed, tail, missing
+    return ok, total, skipped, elapsed, tail, missing, counted_by
 
 
 def main() -> int:
@@ -196,10 +220,11 @@ def main() -> int:
         return 2
 
     failures, not_run, total_tests, total_skipped = [], [], 0, 0
+    uncounted = []   # запустились, но сколько тестов прошло — неизвестно
     t0 = time.monotonic()
 
     for path in suites:
-        ok, n, skipped, elapsed, tail, missing = run_one(path)
+        ok, n, skipped, elapsed, tail, missing, counted_by = run_one(path)
         total_tests += n
         total_skipped += skipped
         if missing:
@@ -208,13 +233,18 @@ def main() -> int:
                 print(f"  НЕТ  {path.name:<28} не запускался — нужен пакет "
                       f"'{missing}' (набор живёт в своём контейнере)")
             continue
+        if ok and not n:
+            uncounted.append(path)
         if not args.quiet:
             mark = "OK  " if ok else "ПАД."
             note = ""
             if skipped:
                 note = f" ({skipped} пропущено"
                 note += ", нужен Neo4j)" if path.name in NEEDS_NEO4J else ")"
-            print(f"  {mark} {path.name:<28} {n:>4} тестов  {elapsed:5.1f} с{note}")
+            count = f"{n:>4} тестов" if n else "   ? тестов"
+            if ok and not n:
+                note += "  ← счётчик не распознан, набор не на unittest"
+            print(f"  {mark} {path.name:<28} {count}  {elapsed:5.1f} с{note}")
         if not ok:
             failures.append((path, tail))
 
@@ -235,8 +265,20 @@ def main() -> int:
     # A-5: «не запускался» выносится в итоговую строку отдельным числом.
     # Раньше он жил только в примечании выше, а глаз читает последнюю
     # строку — и видел «OK: 17 наборов».
+    if uncounted:
+        print("Запустились, но число тестов не распознано "
+              "(вывод не в формате unittest):")
+        for path in uncounted:
+            print(f"    {path.relative_to(ROOT)} — код возврата 0, но сколько "
+                  "проверок отработало, из вывода не видно")
+        print("    Такой набор засчитан пройденным. Если он сломается так, "
+              "что выйдет с нулём проверок,")
+        print("    выглядеть это будет точно так же — см. --strict.")
+        print()
+
     ran = len(suites) - len(not_run)
     not_run_note = f", НЕ ЗАПУСКАЛИСЬ: {len(not_run)}" if not_run else ""
+    uncounted_note = (f", БЕЗ СЧЁТЧИКА: {len(uncounted)}" if uncounted else "")
     skip_note = f", {total_skipped} тестов пропущено внутри наборов" if total_skipped else ""
 
     if failures:
@@ -249,14 +291,20 @@ def main() -> int:
               f"{total_tests} тестов за {elapsed:.1f} с")
         return 1
 
+    if uncounted and args.strict:
+        print(f"ПРОВАЛ (--strict): {len(uncounted)} наборов не сообщили, "
+              f"сколько проверок отработало — «прошло» и «ничего не "
+              f"проверялось» неразличимы")
+        return 1
+
     if not_run and args.strict:
         print(f"ПРОВАЛ (--strict): проверено {ran} наборов из {len(suites)}, "
               f"{len(not_run)} не запускались, {total_tests} тестов за "
               f"{elapsed:.1f} с{skip_note}")
         return 1
 
-    print(f"OK: проверено {ran} наборов из {len(suites)}{not_run_note}, "
-          f"{total_tests} тестов за {elapsed:.1f} с{skip_note}")
+    print(f"OK: проверено {ran} наборов из {len(suites)}{not_run_note}"
+          f"{uncounted_note}, {total_tests} тестов за {elapsed:.1f} с{skip_note}")
 
     if args.baseline:
         print()

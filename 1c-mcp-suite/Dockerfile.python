@@ -67,7 +67,21 @@ COPY mcp-metadata-graph-neo4j/apply_changes.py /app/apply_changes.py
 COPY mcp-metadata-graph-neo4j/bsl_parser.py    /app/bsl_parser.py
 COPY mcp-metadata-graph-neo4j/bsl_resolver.py /app/bsl_resolver.py
 COPY mcp-metadata-graph-neo4j/incremental.py  /app/incremental.py
-COPY mcp-platform-help/server.py              /app/mcp_platform_help.py
+# B-6. Здесь была строка `COPY mcp-platform-help/server.py`. Она удалена, а
+# не дополнена, и вот почему.
+#
+# Общая проверка доставки (tests_delivery.py) на первом прогоне сказала:
+# сервер справки импортирует help_ranking, а COPY его в этот образ нет.
+# Первое побуждение — дописать недостающую строку. Оно неверно: в этом
+# образе нет ни qdrant-client, ни sentence-transformers (см.
+# requirements.txt против requirements-embeddings.txt), то есть поднять
+# platform-help отсюда нельзя в принципе. Сервер справки живёт в
+# Dockerfile.embeddings и собирается там со всей своей обвязкой.
+#
+# То есть строка была наследством тех времён, когда образ был один. Вреда
+# от неё не было ровно до тех пор, пока кто-нибудь не попробовал бы
+# запустить справку из этого образа и не получил ImportError вместо
+# внятного «такого сервера здесь нет».
 
 # v2: query-builder
 # FEAT-1/FEAT-2/QOPT-1: парсер и проверка вынесены из server.py отдельными
