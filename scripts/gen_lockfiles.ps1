@@ -31,7 +31,7 @@
 # репозитории — источник отказов, не имеющих отношения к зависимостям.
 
 param(
-    [ValidateSet("base", "bsl", "embeddings")]
+    [ValidateSet("base", "bsl", "embeddings", "v8std")]
     [string[]]$Only
 )
 
@@ -63,6 +63,17 @@ $pairs = @(
     @{ key   = "embeddings"
        src   = "requirements-embeddings.txt"
        dst   = "requirements-embeddings.lock.txt"
+       image = "python:3.12-slim"
+       prep  = "" },
+    # STD-4: образ v8std-mcp. База — python:3.12-slim, как в Dockerfile.v8std.
+    #
+    # LOCK-1: в gen_lockfiles.sh эта пара была с самого начала, а здесь —
+    # нет. Разошлись два скрипта, делающих одно и то же: на Linux `make lock`
+    # генерировал четыре лок-файла, на Windows — три, и v8std молча оставался
+    # без лока. Правите список — правьте оба файла.
+    @{ key   = "v8std"
+       src   = "requirements-v8std.txt"
+       dst   = "requirements-v8std.lock.txt"
        image = "python:3.12-slim"
        prep  = "" }
 )

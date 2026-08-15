@@ -61,6 +61,13 @@ from progress_log import human_bytes, human_sec
 from bsl_parser import walk_workspace_bsl
 from bsl_resolver import build_call_graph, build_index_from_neo4j
 
+# A-2: сверка «вход против выхода» по всем шагам, где вход известен.
+try:
+    from shortfall import TallyBook
+except ImportError:  # pragma: no cover — путь только для локального запуска
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from shortfall import TallyBook
+
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -68,6 +75,15 @@ logging.basicConfig(
 )
 log = logging.getLogger("metadata-indexer")
 log_bsl = logging.getLogger("metadata-indexer.bsl")
+
+# A-1/A-2. Одна книга счётчиков на прогон: каждый шаг, у которого известен
+# вход, кладёт сюда свою пару чисел, а в конце печатается сводка.
+#
+# Смысл именно в сводке. Отдельный шаг может отчитаться честно, а прогон в
+# целом — потерять треть данных на трёх шагах по одиннадцать процентов:
+# ни один из трёх не выглядит поломкой, и заметить это можно только когда
+# все пары чисел стоят рядом.
+TALLIES = TallyBook(log)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -84,8 +100,14 @@ def run_xml_phase(neo: Neo4j, src_dir: Path, cfg_name: str) -> int:
     """Выполняет фазу 1. Возвращает 0 при успехе, не-0 при ошибке."""
     log.info("Парсим XML…")
     t0 = time.time()
-    objects = walk_workspace(src_dir)
+    # A-1: раньше здесь печаталось только число объектов, а защита стояла
+    # ровно от одного случая — «не нашлось вообще ничего». Потеря 30%
+    # файлов была неотличима от нормы: сколько *.xml лежало на диске, не
+    # знал никто.
+    xml_tally = TALLIES.stage("разбор XML метаданных", unit="файл", log=log)
+    objects = walk_workspace(src_dir, tally=xml_tally)
     log.info("  ✓ объектов: %d (за %.2f с)", len(objects), time.time() - t0)
+    xml_tally.report(hint="проверьте выгрузку: конфигуратор битых XML не даёт")
 
     if not objects:
         log.error("XML-парсер ничего не нашёл — выход")
@@ -170,10 +192,14 @@ def run_bsl_phase(neo: Neo4j, src_dir: Path) -> int:
 
     log_bsl.info("Парсим BSL…")
     t0 = time.time()
-    modules = walk_workspace_bsl(src_dir, modules_info=modules_info)
+    bsl_tally = TALLIES.stage("разбор BSL", unit="файл", log=log_bsl,
+                              min_keep_ratio=0.9)
+    modules = walk_workspace_bsl(src_dir, modules_info=modules_info,
+                                 tally=bsl_tally)
     n_procs = sum(len(m.procedures) for m in modules)
     log_bsl.info("  ✓ модулей: %d, процедур/функций: %d (за %.2f с)",
                  len(modules), n_procs, time.time() - t0)
+    bsl_tally.report(hint="схема путей — classify_bsl_path() в bsl_parser.py")
 
     log_bsl.info("Строим индекс резолвера из Neo4j + модулей…")
     t0 = time.time()
@@ -204,6 +230,21 @@ def run_bsl_phase(neo: Neo4j, src_dir: Path) -> int:
         s["skipped"],
     )
     # 4.6.4: метрики type inference v2 — coverage, inter-procedural, фикс-пойнт.
+    # A-1: сборка графа тоже шаг с известным входом. len(modules) и
+    # n_procs посчитаны выше, а наружу шли только узлы. Расхождение здесь
+    # означает, что модуль разобрался, но в граф не попал, — раньше это
+    # было видно только сверкой двух строк лога глазами.
+    mod_tally = TALLIES.stage("модули → узлы :Module", unit="модуль", log=log_bsl)
+    mod_tally.see(len(modules))
+    mod_tally.keep(s["module_nodes"])
+    mod_tally.report()
+
+    proc_tally = TALLIES.stage("процедуры → узлы :Callable", unit="процедура",
+                               log=log_bsl)
+    proc_tally.see(n_procs)
+    proc_tally.keep(s["callable_nodes"])
+    proc_tally.report()
+
     log_bsl.info(
         "  coverage=%.2f%%; :INFERRED_TYPE=%d; :Type(слой2)=%d; "
         "фикс-пойнт: %d итер.",
@@ -365,6 +406,14 @@ def main() -> int:
         log_bsl.info("Фаза 2 пропущена: %s", bsl_why)
 
     log.info("=" * 60)
+    # A-1/A-2: сводка потерь. Печатается ВСЕГДА, в том числе когда всё
+    # сошлось: строка «✓ шагов с потерями: 0» — это утверждение, которое
+    # можно сравнить со следующим прогоном. Отсутствие строки утверждением
+    # не является.
+    bad = TALLIES.report(log)
+    if bad:
+        log.warning("Прогон завершён, но %d шаг(ов) потеряли данные — "
+                    "смотрите строки ⚠ выше", bad)
     log.info("✓ Готово! Полный прогон занял %s", human_sec(time.time() - t_total))
     log.info("=" * 60)
     return 0

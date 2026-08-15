@@ -4,7 +4,8 @@
 # удобнее собрать в короткие команды. На Windows использовать через WSL или
 # напрямую запускать python3/py.
 
-.PHONY: help check-prereqs up down build restart logs clean lock v8std v8std-check
+.PHONY: help check-prereqs up down build restart logs clean lock v8std v8std-check \
+        test test-full test-strict baseline-update eval-all eval-summary
 
 help:
 	@echo "1C MCP Suite — доступные команды:"
@@ -21,16 +22,33 @@ help:
 	@echo "  make clean           Остановить и удалить volume'ы (ОСТОРОЖНО: удалит данные)"
 	@echo ""
 	@echo "  make test            — все тесты одной командой (CI-1)"
+	@echo "  make test-strict     — то же, но не запущенный набор = провал (A-5)"
 	@echo "  make test-full       — тесты + сверка графа с базой (BASE-1)"
 	@echo "  make baseline-update — перезаписать эталонные числа"
+	@echo "  make eval-all        — прогнать ВСЕ датасеты и показать сводку (EVAL-3)"
+	@echo "  make eval-summary    — сводка по последним отчётам, без прогона"
 
 test:
 	@echo "CI-1: прогон всех наборов тестов"
 	python3 scripts/run_all_tests.py
 
+# A-5. Пропущенный набор — не успех: в CI это провал, а не примечание.
+test-strict:
+	@echo "CI-1 + A-5: не запущенный набор считается провалом"
+	python3 scripts/run_all_tests.py --strict
+
 test-full:
 	@echo "CI-1 + BASE-1: тесты и сверка графа с базой (нужен живой Neo4j)"
 	python3 scripts/run_all_tests.py --baseline
+
+# EVAL-3. Три команды и ручное сравнение с прошлыми отчётами — было.
+# Одна команда и таблица с дельтой — стало.
+eval-all:
+	@echo "EVAL-3: прогон всех датасетов (нужен поднятый стек)"
+	python3 scripts/eval_all.py
+
+eval-summary:
+	@python3 scripts/eval_all.py --summary-only
 
 baseline-update:
 	@echo "BASE-1: перезапись эталонных чисел ТЕКУЩИМ состоянием графа."

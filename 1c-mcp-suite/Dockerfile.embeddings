@@ -39,9 +39,18 @@ COPY mcp_auth.py                           /app/mcp_auth.py
 COPY mcp_http.py                           /app/mcp_http.py
 # TOOL-1/TOOL-2: фильтр набора инструментов (её импортирует start.py)
 COPY mcp_tool_filter.py                    /app/mcp_tool_filter.py
+# A-2: сверка «вход против выхода». Импортируется из hbk_reader и
+# hbk_indexer. Второй экземпляр строки — в Dockerfile.python; расхождение
+# между ними ловит tests_shortfall.py.
+COPY shortfall.py                          /app/shortfall.py
+# OBS-1: единый словарь отказа (answerable / degraded / meaning).
+# Импортируется серверами metadata-graph, query-builder, platform-help и
+# bsl-checker. Копируется в ТРИ образа; расхождение ловит tests_refusal.py.
+COPY refusal.py                            /app/refusal.py
 
 # Справка платформы: сервер
 COPY mcp-platform-help/server.py           /app/mcp_platform_help.py
+COPY mcp-platform-help/help_ranking.py     /app/help_ranking.py
 
 # Справка платформы: новый hybrid-индексатор (задача 4.7, поддержка .hbk 8.3.22+)
 COPY mcp-platform-help-embeddings/hbk_reader.py    /app/hbk_reader.py

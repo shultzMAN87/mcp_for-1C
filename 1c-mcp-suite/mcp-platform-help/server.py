@@ -3,11 +3,34 @@ MCP-сервер: Справка по платформе 1С (с Qdrant)
 ================================================
 Семантический поиск по справке через Qdrant + эмбеддинги.
 Если Qdrant недоступен — фолбэк на текстовый поиск.
+
+DATA-1 закрыта, но не так, как задумывалась
+────────────────────────────────────────────
+Здесь была вторая коллекция (`its_articles`) и два инструмента поверх неё:
+`its_search` и `search_all`. Оба висели вырезанными в `mcp_tool_filter.py`
+с формулировкой «нет данных» с Захода 1, а задача DATA-1 — наполнить эту
+коллекцию — переносилась из плана в план.
+
+Наполнять её не будем. Источником стандартов стал отдельный сервер
+`v8std-mcp` (порт 8765): у него свой корпус, свой цикл обновления и свои
+пять инструментов. Значит, коллекция `its_articles` не появится никогда, а
+код, который её читает, — мёртвый по построению, а не «пока без данных».
+Поэтому он удалён: ~200 строк, переменная `ITS_COLLECTION` и поля `its_*`
+в статистике.
+
+Отдельно про `search_all`. Он обещал в докстринге объединение и ранжирование
+по релевантности, а складывал два списка в разные секции — то есть врал.
+Восстанавливать его поверх двух серверов нельзя: скоры разных источников
+несопоставимы, а межпроцессное слияние потребовало бы сетевого вызова из
+одного MCP-сервера в другой — ровно то, чего в наборе не делают.
+Разграничение источников теперь живёт там, где им пользуются, — в
+.cursor/rules/mcp-tools.mdc.
 """
 
 import os
 import json
 import re
+import sys
 import threading
 import time
 import urllib.request
@@ -18,12 +41,77 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
+# OBS-1: единый словарь отказа.
+try:
+    from refusal import install_answerable_field
+except ImportError:  # pragma: no cover — путь только для локального запуска
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from refusal import install_answerable_field
+
+# Прореживание и перемешивание выдачи (см. help_ranking.py).
+# Импорт намеренно без try/except: если файл забыли положить в образ,
+# сервер должен упасть на старте, а не тихо отдавать выдачу без обработки —
+# ровно этот класс отказов и разбирался в HBK-1.
+from help_ranking import diversify_hits
+
+# FAIL-2. Диагностическое сообщение не должно ронять то, что диагностирует.
+#
+# Приёмка 15 августа, Windows: `_get_model()` не смог загрузить модель,
+# поймал исключение — и упал на печати сообщения об этом. В консоли была
+# cp1251, а в строке стоял знак ⚠, которого в cp1251 нет. Наружу вместо
+# «модель недоступна, работаем без неё» полетел UnicodeEncodeError, и
+# вызов инструмента развалился целиком.
+#
+# Обработчик был написан правильно: поймал, сообщил, поехал дальше. Убило
+# его именно «сообщил». Внутри контейнера этого не видно — там UTF-8, — и
+# ровно поэтому дефект дожил до хоста.
+#
+# Лечение на весь модуль разом: просим потоки заменять непредставимые
+# символы вместо исключения. Печать становится best-effort, чем ей и
+# положено быть: галочка в логе не стоит упавшего запроса.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        # Поток подменён (тесты, перехват вывода) или не текстовый —
+        # молчим: настройка вывода не может быть условием работы сервера.
+        pass
+
+
+def _say(message: str, err: bool = False) -> None:
+    """
+    Диагностическое сообщение, которое не может уронить вызывающего.
+
+    Настройки потоков выше хватает ровно до тех пор, пока `sys.stdout` не
+    подменили после импорта — а его подменяют и тесты, и обёртки запуска.
+    Поэтому вторая линия: печать в try, при отказе — ASCII-приближение,
+    при повторном отказе молчание. Потерять галочку в логе можно,
+    уронить запрос нельзя.
+    """
+    stream = sys.stderr if err else sys.stdout
+    try:
+        print(message, file=stream, flush=True)
+    except Exception:
+        try:
+            print(message.encode("ascii", "replace").decode("ascii"),
+                  file=stream, flush=True)
+        except Exception:
+            pass
+
+
 mcp = FastMCP("1C Platform Help")
+
+# OBS-1. У этого сервера поле `degraded` появилось раньше других (заход
+# A-3), но оно отвечает на другой вопрос: «ответ хуже штатного». На вопрос
+# «можно ли на ответ опереться» отвечает `answerable`, и вот его не было.
+# Разница видна на dense-only: выдача беднее обычной (degraded), но
+# пользоваться ею можно (answerable).
+install_answerable_field(mcp)
+
 logger = logging.getLogger(__name__)
 
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
 COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION", "platform_help")
-ITS_COLLECTION = os.environ.get("ITS_COLLECTION", "its_articles")
 EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
 BM25_MODEL_NAME = os.environ.get("BM25_MODEL", "Qdrant/bm25")
 
@@ -38,12 +126,12 @@ def _get_model():
     if not _model_loaded:
         try:
             from sentence_transformers import SentenceTransformer
-            print(f"Загрузка модели {EMBEDDING_MODEL_NAME}...")
+            _say(f"Загрузка модели {EMBEDDING_MODEL_NAME}...")
             _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-            print(f"  ✓ Модель загружена (dim={_model.get_sentence_embedding_dimension()})")
+            _say(f"  ✓ Модель загружена (dim={_model.get_sentence_embedding_dimension()})")
             _model_loaded = True
         except Exception as e:
-            print(f"  ⚠ Не удалось загрузить модель: {e}")
+            _say(f"  ⚠ Не удалось загрузить модель: {e}")
             _model_loaded = True  # Не пробуем повторно
     return _model
 
@@ -59,7 +147,7 @@ def _embed_query(query):
     return emb[0].tolist()
 
 
-# ─── Sparse BM25 модель (ленивая загрузка, для гибридного ИТС-поиска) ────
+# ─── Sparse BM25 модель (ленивая загрузка, для гибридного поиска) ────────
 
 _sparse_model = None
 _sparse_loaded = False
@@ -70,11 +158,11 @@ def _get_sparse_model():
     if not _sparse_loaded:
         try:
             from fastembed import SparseTextEmbedding
-            print(f"Загрузка BM25-модели {BM25_MODEL_NAME}...")
+            _say(f"Загрузка BM25-модели {BM25_MODEL_NAME}...")
             _sparse_model = SparseTextEmbedding(model_name=BM25_MODEL_NAME)
-            print("  ✓ BM25-модель загружена")
+            _say("  ✓ BM25-модель загружена")
         except Exception as e:
-            print(f"  ⚠ Не удалось загрузить BM25-модель: {e}")
+            _say(f"  ⚠ Не удалось загрузить BM25-модель: {e}")
         _sparse_loaded = True
     return _sparse_model
 
@@ -88,7 +176,7 @@ def _embed_query_sparse(query):
         emb = next(iter(model.query_embed([query])))
         return emb.indices.tolist(), emb.values.tolist()
     except Exception as e:
-        print(f"  ⚠ BM25 query embed failed: {e}")
+        _say(f"  ⚠ BM25 query embed failed: {e}")
         return None
 
 
@@ -104,9 +192,9 @@ def _get_qclient():
     if not _qclient_loaded:
         try:
             from qdrant_client import QdrantClient
-            _qclient = QdrantClient(url=QDRANT_URL, timeout=15)
+            _qclient = QdrantClient(url=QDRANT_URL, timeout=QDRANT_TIMEOUT_SEC)
         except Exception as e:
-            print(f"  ⚠ qdrant-client недоступен: {e}")
+            _say(f"  ⚠ qdrant-client недоступен: {e}")
         _qclient_loaded = True
     return _qclient
 
@@ -148,6 +236,106 @@ _help_collection_kind_at = 0.0
 # почти всегда временный.
 MISSING_RECHECK_SEC = int(os.environ.get("HELP_MISSING_RECHECK_SEC", "30"))
 
+# FAIL-1. Отказ должен быть не только громким, но и быстрым.
+#
+# Приёмка 15 августа: остановили Qdrant, и каждый вызов platform_help_search
+# стал занимать 7,9 с вместо 190 мс. Разбор: формат коллекции кешируется
+# положительно НАВСЕГДА («на ходу не меняется»), поэтому после смерти Qdrant
+# сервер продолжал считать коллекцию гибридной и честно шёл полным
+# маршрутом — сначала таймаут qdrant-client (15 с номинально, ~4 с до
+# отказа соединения), потом таймаут сырого HTTP у legacy-ветки (~4 с), и
+# только затем «unavailable».
+#
+# В чате это восемь секунд тишины на КАЖДЫЙ вопрос про платформу, пока
+# стенд лежит. FIX-14 чинил ровно этот исход — тридцать секунд на первый
+# запрос — и обоснование было такое же: агент считает инструмент
+# неотвечающим и уходит отвечать по памяти. Разница лишь в том, что там
+# это случалось однажды после старта, а здесь — на каждом вызове и без
+# конца.
+#
+# Лечение: считать подряд идущие отказы транспорта и после порога сбрасывать
+# кеш формата в "missing". Тогда третий и последующие вызовы возвращаются
+# мгновенно, а через MISSING_RECHECK_SEC сервер сам перепроверит и поднимет
+# режим обратно, когда Qdrant вернётся. Проверка живости остаётся
+# автоматической — руками перезапускать сервер не нужно.
+QDRANT_TIMEOUT_SEC = int(os.environ.get("HELP_QDRANT_TIMEOUT_SEC", "4"))
+TRANSPORT_FAILS_BEFORE_GIVING_UP = int(
+    os.environ.get("HELP_TRANSPORT_FAILS_BEFORE_GIVING_UP", "2")
+)
+
+_transport_fails = 0
+
+
+def _note_transport_failure(where: str) -> None:
+    """Отказ транспорта. После порога роняем кеш формата в 'missing'."""
+    global _transport_fails, _help_collection_kind, _help_collection_kind_at
+    _transport_fails += 1
+    if _transport_fails < TRANSPORT_FAILS_BEFORE_GIVING_UP:
+        return
+    if _help_collection_kind in (None, "missing"):
+        return
+    _say(f"  ⚠ platform_help: {_transport_fails} отказа транспорта подряд "
+         f"({where}) — считаю коллекцию недоступной и перестаю ждать "
+         f"таймаутов. Перепроверю через {MISSING_RECHECK_SEC} с.", err=True)
+    _help_collection_kind = "missing"
+    _help_collection_kind_at = time.monotonic()
+
+
+# Дешёвая проба вместо тяжёлого клиента. qdrant_client на мёртвом адресе
+# ретраится внутри себя: замер 15 августа дал 11,8 с на одну перепроверку
+# при номинальном таймауте 4 с. Сырой HTTP такого не делает — один заход,
+# один таймаут, предсказуемая цена диагноза.
+QDRANT_PROBE_TIMEOUT_SEC = int(os.environ.get("HELP_QDRANT_PROBE_TIMEOUT_SEC", "2"))
+
+
+def _note_transport_success() -> None:
+    """Любой удавшийся поход в Qdrant обнуляет счётчик отказов."""
+    global _transport_fails
+    _transport_fails = 0
+
+
+def _qdrant_down_now() -> bool:
+    """
+    Известно ли прямо сейчас, что Qdrant недоступен.
+
+    FAIL-1, вторая половина. Первая правка научила быстро отказывать
+    поиск — и только его. Замер 15 августа показал остальное: поиск стал
+    отвечать за 30 мс, а platform_help_lookup продолжал платить 3,9 с и
+    platform_help_stats 7,8 с на каждый вызов. Они ходят в Qdrant своими
+    маршрутами и про кеш формата ничего не знали.
+
+    Чинить надо было не поиск, а вопрос «жив ли Qdrant» — он один на все
+    маршруты. Здесь он и живёт.
+
+    True означает: последняя проверка сказала «нет» и окно перепроверки
+    ещё не истекло, поэтому в сеть ходить незачем. По истечении окна
+    возвращается False — и следующий вызов честно проверит заново.
+    """
+    if _help_collection_kind != "missing":
+        return False
+    return (time.monotonic() - _help_collection_kind_at) < MISSING_RECHECK_SEC
+
+
+def _probe_collection_http() -> "dict | None":
+    """
+    Один заход к коллекции сырым HTTP. None — Qdrant не ответил.
+
+    Возвращает разобранный `result` коллекции: по нему видно и что сервис
+    жив, и сколько в коллекции точек.
+    """
+    try:
+        req = urllib.request.Request(f"{QDRANT_URL}/collections/{COLLECTION_NAME}")
+        with urllib.request.urlopen(req, timeout=QDRANT_PROBE_TIMEOUT_SEC) as resp:
+            return json.loads(resp.read()).get("result") or {}
+    except urllib.error.HTTPError as exc:
+        # Ответ есть — значит, транспорт жив, просто коллекции нет.
+        _note_transport_success()
+        logger.debug("коллекция не найдена: %s", exc)
+        return {}
+    except Exception as exc:
+        logger.debug("Qdrant не отвечает: %s", exc)
+        return None
+
 
 def _detect_help_collection_kind():
     """Формат коллекции platform_help: hybrid / legacy_dense / missing."""
@@ -161,27 +349,35 @@ def _detect_help_collection_kind():
 
     _help_collection_kind_at = time.monotonic()
 
+    # FAIL-1: сначала дешёвая проба. Если Qdrant не отвечает, тяжёлый
+    # клиент с его внутренними ретраями трогать незачем — именно он дал
+    # 11,8 с на перепроверку при номинальном таймауте 4 с.
+    probe = _probe_collection_http()
+    if probe is None:
+        _note_transport_failure("проба коллекции")
+        _help_collection_kind = "missing"
+        return _help_collection_kind
+    _note_transport_success()
+
+    if (probe.get("points_count") or 0) <= 1:
+        # Пусто или только служебная точка с fingerprint.
+        _help_collection_kind = "missing"
+        return _help_collection_kind
+
     client = _get_qclient()
     if client is None:
-        # Без qdrant_client гибрид всё равно не сделать — пробуем
-        # определить через сырой HTTP только наличие данных.
-        try:
-            req = urllib.request.Request(f"{QDRANT_URL}/collections/{COLLECTION_NAME}")
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                data = json.loads(resp.read())
-                if data.get("result", {}).get("points_count", 0) > 0:
-                    _help_collection_kind = "legacy_dense"
-                    return _help_collection_kind
-        except Exception:
-            logger.debug("игнорируем исключение", exc_info=True)
-        _help_collection_kind = "missing"
+        # Без qdrant_client гибрид не сделать, но данные есть — значит,
+        # доступен хотя бы плотный поиск сырым HTTP.
+        _help_collection_kind = "legacy_dense"
         return _help_collection_kind
 
     try:
         info = client.get_collection(COLLECTION_NAME)
     except Exception:
+        _note_transport_failure("get_collection")
         _help_collection_kind = "missing"
         return _help_collection_kind
+    _note_transport_success()
 
     if (info.points_count or 0) <= 1:
         # В коллекции может быть только fingerprint-точка — считаем пустой.
@@ -303,8 +499,14 @@ def _help_search_hybrid(query: str, limit: int = 10, kind_filter: str = ""):
         )
     except Exception as e:
         logger.debug(f"hybrid help search failed: {e}")
+        # FAIL-1: сюда попадают и логические ошибки запроса, и мёртвый
+        # транспорт. Различать их по типу исключения ненадёжно (клиент
+        # заворачивает всё в свои), поэтому считаем любую неудачу похода в
+        # Qdrant — счётчик всё равно обнуляется первым успехом.
+        _note_transport_failure("hybrid")
         return None
 
+    _note_transport_success()
     return _format_help_hits(result.points)
 
 
@@ -335,12 +537,18 @@ def _help_search_legacy_dense(query: str, limit: int = 10, kind_filter: str = ""
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        # FAIL-1: было 10 с. Локальный контейнер в docker-сети либо отвечает
+        # за доли секунды, либо не отвечает вовсе; десять секунд ожидания не
+        # улучшают ни один исход, а складываются с таймаутом гибридной ветки
+        # в те самые восемь секунд на вызов.
+        with urllib.request.urlopen(req, timeout=QDRANT_TIMEOUT_SEC) as resp:
             result = json.loads(resp.read())
     except Exception as e:
         logger.debug(f"legacy dense help search failed: {e}")
+        _note_transport_failure("legacy_dense")
         return None
 
+    _note_transport_success()
     hits = []
     for point in result.get("result", []):
         p = point.get("payload", {})
@@ -367,20 +575,59 @@ def _help_search_legacy_dense(query: str, limit: int = 10, kind_filter: str = ""
     return hits
 
 
+# A-4: сколько раз за жизнь процесса гибрид отваливался на dense-only.
+# Само переключение печатается один раз, чтобы не залить лог, а счётчик
+# уезжает в platform_help_stats — там его увидит человек, который пришёл
+# разбираться, почему выдача стала хуже без единой ошибки в логе.
+_degrade_counts = {"hybrid_to_dense": 0, "empty": 0}
+_degrade_announced: set[str] = set()
+
+
+def _announce_degrade(kind: str, message: str) -> None:
+    """Первое падение режима говорим громко, дальше только считаем."""
+    _degrade_counts[kind] = _degrade_counts.get(kind, 0) + 1
+    if kind in _degrade_announced:
+        return
+    _degrade_announced.add(kind)
+    _say(f"  ⚠ platform_help: {message}", err=True)
+
+
 def _help_search(query: str, limit: int = 10, kind_filter: str = ""):
     """
     Главный диспетчер поиска по platform_help.
     Возвращает (hits, search_type) — search_type: 'hybrid' | 'dense_only' | 'unavailable'
+
+    Берём из Qdrant с запасом: дальше выдача прореживается (дубли чанков
+    одной страницы) и перемешивается по объектам, и без запаса результатов
+    после прореживания стало бы меньше, чем просил вызывающий.
+
+    A-4: деградация гибрид → dense → пусто происходила молча. Поле
+    `search_type` в ответе показывало режим, но его читает модель, а не
+    человек; `logger.debug` при штатном уровне логирования не виден.
+    Качество выдачи падало, а метрики — нет: eval меряет попадание в топ-k,
+    и на простых запросах dense-only справляется.
     """
+    fetch = min(max(limit * 3, limit + 10), 100)
     kind = _detect_help_collection_kind()
     if kind == "hybrid":
-        hits = _help_search_hybrid(query, limit, kind_filter)
+        hits = _help_search_hybrid(query, fetch, kind_filter)
         if hits is not None:
-            return hits, "hybrid"
+            return diversify_hits(hits, limit), "hybrid"
+        _announce_degrade(
+            "hybrid_to_dense",
+            "гибридный поиск не отработал, перехожу на dense-only — "
+            "выдача станет хуже, ошибки при этом не будет. "
+            "Причина в логе уровня DEBUG (LOG_LEVEL=DEBUG).",
+        )
     if kind in ("hybrid", "legacy_dense"):
-        hits = _help_search_legacy_dense(query, limit, kind_filter)
+        hits = _help_search_legacy_dense(query, fetch, kind_filter)
         if hits is not None:
-            return hits, "dense_only"
+            return diversify_hits(hits, limit), "dense_only"
+    _announce_degrade(
+        "empty",
+        f"поиск не вернул ничего (режим коллекции: {kind}) — "
+        f"проверьте help-indexer и коллекцию platform_help",
+    )
     return [], "unavailable"
 
 
@@ -487,33 +734,82 @@ def platform_help_search(query: str, limit: int = 10, kind: str = "") -> str:
     Возвращает найденные чанки с payload: имена (RU/EN), kind, since_version,
     deprecated, availability, returns, text. Для точного поиска по имени
     используй platform_help_lookup.
+
+    Здесь описано, КАК РАБОТАЕТ платформа. Требования к тому, как положено
+    писать код, — в другом сервере: v8std_search / v8std_get_page.
     """
     limit = max(1, min(int(limit), 50))
 
     hits, mode = _help_search(query, limit, kind or "")
 
     if not hits:
-        # Fallback на встроенную справку (20 функций типа СтрДлина, Лев, …).
-        # Это защита от полного "не знаю ничего", если Qdrant ещё не поднялся.
+        # A-3. Фолбэк на встроенную справку из 20 функций.
+        #
+        # 14 августа коллекция была пуста два часа, и этого не поймал никто:
+        # предикат non_empty проходил, поиск по точному имени проходил,
+        # галочки стояли. Диагноз занял четыре итерации, причём неверные
+        # гипотезы строились именно на «поиск же отвечает».
+        #
+        # Двадцать функций против индекса на 26 892 страницы — это не режим
+        # работы, а авария стенда. Поэтому:
+        #   • строка уезжает в stderr, а не только в поле ответа, которое
+        #     читает модель, а не человек;
+        #   • в ответе стоит degraded: true — по нему ловушка в датасете
+        #     отличает «нашлось мало» от «поиска нет».
         bi_hits = _fallback_search(query, limit)
         if bi_hits:
+            _announce_degrade(
+                "empty",
+                f"ОТВЕЧАЮ ВСТРОЕННЫМ СПИСКОМ из {len(set(i['name'] for i in BUILTIN.values()))} "
+                f"функций вместо индекса справки. Это авария, а не режим: "
+                f"проверьте help-indexer и коллекцию {COLLECTION_NAME}.",
+            )
             return json.dumps({
                 "search_type": "builtin_fallback",
+                "degraded": True,
+                # OBS-1: индекса справки нет, отвечаем списком из двадцати
+                # встроенных функций. Опираться на это нельзя: отсутствие
+                # метода в списке ничего не говорит о платформе.
+                "answerable": False,
                 "query": query,
                 "results": bi_hits,
-                "note": "Qdrant не содержит справку; показаны встроенные функции. "
-                        "Возможно, help-indexer ещё не отработал или упал.",
+                "note": "Индекс справки недоступен или пуст; показаны 20 встроенных "
+                        "функций. Это НЕ полная справка платформы — ответы, "
+                        "построенные на этой выдаче, считать неполными. "
+                        "Причина: help-indexer не отработал или коллекция пуста.",
             }, ensure_ascii=False, indent=2)
         return json.dumps({
             "search_type": mode,
+            # Пустой результат при живом поиске — законный ответ, а при
+            # мёртвом — отказ. Отличаются они здесь и больше нигде.
+            "degraded": mode == "unavailable",
+            # OBS-1: и ровно та же граница по `answerable`. «Ничего не
+            # нашлось» — достоверный ответ; «поиск не работает» — нет.
+            "answerable": mode != "unavailable",
+            "meaning": ("Поиск не работает — это НЕ значит, что в справке "
+                        "ничего нет. Про платформу сейчас не известно "
+                        "ничего; не отвечай по памяти."
+                        if mode == "unavailable" else
+                        "Совпадений нет — это достоверный ответ поиска."),
             "query": query,
             "results": [],
-            "note": "Ничего не найдено. Если справка должна быть — "
-                    "проверь help-indexer и статус коллекции platform_help.",
+            "results_count": 0,
+            "note": ("Поиск недоступен: коллекция пуста или Qdrant не отвечает. "
+                     "Проверь help-indexer и platform_help_stats."
+                     if mode == "unavailable" else
+                     "Поиск отработал, совпадений нет. Попробуй другие слова "
+                     "или platform_help_lookup для точного имени."),
         }, ensure_ascii=False, indent=2)
 
     return json.dumps({
         "search_type": mode,  # "hybrid" | "dense_only"
+        # FIX-19 научил: поле, по которому вызывающий отличает норму от
+        # отказа, должно присутствовать в ОБЕИХ ветках. Иначе проверка на
+        # него получает null там, где всё хорошо.
+        "degraded": mode != "hybrid",
+        # OBS-1: dense-only — выдача беднее обычной, но пригодная. Два
+        # поля, два разных вопроса.
+        "answerable": True,
         "query": query,
         "filter": {"kind": kind} if kind else None,
         "results_count": len(hits),
@@ -546,10 +842,31 @@ def platform_help_lookup(name: str, limit: int = 10) -> str:
         parent = parent.strip()
         plain_name = plain_name.strip()
 
+    # FAIL-1: замер 15 августа — 3,9 с на каждый вызов при лежащем Qdrant,
+    # тогда как поиск к тому моменту отвечал за 30 мс. Этот маршрут не
+    # спрашивал, жив ли сервис, и честно выжидал таймаут снова и снова.
+    if _qdrant_down_now():
+        return json.dumps({
+            "error": "поиск по справке недоступен",
+            "degraded": True,
+            "answerable": False,
+            "meaning": ("Это НЕ значит, что такого метода нет в платформе. "
+                        "Индекс справки недоступен — не отвечай по памяти."),
+            "found": False,
+            "results": [],
+            "hint": "Qdrant не отвечает или коллекция пуста; "
+                    "проверь help-indexer и platform_help_stats",
+        }, ensure_ascii=False)
+
     client = _get_qclient()
     if client is None:
         return json.dumps({
             "error": "qdrant_client недоступен",
+            "degraded": True,
+            "answerable": False,
+            "meaning": ("Это НЕ значит, что такого метода нет в платформе."),
+            "found": False,
+            "results": [],
             "hint": "платформа не поднята или коллекция пуста",
         }, ensure_ascii=False)
 
@@ -747,9 +1064,92 @@ def platform_help_kinds() -> str:
         return json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)
 
 
+# OBS-2. Служебная точка id=0, которую пишет hbk_indexer: fingerprint
+# корпуса и время индексации. Читается сырым HTTP — qdrant_client здесь не
+# нужен, а лишняя зависимость в диагностическом пути только мешает.
+FINGERPRINT_POINT_ID = 0
+
+
+def _read_index_fingerprint() -> dict:
+    """
+    Чем и когда собран индекс справки.
+
+    Вопрос «почему поиск не находит X» в заходе по PLAN-5 занял четыре
+    итерации ровно потому, что ответить на него мог только человек с
+    доступом в контейнер. Данные всё это время лежали в коллекции —
+    индексатор пишет их в точку id=0, — но наружу не выходили.
+    """
+    out = {"fingerprint": "", "indexed_at": None, "indexed_at_iso": "",
+           "age_hours": None, "error": ""}
+    try:
+        body = json.dumps({"ids": [FINGERPRINT_POINT_ID], "with_payload": True}).encode()
+        req = urllib.request.Request(
+            f"{QDRANT_URL}/collections/{COLLECTION_NAME}/points",
+            data=body, headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read())
+    except Exception as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"
+        return out
+
+    points = (data.get("result") or [])
+    if not points:
+        out["error"] = ("служебной точки с fingerprint нет — коллекция собрана "
+                        "старым индексатором или не до конца")
+        return out
+
+    payload = points[0].get("payload") or {}
+    out["fingerprint"] = payload.get("fingerprint", "")
+    ts = payload.get("indexed_at")
+    if isinstance(ts, (int, float)) and ts > 0:
+        out["indexed_at"] = int(ts)
+        out["indexed_at_iso"] = time.strftime("%Y-%m-%d %H:%M:%S",
+                                              time.localtime(ts))
+        out["age_hours"] = round((time.time() - ts) / 3600.0, 1)
+    return out
+
+
 @mcp.tool()
 def platform_help_stats() -> str:
-    """Статистика: Qdrant доступен? Сколько документов? Какая схема коллекции?"""
+    """
+    Состояние поиска по справке: доступен ли Qdrant, сколько точек в
+    коллекции, какая у неё схема, чем и когда собран индекс.
+
+    OBS-2: блок `index` отвечает на вопрос «почему поиск не находит X» без
+    раскопок в контейнере — fingerprint корпуса, дата индексации и её
+    возраст. Свежий индекс с чужим fingerprint означает, что справка
+    собрана другим набором .hbk или другой версией пайплайна разбора.
+    """
+    # FAIL-1: 7,8 с на вызов при лежащем Qdrant — два таймаута подряд
+    # (_qdrant_available и чтение fingerprint). Диагностический инструмент,
+    # который сам висит на восемь секунд, приходит на помощь последним.
+    if _qdrant_down_now():
+        return json.dumps({
+            "qdrant_available": False,
+            "qdrant_url": QDRANT_URL,
+            "platform_help_collection": COLLECTION_NAME,
+            "platform_help_points": 0,
+            "platform_help_collection_kind": "missing",
+            "degraded": True,
+            "answerable": False,
+            "platform_help_search_mode": "unavailable",
+            "collection_kind_checked_ago_sec": round(
+                time.monotonic() - _help_collection_kind_at, 1),
+            "index": {"fingerprint": "", "indexed_at": None,
+                      "indexed_at_iso": "", "age_hours": None,
+                      "error": "Qdrant недоступен"},
+            "degradations": dict(_degrade_counts),
+            "transport_fails_in_a_row": _transport_fails,
+            "qdrant_timeout_sec": QDRANT_TIMEOUT_SEC,
+            "note": ("Qdrant признан недоступным, в сеть не ходим ещё "
+                     f"{max(0, round(MISSING_RECHECK_SEC - (time.monotonic() - _help_collection_kind_at)))} с. "
+                     "Это кешированный ответ, а не свежая проверка."),
+            "embedding_model": EMBEDDING_MODEL_NAME,
+            "bm25_model": BM25_MODEL_NAME,
+            "fallback_items": len(set(i["name"] for i in BUILTIN.values())),
+        }, ensure_ascii=False, indent=2)
+
     qdrant_ok = _qdrant_available()
     points_count = 0
 
@@ -764,17 +1164,15 @@ def platform_help_stats() -> str:
 
     model = _get_model()
     help_kind = _detect_help_collection_kind()
-    its_kind = _detect_its_collection_kind()
+    index = _read_index_fingerprint() if qdrant_ok else {
+        "fingerprint": "", "indexed_at": None, "indexed_at_iso": "",
+        "age_hours": None, "error": "Qdrant недоступен",
+    }
 
-    # Проверяем коллекцию ИТС
-    its_count = 0
-    try:
-        req = urllib.request.Request(f"{QDRANT_URL}/collections/{ITS_COLLECTION}")
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read())
-            its_count = data.get("result", {}).get("points_count", 0)
-    except Exception:
-        logger.debug("игнорируем исключение", exc_info=True)
+    # A-3/A-4: degraded — одно поле, по которому видно, что поиск работает
+    # не в полную силу. Считается здесь, а не выводится читателем из трёх
+    # других полей: выводить приходилось человеку, и он выводил неверно.
+    degraded = (not qdrant_ok) or help_kind != "hybrid" or points_count <= 1
 
     return json.dumps({
         "qdrant_available": qdrant_ok,
@@ -782,6 +1180,7 @@ def platform_help_stats() -> str:
         "platform_help_collection": COLLECTION_NAME,
         "platform_help_points": points_count,
         "platform_help_collection_kind": help_kind,  # hybrid | legacy_dense | missing
+        "degraded": degraded,
         # FIX-12: сколько секунд назад определён формат. Без этого по
         # ответу "unavailable" не отличить лежащий Qdrant от кеша,
         # который ещё не перепроверялся.
@@ -790,321 +1189,21 @@ def platform_help_stats() -> str:
             "hybrid (dense + BM25 + RRF)" if help_kind == "hybrid"
             else ("dense only (legacy)" if help_kind == "legacy_dense" else "unavailable")
         ),
-        "its_collection": ITS_COLLECTION,
-        "its_points": its_count,
-        "its_collection_kind": its_kind,
-        "its_search_mode": (
-            "hybrid (dense + BM25 + RRF)" if its_kind == "hybrid"
-            else ("dense only" if its_kind == "legacy_dense" else "unavailable")
-        ),
+        # OBS-2
+        "index": index,
+        # A-4: сколько раз за жизнь процесса поиск сваливался в режим хуже
+        # штатного. Ненулевые числа здесь объясняют «выдача стала хуже, а
+        # ошибок нет».
+        "degradations": dict(_degrade_counts),
+        # FAIL-1: отказы транспорта подряд. Ненулевое значение при
+        # работающем поиске означает, что Qdrant отвечает через раз.
+        "transport_fails_in_a_row": _transport_fails,
+        "qdrant_timeout_sec": QDRANT_TIMEOUT_SEC,
         "embedding_model": EMBEDDING_MODEL_NAME,
         "bm25_model": BM25_MODEL_NAME,
         "model_loaded": model is not None,
         "fallback_items": len(set(i["name"] for i in BUILTIN.values())),
     }, ensure_ascii=False, indent=2)
-
-
-# ─── Поиск по ИТС (гибридный: dense + BM25 sparse + RRF) ────────────────
-#
-# Коллекция ИТС создаётся its_indexer.py в гибридном формате с двумя
-# именованными векторами:
-#   - "dense"  — multilingual-e5-base (cosine), поиск по смыслу
-#   - "sparse" — fastembed Qdrant/bm25, поиск по точным словам
-#
-# Здесь мы делаем гибридный запрос через qdrant_client.query_points с
-# prefetch + RRF (Reciprocal Rank Fusion) — нативный механизм Qdrant 1.10+,
-# который объединяет два списка результатов в один сбалансированный.
-#
-# Если коллекция ещё в старом (плоском) формате — graceful fallback на
-# чисто dense-поиск через сырой HTTP, чтобы не ломать работающие установки
-# до того, как пользователь перезапустит its-indexer.
-
-# Кэш типа коллекции, чтобы не дёргать get_collection на каждый запрос
-_its_collection_kind = None  # "hybrid" | "legacy_dense" | "missing"
-
-
-def _detect_its_collection_kind():
-    """Определяет формат коллекции ИТС: hybrid, legacy_dense или missing."""
-    global _its_collection_kind
-    if _its_collection_kind is not None:
-        return _its_collection_kind
-
-    client = _get_qclient()
-    if client is None:
-        # Fallback: смотрим через сырой HTTP, точно ли коллекция есть
-        try:
-            req = urllib.request.Request(f"{QDRANT_URL}/collections/{ITS_COLLECTION}")
-            with urllib.request.urlopen(req, timeout=3) as resp:
-                data = json.loads(resp.read())
-                if data.get("result", {}).get("points_count", 0) > 0:
-                    _its_collection_kind = "legacy_dense"
-                    return _its_collection_kind
-        except Exception:
-            logger.debug("игнорируем исключение", exc_info=True)
-        _its_collection_kind = "missing"
-        return _its_collection_kind
-
-    try:
-        info = client.get_collection(ITS_COLLECTION)
-    except Exception:
-        _its_collection_kind = "missing"
-        return _its_collection_kind
-
-    if (info.points_count or 0) <= 0:
-        _its_collection_kind = "missing"
-        return _its_collection_kind
-
-    try:
-        params = info.config.params
-        vectors = params.vectors
-        sparse = getattr(params, "sparse_vectors", None)
-        is_hybrid = (
-            isinstance(vectors, dict)
-            and "dense" in vectors
-            and bool(sparse)
-            and "sparse" in sparse
-        )
-        _its_collection_kind = "hybrid" if is_hybrid else "legacy_dense"
-    except Exception:
-        _its_collection_kind = "legacy_dense"
-
-    return _its_collection_kind
-
-
-def _its_available():
-    return _detect_its_collection_kind() != "missing"
-
-
-def _format_its_hits(points):
-    """Унифицированно форматирует результаты ИТС-поиска (qdrant_client ScoredPoint)."""
-    hits = []
-    for point in points:
-        p = point.payload or {}
-        hits.append({
-            "score": round(point.score or 0, 4),
-            "title": p.get("title", ""),
-            "category": p.get("category", ""),
-            "std_number": p.get("std_number", ""),
-            "filename": p.get("filename", ""),
-            "text": p.get("text", "")[:500],
-        })
-    return hits
-
-
-def _its_search_hybrid(query, limit=10, category_filter=None):
-    """
-    Гибридный поиск через qdrant_client.query_points + RRF.
-
-    Шаги:
-      1) Считаем dense-вектор запроса (e5).
-      2) Считаем sparse BM25-вектор запроса.
-      3) Отправляем в Qdrant ОДИН запрос с двумя prefetch-ветками
-         (dense → top-K, sparse → top-K) и финальным fusion=RRF.
-      4) Qdrant сам объединит и переранжирует результаты.
-    """
-    client = _get_qclient()
-    if client is None:
-        return None
-
-    from qdrant_client import models
-
-    dense_vec = _embed_query(query)
-    sparse_pair = _embed_query_sparse(query)
-
-    if not dense_vec and not sparse_pair:
-        return None
-
-    # Префетч примерно в 4 раза шире финального лимита — это даёт RRF
-    # достаточно кандидатов для качественного объединения.
-    prefetch_limit = max(limit * 4, 20)
-    prefetch = []
-
-    if dense_vec:
-        prefetch.append(
-            models.Prefetch(
-                query=dense_vec,
-                using="dense",
-                limit=prefetch_limit,
-            )
-        )
-
-    if sparse_pair:
-        indices, values = sparse_pair
-        prefetch.append(
-            models.Prefetch(
-                query=models.SparseVector(indices=indices, values=values),
-                using="sparse",
-                limit=prefetch_limit,
-            )
-        )
-
-    # Если по какой-то причине осталась только одна ветка — query_points
-    # отработает и без fusion (просто вернёт результаты этой ветки).
-    query_filter = None
-    if category_filter:
-        query_filter = models.Filter(
-            must=[
-                models.FieldCondition(
-                    key="category",
-                    match=models.MatchValue(value=category_filter),
-                )
-            ]
-        )
-
-    try:
-        result = client.query_points(
-            collection_name=ITS_COLLECTION,
-            prefetch=prefetch,
-            query=models.FusionQuery(fusion=models.Fusion.RRF),
-            query_filter=query_filter,
-            limit=limit,
-            with_payload=True,
-        )
-    except Exception as e:
-        print(f"  ⚠ Hybrid search failed: {e}")
-        return None
-
-    return _format_its_hits(result.points)
-
-
-def _its_search_legacy_dense(query, limit=10, category_filter=None):
-    """
-    Fallback: чисто dense-поиск через сырой HTTP — для коллекций,
-    созданных старым (v2) индексатором с одним вектором без имени.
-    """
-    vector = _embed_query(query)
-    if not vector:
-        return None
-
-    payload = {
-        "vector": vector,
-        "limit": limit,
-        "with_payload": True,
-    }
-    if category_filter:
-        payload["filter"] = {
-            "must": [{"key": "category", "match": {"value": category_filter}}]
-        }
-
-    data = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        f"{QDRANT_URL}/collections/{ITS_COLLECTION}/points/search",
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            result = json.loads(resp.read())
-    except Exception as e:
-        print(f"  ⚠ Legacy dense search failed: {e}")
-        return None
-
-    hits = []
-    for point in result.get("result", []):
-        p = point.get("payload", {})
-        hits.append({
-            "score": round(point.get("score", 0), 4),
-            "title": p.get("title", ""),
-            "category": p.get("category", ""),
-            "std_number": p.get("std_number", ""),
-            "filename": p.get("filename", ""),
-            "text": p.get("text", "")[:500],
-        })
-    return hits
-
-
-def _its_search(query, limit=10, category_filter=None):
-    """Главный диспетчер ИТС-поиска: hybrid если возможно, иначе legacy."""
-    kind = _detect_its_collection_kind()
-    if kind == "hybrid":
-        hits = _its_search_hybrid(query, limit, category_filter)
-        if hits is not None:
-            return hits, "hybrid"
-    if kind in ("hybrid", "legacy_dense"):
-        hits = _its_search_legacy_dense(query, limit, category_filter)
-        if hits is not None:
-            return hits, "dense_only"
-    return [], "unavailable"
-
-
-@mcp.tool()
-def its_search(query: str, limit: int = 10, category: str = "") -> str:
-    """
-    Гибридный поиск по статьям ИТС (its.1c.ru): dense (e5) + BM25 + RRF.
-    Находит стандарты разработки, методические рекомендации, документацию.
-
-    query    — строка поиска (например "правила именования переменных",
-               "обработка ошибок", "#std466")
-    limit    — максимум результатов
-    category — необязательный фильтр по категории
-               ("Стандарты разработки", "Методические рекомендации", ...)
-    """
-    if not _its_available():
-        return json.dumps(
-            {"message": "Коллекция ИТС пуста или недоступна. Запустите its-indexer."},
-            ensure_ascii=False,
-        )
-
-    hits, mode = _its_search(query, limit, category or None)
-    if not hits:
-        return json.dumps(
-            {"message": "Ничего не найдено", "search_type": mode},
-            ensure_ascii=False,
-        )
-
-    return json.dumps(
-        {
-            "search_type": mode,  # "hybrid" | "dense_only"
-            "source": "its.1c.ru",
-            "query": query,
-            "results": hits,
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
-
-
-@mcp.tool()
-def search_all(query: str, limit: int = 5) -> str:
-    """
-    Поиск по ВСЕМ источникам: справка платформы + статьи ИТС.
-    Объединяет результаты и сортирует по релевантности.
-
-    query — строка поиска
-    limit — максимум результатов из каждого источника
-    """
-    results = {"query": query, "sources": []}
-
-    # Справка платформы — через новый hybrid-диспетчер
-    help_hits, help_mode = _help_search(query, limit)
-    if help_hits:
-        results["sources"].append({
-            "source": "Справка платформы",
-            "search_type": help_mode,
-            "results": help_hits,
-        })
-
-    # ИТС
-    if _its_available():
-        its_hits, mode = _its_search(query, limit)
-        if its_hits:
-            results["sources"].append({
-                "source": "ИТС (its.1c.ru)",
-                "search_type": mode,
-                "results": its_hits,
-            })
-
-    if not results["sources"]:
-        # Фолбэк на встроенную справку
-        fb = _fallback_search(query, limit)
-        if fb:
-            results["sources"].append({
-                "source": "Встроенная справка",
-                "results": fb,
-            })
-
-    return json.dumps(results, ensure_ascii=False, indent=2)
 
 
 # ─── Инициализация ────────────────────────────────────────────────────────
@@ -1141,12 +1240,12 @@ def _warmup() -> None:
         # Прогреваем не только загрузку весов, но и первый forward: ленивая
         # инициализация внутри torch тоже стоит секунд.
         model.encode(["query: прогрев"], show_progress_bar=False)
-        print("  ✓ Модель прогрета, поиск готов", flush=True)
+        _say("  ✓ Модель прогрета, поиск готов")
     except Exception as exc:
         # Прогрев — оптимизация, а не условие работы. Упал — просто вернулись
         # к ленивой загрузке, о чём и сообщаем.
-        print(f"  ⚠ Прогрев не удался ({type(exc).__name__}), "
-              f"модель загрузится при первом запросе", flush=True)
+        _say(f"  ⚠ Прогрев не удался ({type(exc).__name__}), "
+             f"модель загрузится при первом запросе")
 
 
 if os.environ.get("HELP_WARMUP", "1").strip().lower() not in ("0", "false", "no"):

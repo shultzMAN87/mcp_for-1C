@@ -50,11 +50,20 @@ from mcp.server.fastmcp import FastMCP
 # FIX-3: три состояния графа вместо одного «Neo4j недоступен». В образе все
 # модули лежат плоско в /app, при запуске из репозитория — в соседнем каталоге.
 try:
-    from graph_state import GRAPH_OK, graph_error, graph_state
+    # B-1: после перехода на общую точку сам graph_state()/graph_error()
+    # здесь больше не зовутся — их вызывает make_guard внутри себя.
+    from graph_state import make_guard
 except ImportError:  # pragma: no cover — путь только для локального запуска
     sys.path.insert(
         0, str(Path(__file__).resolve().parent.parent / "mcp-metadata-graph"))
-    from graph_state import GRAPH_OK, graph_error, graph_state
+    from graph_state import make_guard
+
+# OBS-1: единый словарь отказа. Тот же приём с путём, что и у graph_state.
+try:
+    from refusal import install_answerable_field
+except ImportError:  # pragma: no cover — путь только для локального запуска
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from refusal import install_answerable_field
 
 from query_check import (AttrInfo, MetadataProvider, ObjectInfo, VIRTUAL_TABLES,
                          trim_fields_payload,
@@ -63,6 +72,12 @@ from query_optimize_rules import analyze
 from query_parser import TABLE_PREFIXES
 
 mcp = FastMCP("1C Query Builder")
+
+# OBS-1. Отказы графа этот сервер уже отдавал в общем формате через
+# graph_error() — не хватало симметрии: на удачных ответах поля не было,
+# и проверка на него получала null там, где всё хорошо (урок FIX-19).
+install_answerable_field(mcp)
+
 logger = logging.getLogger(__name__)
 
 NEO4J_URL = os.environ.get("NEO4J_URL", "http://neo4j:7474")
@@ -81,7 +96,22 @@ if not NEO4J_PASS:
 
 # ─── Neo4j клиент ─────────────────────────────────────────────────────────
 
-def _neo4j_query(cypher, parameters=None):
+# B-2. Таймаут запроса к Neo4j.
+#
+# FAIL-1 опустил таймауты platform-help до четырёх секунд с обоснованием:
+# локальный контейнер в docker-сети либо отвечает за доли секунды, либо не
+# отвечает вовсе. Здесь оно применимо не целиком — тяжёлые запросы к графу
+# идут секундами (metadata_stats замерен на 2,1 с), и резать их таймаут
+# опасно: на большем графе или под нагрузкой сломается то, что работает.
+#
+# Поэтому таймаута два. Рабочие запросы остаются на десяти секундах,
+# короткий берёт только проба живости — ей отвечает count(*) с меткой, и
+# если он не уложился в три секунды, база всё равно непригодна.
+NEO4J_TIMEOUT_SEC = int(os.environ.get("NEO4J_HTTP_TIMEOUT_SEC", "10"))
+NEO4J_PROBE_TIMEOUT_SEC = int(os.environ.get("NEO4J_PROBE_TIMEOUT_SEC", "3"))
+
+
+def _neo4j_query(cypher, parameters=None, timeout=None):
     auth = base64.b64encode(f"{NEO4J_USER}:{NEO4J_PASS}".encode()).decode()
     payload = json.dumps({
         "statements": [{
@@ -98,7 +128,8 @@ def _neo4j_query(cypher, parameters=None):
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(
+            req, timeout=timeout or NEO4J_TIMEOUT_SEC) as resp:
         result = json.loads(resp.read())
     errors = result.get("errors", [])
     if errors:
@@ -118,10 +149,20 @@ def _neo4j_rows(cypher, params=None):
     return rows
 
 
-def _guard():
-    """None, если граф готов; иначе готовый JSON-ответ (FIX-3)."""
-    state, detail = graph_state(_neo4j_query)
-    return None if state == GRAPH_OK else graph_error(state, detail)
+# B-1. Здесь лежала копия тела make_guard(), слово в слово. Из-за неё
+# правка общей точки этот сервер бы не покрыла — общая точка была
+# написана, а один из двух её потребителей ею не пользовался.
+#
+# Теперь guard берётся оттуда же, откуда у metadata-graph, и вместе с ним
+# приезжает кеш вердикта «Neo4j недоступна»: без него каждый вызов
+# query_fields / query_validate / query_build стоил четырёх секунд, пока
+# база лежит.
+def _neo4j_probe(cypher, parameters=None):
+    """Проба живости: тот же запрос, но с коротким таймаутом (B-2)."""
+    return _neo4j_query(cypher, parameters, timeout=NEO4J_PROBE_TIMEOUT_SEC)
+
+
+_guard = make_guard(_neo4j_probe)
 
 
 # ─── Провайдер метаданных поверх графа ────────────────────────────────────

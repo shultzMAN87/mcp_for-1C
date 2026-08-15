@@ -15,6 +15,7 @@ MCP-сервер: Графовый поиск по метаданным 1С (v2.
 import os
 import json
 import re
+import time
 import base64
 import urllib.request
 import urllib.error
@@ -43,6 +44,11 @@ from graph_state import (            # noqa: E402
     GRAPH_OK, GRAPH_EMPTY, GRAPH_UNAVAILABLE,
     graph_state, graph_error, make_guard,
     NON_CONFIG_CALL_REASONS, NON_CONFIG_REASONS_CYPHER,
+)
+# OBS-1: единый словарь отказа. Формат родился здесь (FIX-3) и переехал
+# в общий модуль — им теперь пользуются все четыре своих сервера.
+from refusal import (               # noqa: E402
+    install_answerable_field, note_degraded,
 )
 
 try:
@@ -91,6 +97,11 @@ except ImportError:
 
 
 mcp = FastMCP("1C Metadata Graph")
+
+# OBS-1. Поле `answerable` во всех ответах, включая удачные (симметрия по
+# уроку FIX-19), и у инструментов, которых ещё нет. Ставится до регистрации
+# инструментов — ниже по файлу и в server_v3_*.py.
+install_answerable_field(mcp)
 logger = logging.getLogger(__name__)
 
 # Опциональный кэш для тяжёлых read-only запросов
@@ -116,7 +127,22 @@ if not NEO4J_PASS:
 
 
 # ═══════════════ START ═══════════════
-def _neo4j_query(cypher, parameters=None):
+# B-2. Таймаут запроса к Neo4j.
+#
+# FAIL-1 опустил таймауты platform-help до четырёх секунд с обоснованием:
+# локальный контейнер в docker-сети либо отвечает за доли секунды, либо не
+# отвечает вовсе. Здесь оно применимо не целиком — тяжёлые запросы к графу
+# идут секундами (metadata_stats замерен на 2,1 с), и резать их таймаут
+# опасно: на большем графе или под нагрузкой сломается то, что работает.
+#
+# Поэтому таймаута два. Рабочие запросы остаются на десяти секундах,
+# короткий берёт только проба живости — ей отвечает count(*) с меткой, и
+# если он не уложился в три секунды, база всё равно непригодна.
+NEO4J_TIMEOUT_SEC = int(os.environ.get("NEO4J_HTTP_TIMEOUT_SEC", "10"))
+NEO4J_PROBE_TIMEOUT_SEC = int(os.environ.get("NEO4J_PROBE_TIMEOUT_SEC", "3"))
+
+
+def _neo4j_query(cypher, parameters=None, timeout=None):
     auth = base64.b64encode(f"{NEO4J_USER}:{NEO4J_PASS}".encode()).decode()
     payload = json.dumps({
         "statements": [{
@@ -134,7 +160,8 @@ def _neo4j_query(cypher, parameters=None):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(
+                req, timeout=timeout or NEO4J_TIMEOUT_SEC) as resp:
             result = json.loads(resp.read())
     except urllib.error.URLError as e:
         # Транспортная ошибка (Neo4j недоступен/таймаут) — лог + raise, чтобы
@@ -168,7 +195,13 @@ def _neo4j_available():
 # FastMCP и требует NEO4J_PASSWORD.
 _graph_state = lambda: graph_state(_neo4j_query)          # noqa: E731
 _graph_error = graph_error
-_graph_guard = make_guard(_neo4j_query)
+def _neo4j_probe(cypher, parameters=None):
+    """Проба живости: тот же запрос, но с коротким таймаутом (B-2)."""
+    return _neo4j_query(cypher, parameters, timeout=NEO4J_PROBE_TIMEOUT_SEC)
+
+
+# B-1: guard теперь кеширует вердикт «недоступна» — см. make_guard().
+_graph_guard = make_guard(_neo4j_probe)
 
 
 def _neo4j_rows(cypher, params=None):
@@ -204,6 +237,13 @@ def _neo4j_count(cypher, params=None):
     except Exception as e:
         logger.warning("Neo4j count failed (returning 0): %s; cypher head: %s",
                        e, (cypher or "")[:200].replace("\n", " "))
+        # OBS-1: ноль вместо счётчика — единственное место в этом сервере,
+        # где отказ превращается в нормально выглядящий ответ. Остальные
+        # пути бросают исключение и видны на уровне протокола, а здесь
+        # `total: 0, items: []` неотличимо от честного «ничего не нашлось».
+        # Ответ при этом остаётся пригодным: просто беднее обычного —
+        # ровно случай `degraded`, а не `answerable: false`.
+        note_degraded("счётчик не досчитался: Neo4j вернула ошибку")
     return 0
 # ═══════════════ END ═══════════════
 
@@ -211,7 +251,23 @@ def _neo4j_count(cypher, params=None):
 # ─── MCP инструменты ─────────────────────────────────────────────────────
 
 @mcp.tool()
-@cached(ttl=600)
+# OBS-1, находка приёмки 15 августа. Здесь стоял `@cached(ttl=600)`.
+#
+# Замер с остановленной Neo4j: пятнадцать инструментов честно отвалились по
+# таймауту за 3,85 с каждый, а `metadata_stats` ответил за 15 мс — то есть
+# не ходил в базу вовсе. Ответ приехал из кеша, снятого несколькими
+# минутами раньше на живом стенде: счётчики объектов, отпечатки индекса,
+# `answerable: true`. Полная картина здоровья работающего графа в момент,
+# когда графа нет.
+#
+# Диагностический инструмент — единственный, кому кеш противопоказан
+# полностью. К нему приходят с вопросом «жив ли граф прямо сейчас», и
+# кешированный ответ на этот вопрос не просто устарел, а перевёрнут.
+# Десять минут — ровно тот срок, за который человек успевает поверить, что
+# всё в порядке, и пойти искать причину не там.
+#
+# Цена отказа от кеша — около двух секунд на вызов (замер mg-203 на живом
+# стенде). Инструмент диагностический, зовут его редко.
 def metadata_stats() -> str:
     """
     Статистика графа: слой метаданных (объекты, реквизиты, типы) и слой кода
@@ -304,10 +360,42 @@ def metadata_stats() -> str:
         )
     }
 
+    # OBS-2: чем и когда собран граф. Узлы :Fingerprint пишет индексер
+    # (graph_writer.fingerprint_write) — значение, режим и время. Наружу
+    # это до сих пор не выходило, и на вопрос «граф вообще пересобирался
+    # после правки выгрузки?» отвечал только запрос к базе руками.
+    index_block = {"xml": {}, "bsl": {}}
+    for kind, key in (("metadata_xml", "xml"), ("bsl_source", "bsl")):
+        rows = _neo4j_rows(
+            "MATCH (n:Fingerprint {kind: $kind}) "
+            "RETURN n.value AS value, n.mode AS mode, n.updated_at AS updated_at",
+            {"kind": kind},
+        )
+        if not rows:
+            index_block[key] = {
+                "fingerprint": "",
+                "note": "отпечатка нет — этот слой ни разу не индексировался",
+            }
+            continue
+        row = rows[0]
+        updated = row.get("updated_at")
+        entry = {
+            "fingerprint": (row.get("value") or "")[:12],
+            "mode": row.get("mode") or "",
+        }
+        if isinstance(updated, (int, float)) and updated > 0:
+            # graph_writer пишет timestamp() Neo4j — миллисекунды.
+            secs = updated / 1000.0
+            entry["indexed_at_iso"] = time.strftime("%Y-%m-%d %H:%M:%S",
+                                                    time.localtime(secs))
+            entry["age_hours"] = round((time.time() - secs) / 3600.0, 1)
+        index_block[key] = entry
+
     return json.dumps({
         "metadata":    metadata_block,
         "code":        code_block,
         "relations":   relations,
+        "index":       index_block,
         "graph_empty": metadata_block["objects"] == 0 and code_block["callables"] == 0,
     }, ensure_ascii=False, indent=2)
 

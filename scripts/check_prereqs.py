@@ -33,6 +33,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+# B-3. Печать не должна ронять скрипт.
+#
+# `FAIL-2`: на приёмке 15 августа набор упал с UnicodeEncodeError на знаке
+# ⚠ — консоль была cp1251, а в строке стоял символ, которого в ней нет.
+# Тогда починили сервер справки и дочерние процессы run_all_tests, но сами
+# хостовые скрипты остались: у них вывод уходит в консоль напрямую, и
+# `$OutputEncoding` в PowerShell тут не помогает — он про то, чем консоль
+# ЧИТАЕТ вывод, а не чем Python его кодирует.
+#
+# Воспроизводится одной строкой:
+#     PYTHONIOENCODING=cp1251 python3 scripts/eval_all.py --summary-only
+#
+# errors=replace, а не encoding=utf-8: подмена кодировки дала бы кракозябры
+# в cp1251-консоли, а замена — всего лишь «?» вместо галочки. Испортить
+# украшение можно, уронить diagnostics-скрипт нельзя. Особенно
+# check_prereqs: к нему идут именно тогда, когда что-то не работает.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
+
 # ─── Цвета в консоли ─────────────────────────────────────────────────────────
 # ANSI escape-коды. Автоматически отключаются, если:
 #   - выход не в TTY (пайп, редирект в файл)
@@ -183,6 +206,26 @@ def check_env_file() -> CheckResult:
     return ok(".env существует")
 
 
+# DOC-1. LLM-ключи нужны ТОЛЬКО оркестратору OpenCode — сервису из
+# профиля `opencode`, который в связке с Cursor не поднимается вообще.
+# Проверка при этом ставила FAIL и красила весь отчёт: она кричала о том,
+# что не влияет.
+#
+# Это зеркало той же болезни, ради которой затеян весь заход. Там отказ
+# выглядел как успех, здесь успех выглядит как отказ, и цена одинаковая —
+# в отчёт перестают смотреть. Красный, который горит всегда, ничего не
+# сообщает.
+#
+# Теперь: если профиль `opencode` не запрошен, отсутствие ключей — WARN с
+# пояснением, за что они отвечают. Профиль считаем запрошенным, если он
+# перечислен в COMPOSE_PROFILES (переменная окружения или .env).
+
+
+def _opencode_requested(env_vars: dict[str, str]) -> bool:
+    raw = os.environ.get("COMPOSE_PROFILES") or env_vars.get("COMPOSE_PROFILES", "")
+    return "opencode" in [p.strip() for p in raw.split(",") if p.strip()]
+
+
 def check_llm_key(env_vars: dict[str, str]) -> CheckResult:
     """Хотя бы один LLM-ключ задан и не плейсхолдер."""
     openrouter = env_vars.get("OPENROUTER_API_KEY", "")
@@ -195,11 +238,17 @@ def check_llm_key(env_vars: dict[str, str]) -> CheckResult:
         return ok("LLM-ключ задан: OPENROUTER_API_KEY")
     if anthropic_ok:
         return ok("LLM-ключ задан: ANTHROPIC_API_KEY")
-    return fail(
-        "Ни один LLM-ключ не задан (или все — плейсхолдеры)",
-        "Заполните в .env хотя бы одну переменную:\n"
-        "  OPENROUTER_API_KEY=sk-or-v1-...\n"
-        "  ANTHROPIC_API_KEY=sk-ant-...",
+
+    hint = ("Заполните в .env хотя бы одну переменную:\n"
+            "  OPENROUTER_API_KEY=sk-or-v1-...\n"
+            "  ANTHROPIC_API_KEY=sk-ant-...")
+    if _opencode_requested(env_vars):
+        return fail("Ни один LLM-ключ не задан (или все — плейсхолдеры)", hint)
+    return warn(
+        "LLM-ключи не заданы — для связки с Cursor это норма",
+        "Ключи нужны только оркестратору OpenCode (профиль `opencode`), "
+        "который здесь не поднимается. Пять MCP-серверов работают без них.\n"
+        "Если всё же нужен OpenCode:\n" + hint,
     )
 
 
@@ -207,6 +256,10 @@ def check_llm_models(env_vars: dict[str, str]) -> CheckResult:
     """LLM_MODEL_STRONG и LLM_MODEL_FAST заданы."""
     missing = [k for k in ("LLM_MODEL_STRONG", "LLM_MODEL_FAST") if not env_vars.get(k)]
     if missing:
+        if not _opencode_requested(env_vars):
+            # DOC-1, вторая половина: те же модели и тот же адресат.
+            return ok(f"Модели оркестратора не заданы ({', '.join(missing)}) — "
+                      f"профиль `opencode` не поднят, они не нужны")
         return warn(
             f"Не заданы: {', '.join(missing)}",
             "В .env пропишите модели оркестратора, например:\n"

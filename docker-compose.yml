@@ -346,7 +346,6 @@ services:
       - METRICS_DASHBOARD=false
       - QDRANT_URL=http://qdrant:6333
       - QDRANT_COLLECTION=platform_help
-      - ITS_COLLECTION=its_articles
       - EMBEDDING_MODEL=intfloat/multilingual-e5-base
       - BM25_MODEL=Qdrant/bm25
     # CFG-2: /healthz добавляет mcp_http.py. Проверяем через python —
@@ -360,8 +359,15 @@ services:
     depends_on:
       qdrant:
         condition: service_healthy
-      help-indexer:
-        condition: service_started
+      # help-indexer здесь БЫЛ и был убран. Серверу поиска индексатор не
+      # нужен — он ходит в Qdrant. Зависимость давала compose право
+      # запускать индексатор при каждом подъёме сервера, вместе со всем,
+      # что лежит в переменных окружения текущей оболочки. 14.08.2026 это
+      # стоило пустой коллекции: в сессии остался HELP_REINDEX_MODE=force,
+      # и каждый запуск scripts/eval.py удалял индекс и начинал сборку
+      # заново — то есть измерение уничтожало измеряемое.
+      # Переиндексацию запускать явно и разово:
+      #   docker compose run --rm -e REINDEX_MODE=force help-indexer
     volumes:
       - mcp-metrics:/data/metrics
     restart: unless-stopped

@@ -58,12 +58,20 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
 
 from progress_log import ProgressLogger
+
+# A-2: общий счётчик «вход против выхода» (см. shortfall.py).
+try:
+    from shortfall import Tally
+except ImportError:  # pragma: no cover — путь только для локального запуска
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from shortfall import Tally
 
 log = logging.getLogger(__name__)
 
@@ -1136,6 +1144,7 @@ def classify_bsl_path(rel_path_posix: str) -> Optional[tuple[str, str, str, Opti
 def walk_workspace_bsl(
     root: Path,
     modules_info: Optional[dict[str, dict]] = None,
+    tally: Optional[Tally] = None,
 ) -> list[ParsedModule]:
     """
     Обходит все *.bsl в `root`, парсит, возвращает список ParsedModule.
@@ -1158,6 +1167,18 @@ def walk_workspace_bsl(
     prog = ProgressLogger(log, "разбор BSL", total=len(paths),
                           every_sec=20.0, unit="файл") if len(paths) >= 500 else None
 
+    # A-1: число файлов известно здесь (оно нужно прогресс-бару), а наружу
+    # уходило только число модулей. Файл, не подошедший под известную схему
+    # путей, уезжал в log.debug — при штатном INFO это молчание. Смена
+    # раскладки каталогов обрушила бы классификацию тысяч модулей, а лог
+    # сказал бы «✓ модулей: 8000» и ни слова о том, что файлов было 14 000.
+    own_tally = tally is None
+    t = tally or Tally("разбор BSL", unit="файл", log=log,
+                       # Ниже девяти десятых на реальной выгрузке не бывает:
+                       # схема путей покрывает все штатные размещения модулей.
+                       min_keep_ratio=0.9)
+    t.see(len(paths))
+
     for bsl_path in paths:
         if prog:
             prog.step()
@@ -1165,6 +1186,7 @@ def walk_workspace_bsl(
         classified = classify_bsl_path(rel)
         if not classified:
             log.debug("BSL вне известной схемы путей — пропуск: %s", rel)
+            t.drop("вне схемы путей", example=rel)
             continue
         module_id, module_kind, parent_metadata_id, role = classified
 
@@ -1194,10 +1216,15 @@ def walk_workspace_bsl(
                 is_server=is_server,
                 is_client=is_client,
             ))
+            t.keep()
         except Exception as e:
             log.warning("Ошибка парсинга %s: %s", rel, e)
+            t.drop("ошибка разбора", example=rel, alarm=True)
             continue
 
     if prog:
         prog.done(extra=f"модулей в разборе {len(modules)}")
+    if own_tally:
+        t.report(hint="схема путей — classify_bsl_path(); если выгрузка "
+                      "сменила раскладку каталогов, править надо там")
     return modules

@@ -1,0 +1,878 @@
+{
+  "meta": {
+    "dataset": "/app/evals/datasets/platform_help.jsonl",
+    "endpoint": "http://mcp-platform-help:8003/mcp",
+    "started_at": "2026-08-15T07:15:51.087988+00:00",
+    "finished_at": "2026-08-15T07:16:34.801930+00:00",
+    "duration_s": 43.713942,
+    "examples_total": 15
+  },
+  "summary": {
+    "total": 15,
+    "hard_passed": 0,
+    "hard_pass_rate": 0.0,
+    "soft_total": 11,
+    "soft_passed": 0,
+    "soft_pass_rate": 0.0,
+    "examples_with_mrr": 10,
+    "recall_at_1": 0.0,
+    "recall_at_5": 0.0,
+    "recall_at_10": 0.0,
+    "mrr": 0.0,
+    "latency_ms": {
+      "min": 28.833579999627545,
+      "median": 41.20882999995956,
+      "p95": 9191.579500000622,
+      "max": 11780.885590000253
+    },
+    "search_type_dist": {
+      "unavailable": 11,
+      "unknown": 4
+    },
+    "transport_errors": 0,
+    "tool_errors": 0
+  },
+  "examples": [
+    {
+      "id": "ph-001",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "разделить строку",
+        "limit": 10
+      },
+      "notes": "типовая задача: разрезать строку по разделителю",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 8081.876890000785,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "СтрРазделить",
+              "StrSplit"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "kinds": [
+              "method"
+            ],
+            "first_match_rank": null,
+            "observed_kinds": []
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-002",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "длина строки",
+        "limit": 10
+      },
+      "notes": "базовая строковая функция",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 30.368427998837433,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "СтрДлина",
+              "StrLen"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "kinds": [
+              "method"
+            ],
+            "first_match_rank": null,
+            "observed_kinds": []
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-003",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "заменить подстроку в строке",
+        "limit": 10
+      },
+      "notes": "замена подстроки — частый сценарий",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 35.39455200007069,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "СтрЗаменить",
+              "StrReplace"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-004",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "начало дня от даты",
+        "limit": 10
+      },
+      "notes": "усечение времени до 00:00",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 11780.885590000253,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "НачалоДня",
+              "BegOfDay"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "kinds": [
+              "method"
+            ],
+            "first_match_rank": null,
+            "observed_kinds": []
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-005",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "разница между двумя датами в секундах",
+        "limit": 10
+      },
+      "notes": "запрос размытый, hard-совпадения ожидать не стоит — только страховочный non_empty",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 3959.3036679998477,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 10,
+            "values": [
+              "РазностьДат",
+              "DateDiff",
+              "ТекущаяДата",
+              "CurrentDate"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-006",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "зафиксировать транзакцию",
+        "limit": 10
+      },
+      "notes": "управление транзакциями",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 30.5752959993697,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "ЗафиксироватьТранзакцию",
+              "CommitTransaction"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": false,
+          "detail": {
+            "k": 10,
+            "kinds": [
+              "method"
+            ],
+            "first_match_rank": null,
+            "observed_kinds": []
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-007",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "как записать объект справочника",
+        "limit": 10,
+        "kind": "method"
+      },
+      "notes": "проверяем, что фильтр kind=method работает и возвращает методы записи",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 28.833579999627545,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "results_count_at_least",
+          "passed": false,
+          "detail": {
+            "min": 3,
+            "actual": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "full_name_contains",
+          "passed": false,
+          "detail": {
+            "k": 10,
+            "substr": "Записать",
+            "match_rank": null,
+            "matched_full_name": null
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-008",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "таблица значений",
+        "limit": 10
+      },
+      "notes": "должен найти сам тип ТаблицаЗначений как object_type",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 31.568361000609002,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "ТаблицаЗначений",
+              "ValueTable"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "kinds": [
+              "object_type",
+              "category"
+            ],
+            "first_match_rank": null,
+            "observed_kinds": []
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-009",
+      "tool": "platform_help_lookup",
+      "args": {
+        "name": "НайтиПоНаименованию",
+        "limit": 10
+      },
+      "notes": "lookup по имени RU — должно быть несколько карточек (Catalog, Document и т.д.)",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 3914.598933999514,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 10,
+            "values": [
+              "НайтиПоНаименованию",
+              "FindByDescription"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "results_count_at_least",
+          "passed": false,
+          "detail": {
+            "min": 2,
+            "actual": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 10,
+      "response_preview": {
+        "error": "lookup failed: ResponseHandlingException: [Errno -2] Name or service not known",
+        "name": "НайтиПоНаименованию",
+        "results": []
+      }
+    },
+    {
+      "id": "ph-010",
+      "tool": "platform_help_lookup",
+      "args": {
+        "name": "StrSplit",
+        "limit": 5
+      },
+      "notes": "lookup по английскому имени — проверка что name_en тоже индексируется",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 3897.047548000046,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "СтрРазделить",
+              "StrSplit"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "error": "lookup failed: ResponseHandlingException: [Errno -2] Name or service not known",
+        "name": "StrSplit",
+        "results": []
+      }
+    },
+    {
+      "id": "ph-011",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "разыменование полей в запросе через точку",
+        "limit": 10
+      },
+      "notes": "Страница из shquery_ru.hbk. До FIX-13 её в индексе не было вовсе — это главный сторож правки.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 30.60703499977535,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 10,
+            "values": [
+              "Разыменование полей"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "any_hit_kind",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "kinds": [
+              "article"
+            ],
+            "first_match_rank": null,
+            "observed_kinds": []
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": 10,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-012",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "псевдоним источника данных в языке запросов",
+        "limit": 10
+      },
+      "notes": "Заголовок известен по ссылке datasources_pseudonims.html внутри соседней страницы — точное название не проверялось, поэтому soft.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 41.20882999995956,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 10,
+            "values": [
+              "Псевдоним источника",
+              "Псевдонимы источников"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "any_hit_kind",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "kinds": [
+              "article"
+            ],
+            "first_match_rank": null,
+            "observed_kinds": []
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-013",
+      "tool": "platform_help_lookup",
+      "args": {
+        "name": "Разыменование полей",
+        "limit": 5
+      },
+      "notes": "Тот же заголовок через lookup: проверяет, что name_ru у статей заполняется, а не только текст описания. Если фолбэк начнёт класть заголовок в описание вместо имени, ph-011 может пройти на семантике, а этот — нет.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 3925.6086030000006,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        },
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 5,
+            "values": [
+              "Разыменование полей"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "error": "lookup failed: ResponseHandlingException: [Errno -2] Name or service not known",
+        "name": "Разыменование полей",
+        "results": []
+      }
+    },
+    {
+      "id": "ph-014",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "щжвыа непроизносимая последовательность букв которой нет в справке",
+        "limit": 5
+      },
+      "notes": "A-3. Пустая выдача при живом поиске — законный ответ, при мёртвом — отказ. Отличаются они полем degraded и режимом: пока коллекция на месте, поиск отвечает 'hybrid' и degraded=false даже когда ничего не нашёл. Если коллекция пуста, ответ приедет из встроенного списка на 20 функций с degraded=true — и пример покраснеет, а non_empty на его месте прошёл бы.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 28.837077999924077,
+      "search_type": "unavailable",
+      "hard": [
+        {
+          "type": "field_equals",
+          "passed": false,
+          "detail": {
+            "path": "degraded",
+            "expected": false,
+            "actual": true,
+            "found": true
+          },
+          "match_rank": null
+        },
+        {
+          "type": "field_equals",
+          "passed": false,
+          "detail": {
+            "path": "search_type",
+            "expected": "hybrid",
+            "actual": "unavailable",
+            "found": true
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "results": [],
+        "search_type": "unavailable"
+      }
+    },
+    {
+      "id": "ph-015",
+      "tool": "platform_help_stats",
+      "args": {},
+      "notes": "OBS-2. Сервер сам отвечает, чем и когда собран индекс. Вопрос «почему поиск не находит X» занял четыре итерации именно потому, что этих двух полей не было наружу. Пустой fingerprint = коллекция собрана старым индексатором или не до конца.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 7800.608453000677,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "field_equals",
+          "passed": false,
+          "detail": {
+            "path": "degraded",
+            "expected": false,
+            "actual": true,
+            "found": true
+          },
+          "match_rank": null
+        },
+        {
+          "type": "path_non_empty",
+          "passed": false,
+          "detail": {
+            "path": "index.fingerprint",
+            "found": true,
+            "size": 0,
+            "type": "str"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "path_non_empty",
+          "passed": false,
+          "detail": {
+            "path": "index.indexed_at_iso",
+            "found": true,
+            "size": 0,
+            "type": "str"
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "qdrant_available": false,
+        "qdrant_url": "http://qdrant:6333",
+        "platform_help_collection": "platform_help",
+        "platform_help_points": 0,
+        "platform_help_collection_kind": "missing",
+        "degraded": true,
+        "collection_kind_checked_ago_sec": 3.9,
+        "platform_help_search_mode": "unavailable",
+        "index": {
+          "fingerprint": "",
+          "indexed_at": null,
+          "indexed_at_iso": "",
+          "age_hours": null,
+          "error": "Qdrant недоступен"
+        },
+        "degradations": {
+          "hybrid_to_dense": 1,
+          "empty": 22
+        },
+        "transport_fails_in_a_row": 2,
+        "qdrant_timeout_sec": 4,
+        "embedding_model": "intfloat/multilingual-e5-base",
+        "bm25_model": "Qdrant/bm25",
+        "model_loaded": true,
+        "fallback_items": 20,
+        "results": []
+      }
+    }
+  ]
+}

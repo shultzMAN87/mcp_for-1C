@@ -32,9 +32,24 @@ import tempfile
 from pathlib import Path
 import logging
 
+import sys
+
 from mcp.server.fastmcp import FastMCP
 
+# OBS-1: единый словарь отказа. В образе всё лежит плоско в /app, при
+# локальном запуске тестов — уровнем выше, в 1c-mcp-suite/.
+try:
+    from refusal import install_answerable_field, refusal
+except ImportError:  # pragma: no cover — путь только для локального запуска
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from refusal import install_answerable_field, refusal
+
 mcp = FastMCP("1C BSL Syntax Checker")
+
+# OBS-1. Одна строка вместо правки каждого `return json.dumps(...)`: поле
+# `answerable` появляется во всех ответах, включая удачные, и у
+# инструментов, которых ещё нет.
+install_answerable_field(mcp)
 logger = logging.getLogger(__name__)
 
 BSL_LS_JAR = os.environ.get("BSL_LS_JAR", "/opt/bsl-language-server/bsl-ls.jar")
@@ -129,34 +144,67 @@ def _run_analysis(src_path: str, config_path: str = "") -> dict:
                 cmd, capture_output=True, text=True, timeout=120
             )
         except subprocess.TimeoutExpired:
-            return {"error": "Таймаут анализа (120 сек)"}
+            # OBS-1: до этой правки все четыре отказа анализатора и «файла
+            # нет» приезжали одинаково — полем `error`. Различить «ответ
+            # дан: такого файла нет» и «ответа нет: линтер лежит» было
+            # нечем, хотя жёсткое правило 5 в .cursor/rules/mcp-tools.mdc
+            # требует от модели именно этого различения. Мы написали
+            # правило, исполнить которое было невозможно.
+            return refusal(
+                "analysis_timeout",
+                "Анализ не уложился в 120 секунд и был прерван.",
+                meaning=(
+                    "Это НЕ значит, что замечаний нет. Проверка не "
+                    "завершилась, про код сейчас не известно ничего — не "
+                    "делай вывод о его качестве и не отвечай по памяти."
+                ),
+                hint="Проверьте объём каталога и нагрузку на контейнер "
+                     "mcp-bsl-checker.",
+            )
         except FileNotFoundError:
-            return {"error": f"BSL Language Server не найден: {BSL_LS_JAR}"}
+            return refusal(
+                "linter_missing",
+                f"BSL Language Server не найден: {BSL_LS_JAR}",
+                meaning=(
+                    "Это НЕ значит, что замечаний нет. Анализатор не "
+                    "запускался вообще."
+                ),
+                hint="docker compose logs --tail=50 mcp-bsl-checker",
+            )
 
         report_path = Path(outdir) / REPORT_NAME
         if not report_path.exists():
-            return {
-                "error": "Анализатор не создал отчёт — результат неизвестен",
-                "hint": (
-                    "Это НЕ значит, что замечаний нет. Проверьте, что в "
-                    f"{src_path} есть файлы .bsl/.os и что java отработала: "
-                    "docker exec mcp-bsl-checker java -jar "
+            return refusal(
+                "report_missing",
+                "Анализатор не создал отчёт — результат неизвестен.",
+                meaning=(
+                    "Это НЕ значит, что замечаний нет. Проверка не дала "
+                    "результата, про код сейчас не известно ничего."
+                ),
+                hint=(
+                    f"Проверьте, что в {src_path} есть файлы .bsl/.os и что "
+                    "java отработала: docker exec mcp-bsl-checker java -jar "
                     f"{BSL_LS_JAR} --analyze --srcDir <путь> --reporter json"
                 ),
-                "expected_report": str(report_path),
-                "returncode": result.returncode,
-                "stdout": (result.stdout or "")[-2000:],
-                "stderr": (result.stderr or "")[-2000:],
-            }
+                expected_report=str(report_path),
+                returncode=result.returncode,
+                stdout=(result.stdout or "")[-2000:],
+                stderr=(result.stderr or "")[-2000:],
+            )
 
         try:
             with open(report_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            return {
-                "error": f"Ошибка чтения отчёта: {type(e).__name__}: {e}",
-                "report_path": str(report_path),
-            }
+            return refusal(
+                "report_unreadable",
+                f"Отчёт анализатора не читается: {type(e).__name__}: {e}",
+                meaning=(
+                    "Это НЕ значит, что замечаний нет. Отчёт есть, но "
+                    "разобрать его не удалось."
+                ),
+                report_path=str(report_path),
+            )
 
 
 @mcp.tool()
@@ -221,7 +269,22 @@ def bsl_check_file(file_path: str) -> str:
     """
     p = Path(file_path)
     if not p.exists():
-        return json.dumps({"error": f"Файл не найден: {file_path}"}, ensure_ascii=False)
+        # OBS-1, вторая сторона различения. Это ОТВЕТ, а не отказ:
+        # инструмент отработал и сообщает достоверный факт о мире —
+        # файла по такому пути нет. Опираться на него можно, поэтому
+        # `answerable` остаётся true, в отличие от четырёх отказов
+        # анализатора выше. Раньше оба случая приезжали одним и тем же
+        # полем `error`, и различить их было нечем.
+        return json.dumps({
+            "error": f"Файл не найден: {file_path}",
+            "answerable": True,
+            "degraded": False,
+            "meaning": (
+                "Файла по этому пути нет — это достоверный ответ, а не "
+                "поломка инструмента. Проверь путь; про содержимое файла "
+                "вывод делать не из чего."
+            ),
+        }, ensure_ascii=False)
 
     report = _run_analysis(str(p.parent))
     if "error" in report:
@@ -264,7 +327,16 @@ def bsl_check_directory(dir_path: str, limit: int = 50, offset: int = 0) -> str:
     """
     p = Path(dir_path)
     if not p.is_dir():
-        return json.dumps({"error": f"Каталог не найден: {dir_path}"}, ensure_ascii=False)
+        # См. комментарий в bsl_check_file: это ответ, а не отказ.
+        return json.dumps({
+            "error": f"Каталог не найден: {dir_path}",
+            "answerable": True,
+            "degraded": False,
+            "meaning": (
+                "Каталога по такому пути нет — достоверный ответ, а не "
+                "поломка инструмента."
+            ),
+        }, ensure_ascii=False)
 
     report = _run_analysis(str(p))
     if "error" in report:

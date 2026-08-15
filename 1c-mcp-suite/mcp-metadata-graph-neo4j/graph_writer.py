@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -36,6 +37,14 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 
 from progress_log import ProgressLogger, human_sec
+
+# A-2: правило «отправлено против записанного» переехало в общий модуль.
+# Здесь оно и родилось, но применялось только тут — см. shortfall.py.
+try:
+    from shortfall import warn_shortfall as _shortfall
+except ImportError:  # pragma: no cover — путь только для локального запуска
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from shortfall import warn_shortfall as _shortfall
 
 log = logging.getLogger(__name__)
 
@@ -592,15 +601,16 @@ def _query_written(neo: Neo4j, cypher: str, rows: list) -> int:
     return len(rows)
 
 
+# Тонкая обёртка над общим правилом: своя подсказка, свой логгер.
+# Тело переехало в shortfall.warn_shortfall — второй копии правила в наборе
+# быть не должно, это ровно тот жанр, из-за которого разошлись
+# gen_lockfiles.sh и .ps1.
 def _warn_shortfall(what: str, sent: int, written: int) -> None:
-    if written >= sent:
-        return
-    log.warning(
-        "%s: записано %d из %d — %d строк не нашли узлов и пропущены молча. "
-        "Это почти всегда несовпадение меток или id между слоями; "
-        "сверьте запрос в EDGE_QUERIES с тем, какие метки реально висят "
-        "на узлах (см. FIX-14).",
-        what, written, sent, sent - written,
+    _shortfall(
+        what, sent, written, log=log,
+        hint="Строки не нашли узлов: это почти всегда несовпадение меток "
+             "или id между слоями; сверьте запрос в EDGE_QUERIES с тем, "
+             "какие метки реально висят на узлах (см. FIX-14).",
     )
 
 

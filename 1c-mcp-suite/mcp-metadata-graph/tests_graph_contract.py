@@ -282,5 +282,51 @@ class TestFoundFlagSymmetry(unittest.TestCase):
                 f"часть успешных ответов молчит о found (FIX-19)")
 
 
+
+class TestDiagnosticToolsAreNotCached(unittest.TestCase):
+    """
+    OBS-1, находка приёмки 15 августа.
+
+    `metadata_stats` был обёрнут в `@cached(ttl=600)`. При остановленной
+    Neo4j пятнадцать инструментов честно отвалились по таймауту за 3,85 с
+    каждый, а `metadata_stats` ответил за 15 мс — из кеша, снятого на живом
+    стенде несколькими минутами раньше. Счётчики объектов, отпечатки
+    индекса, `answerable: true`: полная картина здоровья графа в момент,
+    когда графа нет.
+
+    К диагностическому инструменту приходят с вопросом «жив ли он прямо
+    сейчас». Кешированный ответ на такой вопрос не устарел, а перевёрнут.
+
+    Проверка по исходнику: декоратор `@cached` не должен стоять на
+    инструментах, чьё назначение — сообщать состояние.
+    """
+
+    DIAGNOSTIC_TOOLS = ("metadata_stats",)
+
+    def test_no_cache_on_diagnostics(self):
+        src = _read(HERE / "server.py")
+        lines = src.splitlines()
+        for name in self.DIAGNOSTIC_TOOLS:
+            idx = next((i for i, l in enumerate(lines)
+                        if l.startswith(f"def {name}(")), None)
+            self.assertIsNotNone(idx, f"не найден инструмент {name}")
+            # Декораторы идут непосредственно перед def, сплошным блоком
+            # вперемешку с комментариями.
+            decorators = []
+            for l in reversed(lines[:idx]):
+                stripped = l.strip()
+                if stripped.startswith("@"):
+                    decorators.append(stripped)
+                elif stripped.startswith("#") or not stripped:
+                    continue
+                else:
+                    break
+            self.assertNotIn(
+                "@cached", " ".join(decorators),
+                f"{name} — диагностический инструмент, кеш на нём означает, "
+                f"что во время аварии он отвечает картинкой здоровья",
+            )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -35,11 +35,23 @@
 """
 from __future__ import annotations
 
+import logging
+import sys
 import xml.etree.ElementTree as ET
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
+
+# A-2: общий счётчик «вход против выхода». В образе всё лежит плоско в
+# /app, при локальном запуске тестов — уровнем выше, в 1c-mcp-suite/.
+try:
+    from shortfall import Tally
+except ImportError:  # pragma: no cover — путь только для локального запуска
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from shortfall import Tally
+
+log = logging.getLogger("metadata-xml")
 
 
 # ─── Неймспейсы 1С ────────────────────────────────────────────────────────
@@ -502,21 +514,45 @@ def _parse_structural_flags(props) -> dict:
 
 
 def _parse_object(path: Path, kind_eng: str, kind_ru: str, kind_ru_plural: str,
-                  source_rel: str) -> Optional[MetaObject]:
+                  source_rel: str, tally: Optional[Tally] = None) -> Optional[MetaObject]:
+    """
+    Разбирает один верхнеуровневый XML объекта. None — объект не получился.
+
+    A-1: у «не получился» четыре разных причины, и раньше они были
+    неразличимы — вызывающий просто не клал результат в список. Битый XML и
+    файл чужого вида выглядели одинаково: никак. Если передан `tally`,
+    причина попадает в него вместе с именем файла.
+    """
+    def _skip(reason: str, alarm: bool = False) -> None:
+        if tally is not None:
+            tally.drop(reason, example=source_rel, alarm=alarm)
+
     try:
         tree = ET.parse(path)
-    except (ET.ParseError, FileNotFoundError, PermissionError):
+    except ET.ParseError as exc:
+        # Битый XML в выгрузке — всегда повод для тревоги: выгрузка
+        # конфигуратора такого не даёт, значит, файл побился при переносе.
+        _skip("битый XML", alarm=True)
+        log.debug("битый XML %s: %s", source_rel, exc)
+        return None
+    except (FileNotFoundError, PermissionError) as exc:
+        _skip("файл недоступен", alarm=True)
+        log.debug("файл недоступен %s: %s", source_rel, exc)
         return None
     root = tree.getroot()
     inner = root.find(f"md:{kind_eng}", NS)
     if inner is None:
+        # Файл лежит в каталоге вида, но внутри элемента этого вида нет.
+        _skip(f"нет элемента <{kind_eng}>")
         return None
     props = _find(inner, "Properties")
     if props is None:
+        _skip("нет секции Properties", alarm=True)
         return None
 
     name = _text(_find(props, "Name"))
     if not name:
+        _skip("объект без имени", alarm=True)
         return None
 
     obj = MetaObject(
@@ -600,22 +636,81 @@ def _parse_object(path: Path, kind_eng: str, kind_ru: str, kind_ru_plural: str,
 
 # ─── Walker ───────────────────────────────────────────────────────────────
 
-def walk_workspace(root: Path) -> list[MetaObject]:
+def unknown_kind_dirs(root: Path) -> list[tuple[str, int]]:
+    """
+    Каталоги верхнего уровня с XML внутри, которых нет в KINDS.
+
+    A-1, детектор смены раскладки. `walk_workspace` ходит только по
+    известным каталогам, поэтому появление нового вида объектов (или
+    переход выгрузки на другой формат — например, EDT) не даёт ни ошибки,
+    ни предупреждения: объекты просто не появляются в графе. Ровно так
+    жил FIX-8 — восемь видов объектов не индексировались, и узнали об этом
+    случайно.
+
+    Возвращает пары (имя каталога, число *.xml в нём), отсортированные по
+    убыванию числа файлов.
+    """
+    known = {dir_name for dir_name, *_ in KINDS}
+    out: list[tuple[str, int]] = []
+    if not root.is_dir():
+        return out
+    for d in sorted(root.iterdir()):
+        if not d.is_dir() or d.name in known:
+            continue
+        n = sum(1 for _ in d.glob("*.xml"))
+        if n:
+            out.append((d.name, n))
+    out.sort(key=lambda x: -x[1])
+    return out
+
+
+def walk_workspace(root: Path, tally: Optional[Tally] = None) -> list[MetaObject]:
     """
     Обходит workspace, парсит все верхнеуровневые XML.
     Файлы в подкаталогах (Forms/*.xml, Templates/*.xml) НЕ трогает —
     они уже описаны через <Form> / <Template> в верхнем XML.
+
+    A-1: считает вход. Раньше наружу уходило только число объектов, и
+    «нашлось 10 747» выглядело результатом независимо от того, сколько
+    файлов лежало на диске. Если `tally` не передан, счётчик заводится
+    внутри и печатается сам — вход должен быть виден при любом вызове.
     """
+    own_tally = tally is None
+    t = tally or Tally("разбор XML метаданных", unit="файл", log=log)
+
     out: list[MetaObject] = []
     for dir_name, kind_eng, kind_ru, kind_ru_plural in KINDS:
         d = root / dir_name
         if not d.is_dir():
             continue
         for xml_path in sorted(d.glob("*.xml")):
+            t.see()
             rel = xml_path.relative_to(root).as_posix()
-            obj = _parse_object(xml_path, kind_eng, kind_ru, kind_ru_plural, rel)
+            obj = _parse_object(xml_path, kind_eng, kind_ru, kind_ru_plural, rel,
+                                tally=t)
             if obj is not None:
+                t.keep()
                 out.append(obj)
+
+    # Диагностика раскладки идёт мимо арифметики счётчика: эти файлы не
+    # «отсеяны», их вообще не рассматривали. Но знать о них надо.
+    strays = unknown_kind_dirs(root)
+    if strays:
+        shown = ", ".join(f"{name} ({n})" for name, n in strays[:5])
+        log.warning(
+            "каталоги верхнего уровня вне KINDS: %d, в них %d XML — "
+            "эти объекты в граф НЕ попадут: %s%s",
+            len(strays), sum(n for _, n in strays), shown,
+            ", …" if len(strays) > 5 else "",
+        )
+        log.warning(
+            "  если это новый вид объектов — добавьте его в KINDS "
+            "(metadata_xml.py); если сменился формат выгрузки — индексер "
+            "к нему не готов"
+        )
+
+    if own_tally:
+        t.report(hint="проверьте выгрузку: конфигуратор битых XML не даёт")
     return out
 
 

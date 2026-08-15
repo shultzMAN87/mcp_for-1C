@@ -24,6 +24,21 @@ import-пути между server-side и indexer-side нет.
 from __future__ import annotations
 
 import json
+import os
+import sys
+import time
+from pathlib import Path
+
+# OBS-1. Формат отказа, придуманный здесь (FIX-3), стал общим для всех
+# серверов набора. Тексты и поля переехали в refusal.py; здесь остаётся
+# знание про граф — какие у него бывают нерабочие состояния и что про них
+# сказать. Второй копии словаря быть не должно: это ровно те «два списка,
+# которые обязаны совпадать», из-за которых разошлись генераторы лок-файлов.
+try:
+    from refusal import refusal as _refusal
+except ImportError:  # pragma: no cover — путь только для локального запуска
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from refusal import refusal as _refusal
 
 
 # ─── FIX-3: «Neo4j недоступна» ≠ «граф пуст» ─────────────────────────────
@@ -60,51 +75,104 @@ def graph_state(neo4j_query):
 def graph_error(state, detail=""):
     """JSON-ответ для нерабочего состояния графа."""
     if state == GRAPH_EMPTY:
-        payload = {
-            "error": "graph_empty",
-            "graph_state": GRAPH_EMPTY,
-            "answerable": False,
-            "message": (
-                "Neo4j отвечает, но граф пуст: ни одного узла :MetadataObject. "
-                "Индексация не выполнялась или не завершилась."
-            ),
-            "meaning": (
+        payload = _refusal(
+            "graph_empty",
+            "Neo4j отвечает, но граф пуст: ни одного узла :MetadataObject. "
+            "Индексация не выполнялась или не завершилась.",
+            meaning=(
                 "Это НЕ значит, что искомого объекта нет в конфигурации. "
                 "Про конфигурацию сейчас не известно ничего — не делай вывод "
                 "о её содержимом и не отвечай по памяти. Сообщи пользователю, "
                 "что граф не построен."
             ),
-            "hint": (
-                "docker compose run --rm -e METADATA_FORCE_REINDEX=true "
-                "metadata-indexer"
-            ),
-        }
+            hint=("docker compose run --rm -e METADATA_FORCE_REINDEX=true "
+                  "metadata-indexer"),
+            graph_state=GRAPH_EMPTY,
+        )
     else:
-        payload = {
-            "error": "neo4j_unavailable",
-            "graph_state": GRAPH_UNAVAILABLE,
-            "answerable": False,
-            "message": "Neo4j недоступна: запрос не выполнен.",
-            "meaning": (
+        payload = _refusal(
+            "neo4j_unavailable",
+            "Neo4j недоступна: запрос не выполнен.",
+            meaning=(
                 "Это НЕ значит, что искомого объекта нет в конфигурации. "
                 "Состояние графа неизвестно — не делай вывод о содержимом "
                 "конфигурации и не отвечай по памяти."
             ),
-            "hint": "docker compose ps neo4j && docker compose logs --tail=50 neo4j",
-        }
+            hint="docker compose ps neo4j && docker compose logs --tail=50 neo4j",
+            graph_state=GRAPH_UNAVAILABLE,
+        )
         if detail:
             payload["detail"] = detail
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def make_guard(neo4j_query):
+# B-1. Быстрый отказ, когда уже известно, что Neo4j лежит.
+#
+# `FAIL-1` научил platform-help не выжидать таймаут на каждом вызове, если
+# предыдущая попытка уже сказала «недоступно»: замер дал 7 916 мс → 102 мс.
+# Здесь этого не было. Замер 15 августа при остановленной Neo4j:
+# восемнадцать примеров, каждый по 3 850 мс, — и это меньшая часть, всего
+# инструментов через guard проходит двадцать девять.
+#
+# В чате с Cursor это четыре секунды тишины на каждый вопрос про
+# конфигурацию. Ровно тот исход, ради которого чинились FIX-14 и FAIL-1:
+# агент считает инструмент неотвечающим и уходит отвечать по памяти.
+#
+# Кешируется ТОЛЬКО «недоступна». Остальные два состояния — нет, и это
+# принципиально:
+#   • GRAPH_OK кешировать нельзя: сервер ослеп бы к падению Neo4j ровно на
+#     то же окно, а проба на живой базе стоит миллисекунды;
+#   • GRAPH_EMPTY кешировать незачем: Neo4j отвечает, проба дешёвая, а
+#     кеш задержал бы момент, когда индексация закончилась. Это дефект
+#     FIX-12 в чистом виде, повторять его не будем.
+GRAPH_RECHECK_SEC = int(os.environ.get("GRAPH_RECHECK_SEC", "30"))
+
+
+def make_guard(neo4j_query, recheck_sec=None):
     """Возвращает guard(): None если граф готов, иначе готовый JSON-ответ.
 
     Единая точка для всех инструментов, которым нужен наполненный граф.
+
+    B-1: вердикт «Neo4j недоступна» держится `recheck_sec` секунд, и всё
+    это время guard отвечает мгновенно, не трогая сеть. По истечении окна
+    проба делается заново — сервер поднимается сам, руками перезапускать
+    его не нужно.
+
+    У возвращённой функции есть `reset()`: сбрасывает кеш. Нужен тестам и
+    ручной диагностике; в рабочем пути не зовётся.
     """
+    recheck = GRAPH_RECHECK_SEC if recheck_sec is None else recheck_sec
+    cache = {"detail": "", "at": 0.0, "active": False}
+
     def guard():
+        if cache["active"]:
+            left = recheck - (time.monotonic() - cache["at"])
+            if left > 0:
+                # Кешированный отказ обязан называть себя кешированным.
+                # Урок приёмки 15 августа: metadata_stats отдавал из кеша
+                # картину здоровья работающего графа в момент, когда графа
+                # не было, и по ответу это было никак не видно.
+                detail = cache["detail"]
+                note = (f"Ответ из кеша: Neo4j признана недоступной "
+                        f"{recheck - left:.0f} с назад, следующая проверка "
+                        f"через {left:.0f} с. Сеть не опрашивалась.")
+                return graph_error(
+                    GRAPH_UNAVAILABLE,
+                    f"{detail} | {note}" if detail else note,
+                )
+            cache["active"] = False
+
         state, detail = graph_state(neo4j_query)
+        if state == GRAPH_UNAVAILABLE:
+            cache.update(detail=detail, at=time.monotonic(), active=True)
+        else:
+            cache.update(detail="", at=0.0, active=False)
         return None if state == GRAPH_OK else graph_error(state, detail)
+
+    def reset():
+        cache.update(detail="", at=0.0, active=False)
+
+    guard.reset = reset
     return guard
 
 

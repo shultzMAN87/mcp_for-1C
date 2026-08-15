@@ -776,8 +776,11 @@ def parse_html(file_path: str, raw: bytes, *, hbk_file: str = "") -> HelpEntry:
     file_path — имя внутри .hbk (например 'objects/catalog213/.../Add4692.html').
     raw — сырые байты HTML (utf-8).
     """
+    # utf-8-sig, а не utf-8: страницы .hbk почти все начинаются с BOM, и на
+    # utf-8 он превращался в \ufeff в первом же текстовом поле — попадал в
+    # заголовок чанка и в текст, который потом эмбеддится.
     try:
-        html = raw.decode("utf-8")
+        html = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         html = raw.decode("cp1251", errors="replace")
 

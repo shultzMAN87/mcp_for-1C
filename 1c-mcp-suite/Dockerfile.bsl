@@ -36,6 +36,10 @@ COPY mcp-bsl-checker/server.py /app/server.py
 COPY mcp_auth.py /app/mcp_auth.py
 # TR-1: у bsl-checker свой образ, но точка входа общая
 COPY mcp_http.py /app/mcp_http.py
+# OBS-1: единый словарь отказа (answerable / degraded / meaning).
+# Без этой строки сервер падает на импорте при старте. Копируется в ТРИ
+# образа; расхождение между ними ловит tests_refusal.py.
+COPY refusal.py /app/refusal.py
 
 EXPOSE 8002
 

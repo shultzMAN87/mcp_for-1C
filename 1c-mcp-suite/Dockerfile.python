@@ -31,6 +31,15 @@ COPY mcp_auth.py                     /app/mcp_auth.py
 COPY mcp_http.py                     /app/mcp_http.py
 # TOOL-1/TOOL-2/SEC-5: централизованный фильтр набора инструментов
 COPY mcp_tool_filter.py              /app/mcp_tool_filter.py
+# A-2: сверка «вход против выхода». Импортируется из metadata_xml,
+# bsl_parser, graph_writer и indexer — без этой строки индексер падает на
+# импорте при старте. Копируется в ДВА образа (см. Dockerfile.embeddings);
+# расхождение между ними ловит tests_shortfall.py.
+COPY shortfall.py                    /app/shortfall.py
+# OBS-1: единый словарь отказа (answerable / degraded / meaning).
+# Импортируется серверами metadata-graph, query-builder, platform-help и
+# bsl-checker. Копируется в ТРИ образа; расхождение ловит tests_refusal.py.
+COPY refusal.py                      /app/refusal.py
 
 # Базовые серверы (metadata-graph: server.py + v3-расширения, индексер: v3)
 COPY mcp-metadata-graph/server.py             /app/mcp_metadata_graph.py

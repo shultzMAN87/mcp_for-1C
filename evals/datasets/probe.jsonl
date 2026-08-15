@@ -1,0 +1,2 @@
+{"id":"probe-rank20","tool":"platform_help_search","args":{"query":"длина строки","limit":20},"expect":{"hard":[{"type":"name_in_top_k","k":20,"values":["СтрДлина","StrLen"]}]},"notes":"на каком месте СтрДлина"}
+{"id":"probe-lookup","tool":"platform_help_lookup","args":{"name":"СтрДлина","limit":5},"expect":{"hard":[{"type":"non_empty"}]},"notes":"есть ли карточка в индексе"}

@@ -147,13 +147,39 @@ def test_load_dataset():
     except FileNotFoundError:
         pass
 
+    # FIX-15. Здесь стояло `assert len(real) == 10` и белый список из двух
+    # инструментов. Датасет с тех пор дорос до пятнадцати примеров и обзавёлся
+    # `platform_help_stats` — тест падал не потому, что что-то сломалось, а
+    # потому, что был прибит к числу, которому положено расти.
+    #
+    # Это та же болезнь, что `DOC-3`: число без источника. Пинить размер
+    # датасета в тесте раннера бессмысленно вдвойне — раннер не отвечает за
+    # то, сколько там примеров. Проверяем то, за что он отвечает: разбор
+    # даёт структурно годные примеры.
     real = load_dataset(Path(__file__).resolve().parents[1] / "datasets" / "platform_help.jsonl")
-    assert len(real) == 10
-    for ex in real:
-        assert ex["tool"] in ("platform_help_search", "platform_help_lookup")
-        assert "hard" in ex["expect"] and "soft" in ex["expect"]
+    assert real, "боевой датасет разобрался в пустоту"
 
-    print(f"[3/5] load_dataset: OK (шаблон: {len(real)} примеров)")
+    ids = [ex["id"] for ex in real]
+    assert len(ids) == len(set(ids)), f"дубли id в датасете: {sorted(ids)}"
+
+    for ex in real:
+        assert ex["tool"].startswith("platform_help_"), \
+            f"{ex['id']}: инструмент {ex['tool']} не с этого сервера"
+        assert isinstance(ex.get("args"), dict), f"{ex['id']}: args не словарь"
+        assert "hard" in ex["expect"] and "soft" in ex["expect"], \
+            f"{ex['id']}: в expect нет hard/soft"
+
+    # Ловушка на отказ обязана быть — критерий готовности блока A из PLAN-5.
+    # Признак: пример проверяет поле состояния, а не наличие результатов.
+    trap_predicates = {"field_equals", "path_non_empty"}
+    has_trap = any(
+        p.get("type") in trap_predicates
+        for ex in real for p in ex["expect"].get("hard", [])
+    )
+    assert has_trap, ("в датасете нет ни одного примера, проверяющего отказ — "
+                      "см. критерий готовности блока A в PLAN-5")
+
+    print(f"[3/5] load_dataset: OK ({len(real)} примеров, ловушка на отказ есть)")
 
 
 def test_mrr_info():

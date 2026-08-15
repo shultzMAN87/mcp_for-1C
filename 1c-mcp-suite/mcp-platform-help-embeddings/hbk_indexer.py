@@ -4,8 +4,9 @@
 Пайплайн:
   1. Считаем fingerprint списка .hbk (имена + размеры + mtime).
   2. Решаем, надо ли переиндексировать, по режиму REINDEX_MODE.
-  3. Читаем каждый .hbk через hbk_reader (manually-parsed Local File Headers),
-     распаковываем HTML deflate-ом.
+  3. Читаем каждый .hbk через hbk_reader: V8-контейнер → элемент FileStorage
+     → ZIP внутри него. HTML отбирается по содержимому, а не по расширению
+     (HBK-1: внутри .hbk расширения нет почти ни у одной страницы).
   4. Парсим HTML через hbk_parser — получаем структурированные HelpEntry.
   5. Через hbk_chunker превращаем entry в несколько специализированных
      чанков (card / params / syntax / example / description).
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sys
 import time
@@ -46,6 +48,24 @@ sys.path.insert(0, "/app")
 from hbk_reader import iter_html_from_hbk, HbkReadError
 from hbk_parser import parse_html
 from hbk_chunker import build_chunks
+
+# A-2: сверка «вход против выхода».
+try:
+    from shortfall import Tally, TallyBook
+except ImportError:  # pragma: no cover — путь только для локального запуска
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from shortfall import Tally, TallyBook
+
+# Индексатор целиком написан на print — заводим логгер, который пишет туда
+# же и тем же видом, чтобы строки счётчиков не выделялись форматом и не
+# уезжали в другой поток.
+log = logging.getLogger("help-indexer")
+if not log.handlers:
+    _h = logging.StreamHandler(sys.stdout)
+    _h.setFormatter(logging.Formatter("%(message)s"))
+    log.addHandler(_h)
+    log.setLevel(logging.INFO)
+    log.propagate = False
 
 # ─── Конфиг ──────────────────────────────────────────────────────────────
 
@@ -77,6 +97,20 @@ if HBK_INDEX_LANG not in ("ru", "en", "both"):
 # Служебная точка с fingerprint'ом. ID=0 зарезервирован, чанки идут с 1.
 FINGERPRINT_POINT_ID = 0
 
+# Версия пайплайна чтения/разбора. Входит в fingerprint.
+#
+# HBK-1 показал дыру: fingerprint считался только по файлам справки. Чинишь
+# читатель, выкатываешь образ — файлы те же, fingerprint тот же, режим
+# if_files_changed говорит «данные не менялись» и оставляет старый индекс,
+# собранный сломанным кодом. Отказ снова выглядит как успех, только теперь
+# на уровне доставки исправления.
+#
+# Меняете hbk_reader / hbk_parser / hbk_chunker так, что состав или текст
+# чанков меняется, — увеличьте число. Это стоит одной переиндексации.
+#   1 — состояние до HBK-1
+#   2 — HBK-1: разбор V8-контейнера, отбор HTML по содержимому
+PIPELINE_VERSION = 2
+
 
 def _keep_hbk(path: Path) -> bool:
     """Решает, надо ли индексировать данный .hbk исходя из HBK_INDEX_LANG."""
@@ -97,11 +131,14 @@ def compute_files_fingerprint(directory: str) -> str:
     SHA-256 по списку .hbk: имя + размер + mtime (секунды). Дёшево и достаточно.
     Учитывает фильтр HBK_INDEX_LANG — если пользователь переключил язык,
     fingerprint меняется и if_files_changed запускает переиндексацию.
+
+    И версию пайплайна (PIPELINE_VERSION): менялись не только файлы, но и
+    код, который их читает, — индекс от этого устаревает ровно так же.
     """
     base = Path(directory)
     if not base.is_dir():
         return "no_dir"
-    entries = [f"_lang={HBK_INDEX_LANG}"]
+    entries = [f"_pipeline={PIPELINE_VERSION}", f"_lang={HBK_INDEX_LANG}"]
     for path in sorted(base.glob("*.hbk")):
         if not _keep_hbk(path):
             continue
@@ -110,7 +147,9 @@ def compute_files_fingerprint(directory: str) -> str:
             entries.append(f"{path.name}:{st.st_size}:{int(st.st_mtime)}")
         except OSError:
             continue
-    if len(entries) == 1:
+    # Служебных строк теперь две (_pipeline и _lang) — если файлов не
+    # добавилось, каталог пуст.
+    if len(entries) == 2:
         return "empty_dir"
     joined = "\n".join(entries).encode("utf-8")
     return hashlib.sha256(joined).hexdigest()
@@ -233,6 +272,16 @@ def decide_reindex(client: QdrantClient, fingerprint_now: str) -> bool:
     if REINDEX_MODE == "skip_if_nonempty":
         if count > 1:  # учёт fingerprint-точки
             print(f"✓ Коллекция '{COLLECTION_NAME}' уже существует ({count} точек) — пропускаю")
+            # Пропуск сам по себе законен, а вот пропуск УСТАРЕВШЕГО индекса
+            # стоит сказать вслух: именно так починенный читатель может
+            # месяцами не доезжать до данных (см. PIPELINE_VERSION).
+            stored = read_stored_fingerprint(client, COLLECTION_NAME)
+            if stored is None:
+                print("  ⚠ fingerprint в коллекции отсутствует — чем она собрана, неизвестно")
+            elif stored != fingerprint_now:
+                print(f"  ⚠ индекс собран другими файлами или другой версией пайплайна:")
+                print(f"    в коллекции {stored[:12]}…, сейчас {fingerprint_now[:12]}…")
+                print(f"    поиск отвечает по устаревшим данным")
             print(f"  Для переиндексации: REINDEX_MODE=force")
             return False
         print("  коллекция почти пустая — индексирую")
@@ -255,18 +304,48 @@ def decide_reindex(client: QdrantClient, fingerprint_now: str) -> bool:
 
 # ─── Чтение и чанкинг .hbk ───────────────────────────────────────────────
 
-def iter_chunks_from_dir(directory: str):
-    """Генератор чанков по всем .hbk в каталоге."""
+def iter_chunks_from_dir(directory: str, book: "TallyBook | None" = None):
+    """
+    Генератор чанков по всем .hbk в каталоге.
+
+    A-1: у пайплайна четыре сужения подряд — записи контейнера → страницы
+    HTML → разобранные entry → чанки. Каждое печатало только свой выход.
+    Теперь у каждого известен вход, и невязка («столько-то делось неизвестно
+    куда») всплывает сама, а не ждёт, пока кто-нибудь сверит два числа
+    глазами. `book` заполняется по мере итерации; смотреть после того, как
+    генератор исчерпан.
+    """
     base = Path(directory)
     all_hbk = sorted(base.glob("*.hbk"))
     hbk_files = [p for p in all_hbk if _keep_hbk(p)]
     skipped = len(all_hbk) - len(hbk_files)
     print(f"\nНайдено .hbk: {len(all_hbk)}, обрабатываем {len(hbk_files)} (язык='{HBK_INDEX_LANG}', пропущено {skipped})")
 
+    book = book if book is not None else TallyBook(log)
+    t_files = book.stage("контейнеры .hbk", unit="файл", log=log)
+    t_files.see(len(all_hbk))
+    if skipped:
+        t_files.drop(f"другой язык (HBK_INDEX_LANG={HBK_INDEX_LANG})", n=skipped)
+    # Записи контейнера → страницы HTML. Отсев здесь законен и массов
+    # (картинки, служебные структуры), поэтому вместо тревоги на любой
+    # отсев — порог доли: замер по 39 контейнерам даёт около 80% страниц.
+    t_pages = book.stage("записи контейнеров → страницы HTML", unit="запись",
+                         log=log, min_keep_ratio=0.5)
+    t_entries = book.stage("страницы → разобранные entry", unit="страница", log=log)
+    t_chunks = book.stage("entry → чанки", unit="entry", log=log)
+
     total_html = 0
     total_entries = 0
     total_chunks = 0
     parse_errors = 0
+
+    empty_files: list[str] = []
+    # A-7 (диагностика, не починка): file_path используется как ключ
+    # страницы, но после HBK-1 перестал быть уникальным — страницы под
+    # одинаковыми путями приезжают из разных контейнеров. Считаем, чтобы
+    # цифра была видна, а не выводилась вычитанием из двух строк лога.
+    seen_paths: set[str] = set()
+    path_collisions = 0
 
     for hbk_path in hbk_files:
         size_mb = hbk_path.stat().st_size / (1024 * 1024)
@@ -274,33 +353,70 @@ def iter_chunks_from_dir(directory: str):
         file_html = 0
         file_chunks = 0
         try:
-            for html_name, raw in iter_html_from_hbk(hbk_path):
+            for html_name, raw in iter_html_from_hbk(hbk_path, tally=t_pages):
                 file_html += 1
+                t_entries.see()
                 try:
                     entry = parse_html(html_name, raw, hbk_file=hbk_path.name)
                 except Exception as e:
                     parse_errors += 1
+                    t_entries.drop("ошибка разбора HTML", example=html_name, alarm=True)
                     if parse_errors < 5:
                         print(f"    parse error {html_name}: {type(e).__name__}: {e}")
                     continue
 
                 # Пустые записи (без имени и без текста) — пропускаем.
                 if not entry.name_ru and not entry.name_en and not entry.description:
+                    t_entries.drop("страница без имени и текста", example=html_name)
                     continue
 
+                t_entries.keep()
                 total_entries += 1
+                t_chunks.see()
+                produced = 0
                 for chunk in build_chunks(entry):
                     total_chunks += 1
                     file_chunks += 1
+                    produced += 1
+                    path = chunk.get("file_path") or ""
+                    if path:
+                        if path in seen_paths:
+                            path_collisions += 1
+                        else:
+                            seen_paths.add(path)
                     yield chunk
+                if produced:
+                    t_chunks.keep()
+                else:
+                    t_chunks.drop("entry не дал ни одного чанка",
+                                  example=html_name, alarm=True)
         except HbkReadError as e:
             print(f"    ⚠ read error: {e}")
+            t_files.drop("контейнер не прочитан", example=hbk_path.name, alarm=True)
             continue
 
+        t_files.keep()
         total_html += file_html
         print(f"    HTML: {file_html}, чанков: {file_chunks}")
 
+        # HBK-1: «0 страниц» — это отказ, а не результат. Раньше он был
+        # неотличим от нормы: строка в логе выглядела одинаково и для
+        # контейнера с картинками, и для контейнера, который не прочитался.
+        if file_html == 0:
+            empty_files.append(hbk_path.name)
+            print(f"    ⚠ ни одной страницы — контейнер не разобран или в нём только картинки")
+            print(f"      что внутри: python /app/hbk_reader.py {hbk_path}")
+
     print(f"\nИтого: HTML={total_html}, entries={total_entries}, chunks={total_chunks}, parse_errors={parse_errors}")
+    if empty_files:
+        print(f"⚠ Без единой страницы: {len(empty_files)} из {len(hbk_files)} — {', '.join(empty_files)}")
+    if path_collisions:
+        # Не чиним (A-7 помечена «потом»), но называем вслух: сегодня это
+        # 11 страниц из 27 тысяч, и каждый новый контейнер добавляет шанс.
+        print(f"⚠ file_path не уникален: {path_collisions} страниц под уже "
+              f"занятым путём (A-7). Прореживание выдачи и ссылка на "
+              f"источник считают его ключом страницы.")
+    book.report(log, title="Сводка потерь при сборе чанков")
 
 
 # ─── Main ────────────────────────────────────────────────────────────────

@@ -153,6 +153,37 @@ def get_cache():
 
 # ─── Декоратор ──────────────────────────────────────────────────────────
 
+def _looks_degraded(result) -> bool:
+    """
+    Стоит ли эта выдача в кеше.
+
+    Проверяется двумя способами: пометкой текущего вызова из `refusal`
+    (если модуль доехал в образ) и самим ответом — инструмент мог
+    проставить `answerable: false` или `degraded: true` сам, до кеша.
+    Второй способ работает всегда, даже когда `refusal` недоступен.
+    """
+    try:
+        from refusal import is_degraded
+        if is_degraded():
+            return True
+    except ImportError:
+        pass
+
+    if isinstance(result, dict):
+        payload = result
+    elif isinstance(result, str) and result.lstrip().startswith("{"):
+        try:
+            payload = json.loads(result)
+        except Exception:
+            return False
+        if not isinstance(payload, dict):
+            return False
+    else:
+        return False
+
+    return payload.get("degraded") is True or payload.get("answerable") is False
+
+
 def cached(ttl: int = CACHE_TTL_DEFAULT, key_prefix: str = ""):
     """
     Декоратор кэширования результатов функций.
@@ -177,6 +208,21 @@ def cached(ttl: int = CACHE_TTL_DEFAULT, key_prefix: str = ""):
                 return value
 
             result = func(*args, **kwargs)
+
+            # OBS-1: ответ, полученный хуже штатного, в кеш не кладём.
+            #
+            # Пометки деградации (`refusal.note_degraded`) ставятся внутри
+            # вызова, а поля дописываются снаружи — уже после кеша. Значит,
+            # закешированная «частичная» выдача при следующем обращении
+            # приехала бы как полноценная: счётчики по нулям, `degraded`
+            # false. Это ровно тот жанр, который весь этот заход и чинит —
+            # отказ, притворившийся результатом, только с отсрочкой на TTL.
+            #
+            # Дешевле не кешировать: деградация редка, а десять минут жизни
+            # неверного ответа стоят дороже одного лишнего запроса.
+            if _looks_degraded(result):
+                return result
+
             cache.set(key, result, ttl)
             return result
 

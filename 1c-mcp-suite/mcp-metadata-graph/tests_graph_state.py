@@ -140,6 +140,112 @@ class TestGuard(unittest.TestCase):
         self.assertIsNone(guard())
 
 
+
+class TestGuardFastFail(unittest.TestCase):
+    """
+    B-1: быстрый отказ, когда уже известно, что Neo4j лежит.
+
+    Замер 15 августа при остановленной Neo4j: восемнадцать примеров по
+    3 850 мс каждый, потому что guard опрашивал базу на каждом вызове.
+    У platform-help то же самое было починено `FAIL-1` (7 916 мс → 102 мс),
+    сюда не дошло.
+
+    Проверяется не время (оно зависит от машины), а факт обращения к базе.
+    """
+
+    def _counting_query(self, exc=None, count=5):
+        calls = {"n": 0}
+
+        def query(cypher, parameters=None):
+            calls["n"] += 1
+            if exc is not None:
+                raise exc
+            return {"results": [{"columns": ["cnt"],
+                                 "data": [{"row": [count]}]}], "errors": []}
+        return query, calls
+
+    def test_unavailable_is_probed_once_then_cached(self):
+        query, calls = self._counting_query(exc=OSError("нет связи"))
+        guard = make_guard(query, recheck_sec=30)
+
+        for _ in range(5):
+            err = json.loads(guard())
+            self.assertEqual(err["error"], "neo4j_unavailable")
+
+        self.assertEqual(calls["n"], 1,
+                         "каждый вызов снова идёт в сеть — четыре секунды "
+                         "тишины на инструмент вернулись")
+
+    def test_cached_refusal_says_it_is_cached(self):
+        """
+        Урок приёмки 15 августа: `metadata_stats` отдавал из кеша картину
+        здоровья работающего графа в момент, когда графа не было, и по
+        ответу это было никак не видно. Кешированный ответ обязан называть
+        себя кешированным.
+        """
+        query, _ = self._counting_query(exc=OSError("нет связи"))
+        guard = make_guard(query, recheck_sec=30)
+        guard()
+        err = json.loads(guard())
+        self.assertIn("кеша", err.get("detail", ""))
+
+    def test_window_expiry_reprobes(self):
+        """
+        Кеш не навсегда: иначе поднявшаяся Neo4j осталась бы незамеченной
+        до перезапуска контейнера — дефект FIX-12, только наоборот.
+        """
+        query, calls = self._counting_query(exc=OSError("нет связи"))
+        guard = make_guard(query, recheck_sec=0)  # окно нулевое
+        guard()
+        guard()
+        self.assertEqual(calls["n"], 2, "окно истекло, а проверки не было")
+
+    def test_recovery_without_restart(self):
+        """Neo4j вернулась — guard обязан пропустить, а не держать отказ."""
+        state = {"alive": False}
+
+        def query(cypher, parameters=None):
+            if not state["alive"]:
+                raise OSError("нет связи")
+            return {"results": [{"columns": ["cnt"],
+                                 "data": [{"row": [5]}]}], "errors": []}
+
+        guard = make_guard(query, recheck_sec=0)
+        self.assertIsNotNone(guard())
+        state["alive"] = True
+        self.assertIsNone(guard(), "база вернулась, а guard всё ещё отказывает")
+
+    def test_ok_is_never_cached(self):
+        """
+        Кешировать удачную пробу нельзя: сервер ослеп бы к падению Neo4j на
+        всё окно. Проба на живой базе стоит миллисекунды.
+        """
+        query, calls = self._counting_query(count=5)
+        guard = make_guard(query, recheck_sec=30)
+        for _ in range(3):
+            self.assertIsNone(guard())
+        self.assertEqual(calls["n"], 3, "удачное состояние закешировалось")
+
+    def test_empty_is_never_cached(self):
+        """
+        Пустой граф тоже не кешируем: Neo4j отвечает, проба дешёвая, а кеш
+        задержал бы момент, когда индексация закончилась.
+        """
+        query, calls = self._counting_query(count=0)
+        guard = make_guard(query, recheck_sec=30)
+        for _ in range(3):
+            self.assertEqual(json.loads(guard())["error"], "graph_empty")
+        self.assertEqual(calls["n"], 3, "пустое состояние закешировалось")
+
+    def test_reset_clears_the_cache(self):
+        query, calls = self._counting_query(exc=OSError("нет связи"))
+        guard = make_guard(query, recheck_sec=30)
+        guard()
+        guard.reset()
+        guard()
+        self.assertEqual(calls["n"], 2)
+
+
 class TestNonConfigReasons(unittest.TestCase):
     """Константа server-side; парная лежит в indexer-side bsl_resolver.py."""
 

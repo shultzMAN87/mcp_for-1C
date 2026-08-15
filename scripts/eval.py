@@ -13,6 +13,12 @@
     python3 scripts/eval.py --dataset evals/datasets/my.jsonl
     python3 scripts/eval.py --limit 3              # первые 3 примера
     python3 scripts/eval.py --local                # запуск на хосте, не в docker
+    python3 scripts/eval.py --no-deps              # не поднимать зависимости
+
+Про `--no-deps`. `docker compose run` по умолчанию поднимает зависимости
+сервиса. Для обычного прогона это удобно, а для проверки поведения при
+остановленном сервисе — губительно: compose заведёт его обратно, и датасет
+измерит здоровый стенд, думая, что меряет больной.
 """
 from __future__ import annotations
 
@@ -96,11 +102,26 @@ def run_docker(args: argparse.Namespace) -> int:
         if k in file_env and k not in env:
             env[k] = file_env[k]
 
+    # A-8, вторая половина. `docker compose run` поднимает зависимости
+    # сервиса — и это не мелочь, а свойство измерения менять измеряемое.
+    # Проверено на приёмке 15 августа: `docker compose stop qdrant` +
+    # прогон датасета дал зелёные 15/15, потому что compose услужливо
+    # завёл qdrant обратно («✔ Container qdrant Healthy 5.8s») ещё до
+    # первого запроса. Ловушка на отказ отработала на живом стенде и
+    # ничего не проверила.
+    #
+    # Тот же узор, что снятая зависимость `mcp-platform-help` →
+    # `help-indexer`: там измерение уничтожало измеряемое, здесь —
+    # чинит его. Оба раза результат выглядит достоверным.
+    run_flags = ["run", "--rm"]
+    if args.no_deps:
+        run_flags.append("--no-deps")
+
     cmd = [
         "docker", "compose",
         "-f", str(compose_file),
         "--profile", "evals",
-        "run", "--rm",
+        *run_flags,
         "eval-runner",
         "python", "/app/run_eval.py",
         "--dataset", _in_container_path(args.dataset),
@@ -185,6 +206,10 @@ def main() -> int:
                     help="Per-tool call_tool timeout, сек.")
     ap.add_argument("--local", action="store_true",
                     help="Запускать runner на хосте, а не через docker compose.")
+    ap.add_argument("--no-deps", action="store_true",
+                    help="Не поднимать зависимости eval-runner. Обязателен, "
+                         "когда проверяете поведение при остановленном "
+                         "сервисе: без него compose заведёт его обратно.")
     args = ap.parse_args()
 
     if args.endpoint is None:

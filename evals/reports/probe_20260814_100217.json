@@ -1,0 +1,162 @@
+{
+  "meta": {
+    "dataset": "/app/evals/datasets/probe.jsonl",
+    "endpoint": "http://mcp-platform-help:8003/mcp",
+    "started_at": "2026-08-14T10:02:17.459844+00:00",
+    "finished_at": "2026-08-14T10:02:17.892177+00:00",
+    "duration_s": 0.432333,
+    "examples_total": 3
+  },
+  "summary": {
+    "total": 3,
+    "hard_passed": 2,
+    "hard_pass_rate": 0.6666666666666666,
+    "soft_total": 0,
+    "soft_passed": 0,
+    "soft_pass_rate": null,
+    "examples_with_mrr": 2,
+    "recall_at_1": 1.0,
+    "recall_at_5": 1.0,
+    "recall_at_10": 1.0,
+    "mrr": 1.0,
+    "latency_ms": {
+      "min": 87.58567899985792,
+      "median": 125.57196199941245,
+      "p95": 132.17702059964722,
+      "max": 132.9109159996733
+    },
+    "search_type_dist": {
+      "unknown": 1,
+      "builtin_fallback": 2
+    },
+    "transport_errors": 0,
+    "tool_errors": 0
+  },
+  "examples": [
+    {
+      "id": "probe-lookup",
+      "tool": "platform_help_lookup",
+      "args": {
+        "name": "СтрДлина",
+        "limit": 5
+      },
+      "notes": "есть ли страница в индексе вообще",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 87.58567899985792,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "non_empty",
+          "passed": false,
+          "detail": {
+            "hits_count": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "results": [],
+        "search_type": null
+      }
+    },
+    {
+      "id": "probe-exact",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "СтрДлина",
+        "limit": 10
+      },
+      "notes": "находится ли по точному имени",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 132.9109159996733,
+      "search_type": "builtin_fallback",
+      "hard": [
+        {
+          "type": "name_in_top_k",
+          "passed": true,
+          "detail": {
+            "k": 5,
+            "values": [
+              "СтрДлина",
+              "StrLen"
+            ],
+            "match_rank": 1,
+            "matched_name": "strlen",
+            "hits_examined": 1
+          },
+          "match_rank": 1
+        }
+      ],
+      "soft": [],
+      "mrr_rank": 1,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [
+          {
+            "name": "СтрДлина",
+            "name_en": "StrLen",
+            "category": "Строковые функции",
+            "syntax": "СтрДлина(<Строка>)",
+            "returns": "Число",
+            "description": "Количество символов в строке."
+          }
+        ],
+        "search_type": "builtin_fallback"
+      }
+    },
+    {
+      "id": "probe-en",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "StrLen",
+        "limit": 10
+      },
+      "notes": "то же по английскому имени",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 125.57196199941245,
+      "search_type": "builtin_fallback",
+      "hard": [
+        {
+          "type": "name_in_top_k",
+          "passed": true,
+          "detail": {
+            "k": 5,
+            "values": [
+              "СтрДлина",
+              "StrLen"
+            ],
+            "match_rank": 1,
+            "matched_name": "strlen",
+            "hits_examined": 1
+          },
+          "match_rank": 1
+        }
+      ],
+      "soft": [],
+      "mrr_rank": 1,
+      "mrr_max_k": 5,
+      "response_preview": {
+        "results": [
+          {
+            "name": "СтрДлина",
+            "name_en": "StrLen",
+            "category": "Строковые функции",
+            "syntax": "СтрДлина(<Строка>)",
+            "returns": "Число",
+            "description": "Количество символов в строке."
+          }
+        ],
+        "search_type": "builtin_fallback"
+      }
+    }
+  ]
+}

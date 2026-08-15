@@ -1,0 +1,74 @@
+{
+  "meta": {
+    "dataset": "/app/evals/datasets/probe.jsonl",
+    "endpoint": "http://mcp-platform-help:8003/mcp",
+    "started_at": "2026-08-14T10:00:54.541101+00:00",
+    "finished_at": "2026-08-14T10:00:54.839436+00:00",
+    "duration_s": 0.298335,
+    "examples_total": 1
+  },
+  "summary": {
+    "total": 1,
+    "hard_passed": 0,
+    "hard_pass_rate": 0.0,
+    "soft_total": 0,
+    "soft_passed": 0,
+    "soft_pass_rate": null,
+    "examples_with_mrr": 1,
+    "recall_at_1": 0.0,
+    "recall_at_5": 0.0,
+    "recall_at_10": 0.0,
+    "mrr": 0.0,
+    "latency_ms": {
+      "min": 191.934344999936,
+      "median": 191.934344999936,
+      "p95": 191.934344999936,
+      "max": 191.934344999936
+    },
+    "search_type_dist": {
+      "hybrid": 1
+    },
+    "transport_errors": 0,
+    "tool_errors": 0
+  },
+  "examples": [
+    {
+      "id": "probe-1",
+      "tool": "platform_help_search",
+      "args": {
+        "query": "длина строки",
+        "limit": 20
+      },
+      "notes": "где сейчас СтрДлина",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 191.934344999936,
+      "search_type": "hybrid",
+      "hard": [
+        {
+          "type": "name_in_top_k",
+          "passed": false,
+          "detail": {
+            "k": 20,
+            "values": [
+              "СтрДлина",
+              "StrLen"
+            ],
+            "match_rank": null,
+            "matched_name": null,
+            "hits_examined": 0
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": 20,
+      "response_preview": {
+        "results": [],
+        "search_type": "hybrid"
+      }
+    }
+  ]
+}
