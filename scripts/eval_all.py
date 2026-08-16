@@ -69,6 +69,9 @@ ROOT = Path(__file__).resolve().parent.parent
 DATASETS_DIR = ROOT / "evals" / "datasets"
 REPORTS_DIR = ROOT / "evals" / "reports"
 
+# Разбор soft-промахов живёт рядом, в scripts/.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 # Датасеты, которые не являются мерилом качества: `probe` — служебный
 # однопримерный набор для проверки транспорта.
 SKIP_STEMS = {"probe"}
@@ -188,6 +191,21 @@ def main() -> int:
         soft = f"{now['soft_passed']}/{now['soft_total']}" if now["soft_total"] else "—"
         print(f"{d.stem:<18} {hard:>9} {soft:>9} {_fmt_mrr(now['mrr']):>6} "
               f"{_fmt_ms(now['median_ms']):>7}  {now['report']}")
+
+        # Soft-промахи называются по именам прямо здесь. Раньше сводка
+        # печатала «7/9» и на этом останавливалась, а имена лежали в
+        # .md-отчёте — четыре промаха прожили так несколько недель. Число
+        # без имени не измерение, а лампочка без надписи.
+        if now["soft_total"] and now["soft_passed"] < now["soft_total"]:
+            try:
+                from soft_misses import misses            # noqa: E402
+                names = [f"{m['id']} ({m['type']})"
+                         for m in misses(REPORTS_DIR / now["report"])]
+            except Exception:
+                names = []
+            if names:
+                print(f"{'':<18} soft мимо: {', '.join(names)}")
+                print(f"{'':<18} подробности: python scripts/soft_misses.py {d.stem}")
 
         if now["total"] and now["hard_passed"] < now["total"]:
             failed.append(d.stem)

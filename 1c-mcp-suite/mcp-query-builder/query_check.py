@@ -498,6 +498,16 @@ def temp_table_columns(text: str) -> dict[str, list[str] | None]:
 # обрезанный список хуже полного: агент примет его за исчерпывающий и
 # построит запрос по несуществующему набору полей.
 
+# B-4: единый словарь постраничности.
+try:
+    from mcp_pagination import page_fields
+except ImportError:  # pragma: no cover — путь только для локального запуска
+    import sys
+    from pathlib import Path as _Path
+    sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+    from mcp_pagination import page_fields
+
+
 FIELDS_DEFAULT_LIMIT = 50
 FIELDS_MAX_LIMIT = 500
 
@@ -538,14 +548,21 @@ def trim_fields_payload(
         page = attrs[offset:offset + limit]
 
     out["attributes"] = page
-    out["attributes_total"] = total_attrs
-    end = offset + len(page)
-    if end < total_attrs:
-        out["attributes_has_more"] = True
-        out["attributes_next_offset"] = end
+    # B-4: постраничность собирается общим модулем. Раньше здесь жил
+    # огрызок словаря: `attributes_total` был, а `has_more` не было ни
+    # под каким именем — и правило «видишь has_more: true, запроси
+    # следующую страницу» этот сервер выполнить не мог.
+    #
+    # Канонические имена кладутся рядом с прежними: листается вложенная
+    # коллекция, поэтому у неё есть и префиксные имена, но считаются они
+    # из одного расчёта, не из второй формулы.
+    out.update(page_fields(total_attrs, offset, limit or total_attrs,
+                           len(page), alias="attributes"))
+    if out["has_more"]:
         out["note_attributes"] = (
             f"Показано {len(page)} из {total_attrs} реквизитов. "
-            f"Остальные — повторный вызов с attributes_offset={end}."
+            f"Остальные — повторный вызов с "
+            f"attributes_offset={out['next_offset']}."
         )
 
     # ─ Табличные части: имена и размеры, состав по запросу ─

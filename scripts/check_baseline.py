@@ -32,6 +32,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "evals" / "baseline.json"
 
+# B-3/FAIL-2: печать не должна ронять то, что диагностирует. Консоль
+# PowerShell бывает cp1251, а в выводе стоит «←» — на нём скрипт падал бы с
+# UnicodeEncodeError вместо того, чтобы сказать, сошлась база или нет.
+#
+# errors=replace, а не encoding=utf-8: подмена кодировки дала бы кракозябры,
+# а замена — всего лишь «?» вместо стрелки.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
+
+
 # Допуск в процентах. Ноль был бы бесполезен: конфигурация живёт, и
 # сдвиг на десяток объектов — норма, а не поломка. Смысл проверки в том,
 # чтобы поймать обвал (слой не записался, инструмент потерял половину

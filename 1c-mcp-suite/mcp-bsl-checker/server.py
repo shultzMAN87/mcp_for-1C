@@ -50,6 +50,17 @@ except ImportError:  # pragma: no cover — путь только для лок�
 # попадает в /app, поэтому импорт прямой.
 from bsl_health import AnalysisLog, health_report
 
+# PERF-7: BSL LS долгоживущим процессом вместо запуска JVM на каждый вызов.
+# Лежит рядом с server.py и в образе тоже попадает в /app.
+from bsl_lsp import BslLspClient, LspUnavailable, to_report
+
+# B-4: единый словарь постраничности — тот же модуль, что у остальных.
+try:
+    from mcp_pagination import page_fields
+except ImportError:  # pragma: no cover — путь только для локального запуска
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from mcp_pagination import page_fields
+
 mcp = FastMCP("1C BSL Syntax Checker")
 
 # OBS-1. Одна строка вместо правки каждого `return json.dumps(...)`: поле
@@ -67,6 +78,14 @@ ANALYSIS_TIMEOUT_SEC = int(os.environ.get("BSL_ANALYSIS_TIMEOUT_SEC", "120"))
 # B-7: чем ответит bsl_stats на вопрос «как ты себя чувствуешь». Пополняется
 # в одном месте — в `_run_analysis`, ниже.
 _analysis_log = AnalysisLog()
+
+# PERF-7. Единственное долгоживущее состояние во всём сервере. Процесс не
+# поднимается при старте: пока никто не просил проверить код, платить за
+# JVM не за что. Первый вызов заплатит ~10 с, все следующие — миллисекунды.
+_lsp_client = BslLspClient(
+    java_cmd=JAVA_CMD, java_opts=JAVA_OPTS,
+    jar=BSL_LS_JAR, config=BSL_LS_CONFIG,
+)
 
 # STD-5. Подсказка агенту одинаковая во всех трёх инструментах — держим одной
 # строкой, чтобы формулировка не разъехалась при первой же правке.
@@ -132,9 +151,9 @@ def _std_lookup(diagnostics: list) -> dict:
 REPORT_NAME = "bsl-json.json"
 
 
-def _run_analysis_inner(src_path: str, config_path: str = "") -> dict:
+def _analyze_dir(src_path: str, config_path: str = "") -> dict:
     """
-    Запускает BSL Language Server в режиме анализа.
+    Прежний путь: запуск JVM с `--analyze` на каталог.
 
     Возвращает либо разобранный отчёт, либо dict с ключом `error` — второе
     вызывающий код обязан отличать от пустого списка диагностик.
@@ -241,23 +260,54 @@ def _run_analysis_inner(src_path: str, config_path: str = "") -> dict:
             )
 
 
-def _run_analysis(src_path: str, config_path: str = "") -> dict:
+def _run_analysis(src_path: str, config_path: str = "",
+                  file_path: str = "", text: str | None = None) -> dict:
     """
-    То же самое, плюс запись исхода в журнал для `bsl_stats`.
+    Один вход для всех трёх инструментов: выбор пути и запись исхода.
 
-    Учёт вынесен в обёртку, а не расставлен по пяти точкам возврата внутри:
+    Учёт вынесен в обёртку, а не расставлен по точкам возврата внутри:
     иначе следующая ветка отказа появится без записи, и счётчик тихо
     разойдётся с действительностью. Это ровно тот жанр, из-за которого в
     проекте четырежды расходились списки, которые надо помнить руками.
+
+    PERF-7. Если проверяется ОДИН файл, сначала пробуем долгоживущий BSL LS
+    (доли секунды вместо десяти). Не вышло — молча уходим на `--analyze`:
+    ответ будет тот же, только медленный.
+
+    «Молча» здесь важно и означает не «скрытно». Пользователю незачем
+    видеть отказ там, где ответ получен, — но `bsl_stats` покажет и
+    причину, и то, что быстрый путь не работает, а счётчик `by_mode`
+    покажет, каким путём шли вызовы на самом деле.
+
+    Каталог быстрым путём не идёт: анализ каталога занимает минуты, старт
+    JVM в нём теряется, а открывать по LSP сотни файлов — другая задача.
     """
     t0 = time.monotonic()
-    result = _run_analysis_inner(src_path, config_path)
+    mode = "analyze"
+
+    if file_path:
+        try:
+            diagnostics = _lsp_client.diagnostics(file_path, text=text)
+            result = to_report(file_path, diagnostics)
+            _analysis_log.record_ok(time.monotonic() - t0, mode="lsp")
+            return result
+        except LspUnavailable as exc:
+            logger.info("LSP недоступен, уходим на --analyze: %s", exc)
+            mode = "analyze_fallback"
+        except Exception as exc:  # noqa: BLE001
+            # Неожиданное в быстром пути не имеет права отменить ответ:
+            # прежний путь на месте и работает.
+            logger.warning("LSP упал неожиданно (%s: %s), уходим на --analyze",
+                           type(exc).__name__, exc)
+            mode = "analyze_fallback"
+
+    result = _analyze_dir(src_path, config_path)
     elapsed = time.monotonic() - t0
     if isinstance(result, dict) and "error" in result:
         _analysis_log.record_fail(result.get("error", ""),
-                                  result.get("message", ""), elapsed)
+                                  result.get("message", ""), elapsed, mode=mode)
     else:
-        _analysis_log.record_ok(elapsed)
+        _analysis_log.record_ok(elapsed, mode=mode)
     return result
 
 
@@ -283,6 +333,7 @@ def bsl_stats() -> str:
             analysis_timeout_sec=ANALYSIS_TIMEOUT_SEC,
             config_path=BSL_LS_CONFIG,
             log=_analysis_log,
+            lsp_state=_lsp_client.state(),
         ),
         ensure_ascii=False, indent=2,
     )
@@ -301,7 +352,10 @@ def bsl_check_code(code: str) -> str:
     with tempfile.TemporaryDirectory() as tmpdir:
         bsl_file = Path(tmpdir) / "Module.bsl"
         bsl_file.write_text(code, encoding="utf-8-sig")
-        report = _run_analysis(tmpdir)
+        # Файл пишем всё равно: он нужен запасному пути `--analyze`, а
+        # быстрому передаём ещё и текст — LSP разбирает его из сообщения,
+        # не читая диск.
+        report = _run_analysis(tmpdir, file_path=str(bsl_file), text=code)
 
     if "error" in report:
         return json.dumps(report, ensure_ascii=False)
@@ -367,7 +421,7 @@ def bsl_check_file(file_path: str) -> str:
             ),
         }, ensure_ascii=False)
 
-    report = _run_analysis(str(p.parent))
+    report = _run_analysis(str(p.parent), file_path=str(p))
     if "error" in report:
         return json.dumps(report, ensure_ascii=False, indent=2)
 
@@ -448,16 +502,20 @@ def bsl_check_directory(dir_path: str, limit: int = 50, offset: int = 0) -> str:
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
     page = summary[offset:offset + limit]
-    has_more = offset + limit < len(summary)
 
+    # B-4: блок постраничности собирается общим модулем, а не здесь. Своя
+    # формула жила рядом с чужими именами: `shown` вместо `returned`, а
+    # поля `total` не было вовсе — его место занимало `total_issues`,
+    # которое считает ЗАМЕЧАНИЯ, а не строки списка. Агент, приученный
+    # сверять `returned` с `total`, на этом сервере получал пустоту.
     return json.dumps({
         "total_issues": total,
         "files_with_issues": files_with_issues,
-        "shown": len(page),
-        "offset": offset,
-        "limit": limit,
-        "has_more": has_more,
-        "next_offset": offset + limit if has_more else None,
+        **page_fields(len(summary), offset, limit, len(page)),
+        "note_pagination": (
+            "total — сколько файлов с замечаниями в списке; общее число "
+            "самих замечаний лежит в total_issues"
+        ),
         "summary": page,
         "std_lookup": _std_lookup(all_codes),
     }, ensure_ascii=False, indent=2)

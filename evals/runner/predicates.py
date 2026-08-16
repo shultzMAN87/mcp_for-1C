@@ -194,10 +194,19 @@ def _pred_full_name_contains(pred: dict, result: Any) -> PredicateOutcome:
     match_rank = None
     matched_full_name = None
     for idx, h in enumerate(hits, start=1):
-        fn = _norm(h.get("full_name"))
-        if needle in fn:
+        # EVAL-1 научил: смотреть в одно поле мало. Тогда `name_in_top_k`
+        # знал про name_ru/name_en/full_name, а metadata-graph отдавал
+        # короткое имя в `name` — два прогона выглядели как дефект
+        # ранжирования, которого не было. Здесь та же ловушка: у статей
+        # справки заголовок живёт в name_ru, а full_name собирается из
+        # родителя с именем и у части записей пуст.
+        haystack = " ".join(
+            _norm(h.get(key))
+            for key in ("full_name", "name_ru", "name_en", "title", "name")
+        )
+        if needle in haystack:
             match_rank = idx
-            matched_full_name = h.get("full_name")
+            matched_full_name = h.get("full_name") or h.get("name_ru") or h.get("name_en")
             break
 
     return PredicateOutcome(
@@ -278,6 +287,47 @@ def _pred_path_non_empty(pred: dict, result: Any) -> PredicateOutcome:
     )
 
 
+def _pred_field_at_least(pred: dict, result: Any) -> PredicateOutcome:
+    """
+    Число по пути не меньше порога.
+
+    Пробел, который стоил четырёх красных примеров. Числовых предикатов в
+    наборе не было вообще: `path_non_empty` меряет `len`, и на `int` даёт
+    осечку (грабля из `AUDIT-2`, на неё наступили `qb-003`, `mg-404`, а
+    потом чуть не наступил я в `bsl-009`), а `field_equals` требует точного
+    совпадения — прибивать ожидание к числу из живой базы значит получить
+    красный пример при первом же изменении конфигурации.
+
+    Отсюда `field_at_least`: проверяет порядок величины, а не значение.
+    «Замечаний не меньше двух», «в графе не меньше тысячи объектов» —
+    утверждения, которые переживают рост базы.
+    """
+    path = str(pred.get("path", "")).strip()
+    threshold = pred.get("min")
+    if not path or threshold is None:
+        return PredicateOutcome(
+            type="field_at_least", passed=False,
+            detail={"error": "path and min are required"},
+        )
+
+    found, actual = _dig(result, path)
+    passed = False
+    if found and isinstance(actual, bool):
+        # True не должен проходить как единица: это почти наверняка
+        # ошибка в датасете, а не осознанная проверка.
+        actual_note = "bool, а не число"
+    elif found and isinstance(actual, (int, float)):
+        passed = actual >= threshold
+        actual_note = ""
+    else:
+        actual_note = f"не число: {type(actual).__name__ if found else 'нет поля'}"
+
+    detail = {"path": path, "min": threshold, "actual": actual, "found": found}
+    if actual_note:
+        detail["problem"] = actual_note
+    return PredicateOutcome(type="field_at_least", passed=passed, detail=detail)
+
+
 _HANDLERS = {
     "non_empty": _pred_non_empty,
     "results_count_at_least": _pred_results_count_at_least,
@@ -287,7 +337,15 @@ _HANDLERS = {
     # STD-6: для ответов, у которых нет ключа `results` (сервер v8std).
     "field_equals": _pred_field_equals,
     "path_non_empty": _pred_path_non_empty,
+    # Числовой предикат: см. комментарий у _pred_field_at_least.
+    "field_at_least": _pred_field_at_least,
 }
+
+
+# Что этот раннер умеет проверять. Список нужен снаружи: `run_eval`
+# сверяет с ним датасет ДО первого вызова, иначе незнакомый предикат
+# уезжает в отчёт обычным промахом и выглядит просадкой качества.
+KNOWN_PREDICATES = frozenset(_HANDLERS)
 
 
 def evaluate(pred: dict, result: Any) -> PredicateOutcome:

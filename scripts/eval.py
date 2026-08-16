@@ -29,6 +29,20 @@ import subprocess
 import sys
 from pathlib import Path
 
+# B-3/FAIL-2: печать не должна ронять то, что диагностирует. Консоль
+# PowerShell бывает cp1251, а в выводе стоит «←» — на нём скрипт падал бы с
+# UnicodeEncodeError вместо того, чтобы сказать, сошлась база или нет.
+#
+# errors=replace, а не encoding=utf-8: подмена кодировки дала бы кракозябры,
+# а замена — всего лишь «?» вместо стрелки.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
+
+
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATASET = "evals/datasets/platform_help.jsonl"

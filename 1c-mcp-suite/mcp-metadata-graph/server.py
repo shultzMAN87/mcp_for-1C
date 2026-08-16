@@ -51,49 +51,25 @@ from refusal import (               # noqa: E402
     install_answerable_field, note_degraded,
 )
 
+# B-4: единый словарь постраничности. Здесь была ВТОРАЯ РЕАЛИЗАЦИЯ модуля
+# — фолбэк на случай, если mcp_pagination не найден: свой PaginationParams,
+# свой paginate, свой truncate_text_window. То есть модуль, заведённый
+# против расхождения словарей, сам имел копию в потребителе, и правка
+# одного места до второй не доезжала.
+#
+# Теперь как у refusal.py: в образе всё лежит плоско в /app, при локальном
+# запуске — уровнем выше, в 1c-mcp-suite/. Одна реализация, два пути к ней.
 try:
-    from mcp_pagination import PaginationParams, paginate, summarize, truncate_text_window
-except ImportError:
-    # Фолбэк: встроенные определения если модуль не найден
-    from dataclasses import dataclass
-    DEFAULT_LIMIT = 20
-    MAX_LIMIT = 100
-
-    @dataclass
-    class PaginationParams:
-        limit: int = DEFAULT_LIMIT
-        offset: int = 0
-        max_limit: int = MAX_LIMIT
-        def __post_init__(self):
-            if self.limit <= 0: self.limit = DEFAULT_LIMIT
-            if self.limit > self.max_limit: self.limit = self.max_limit
-            if self.offset < 0: self.offset = 0
-
-    def paginate(items, params, extra=None):
-        total = len(items)
-        end = params.offset + params.limit
-        page = items[params.offset:end]
-        response = {"total": total, "returned": len(page), "offset": params.offset,
-                    "limit": params.limit, "has_more": end < total}
-        if end < total: response["next_offset"] = end
-        response["items"] = page
-        if extra: response.update(extra)
-        return response
-
-    def summarize(items, preview=5):
-        return {"total": len(items), "preview_count": min(preview, len(items)),
-                "preview": items[:preview]}
-
-    def truncate_text_window(text, offset=0, window=2000):
-        if not text: return {"text": "", "total": 0, "has_more": False}
-        total = len(text)
-        if offset >= total:
-            return {"text": "", "offset": offset, "total": total, "has_more": False}
-        end = min(offset + window, total)
-        result = {"text": text[offset:end], "offset": offset, "window": window,
-                  "total": total, "shown_chars": end - offset, "has_more": end < total}
-        if end < total: result["next_offset"] = end
-        return result
+    from mcp_pagination import (      # noqa: E402
+        PaginationParams, paginate, summarize, truncate_text_window,
+        page_fields, no_pagination,
+    )
+except ImportError:  # pragma: no cover — путь только для локального запуска
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from mcp_pagination import (      # noqa: E402
+        PaginationParams, paginate, summarize, truncate_text_window,
+        page_fields, no_pagination,
+    )
 
 
 mcp = FastMCP("1C Metadata Graph")
@@ -492,21 +468,14 @@ def metadata_search(query: str, kind: str = "", limit: int = 20, offset: int = 0
             LIMIT $limit
         """, params)
 
-    end = p.offset + len(rows)
     response = {
         "query": query,
         "kind_filter": kind,
         "search_engine": engine,
-        "total": total,
-        "returned": len(rows),
-        "offset": p.offset,
-        "limit": p.limit,
-        "has_more": end < total,
+        **page_fields(total, p.offset, p.limit, len(rows)),
         "items": rows,
     }
     response.update(scope_note(scope, total, bool(rows)))
-    if end < total:
-        response["next_offset"] = end
 
     return json.dumps(response, ensure_ascii=False, indent=2)
 
@@ -563,11 +532,10 @@ def metadata_object_details(
             all_attrs = []
 
         limit = max(1, min(attributes_limit, 200))
+        page = all_attrs[:limit]
         response["attributes"] = {
-            "total": len(all_attrs),
-            "returned": min(limit, len(all_attrs)),
-            "items": all_attrs[:limit],
-            "has_more": len(all_attrs) > limit,
+            **page_fields(len(all_attrs), 0, limit, len(page)),
+            "items": page,
         }
     else:
         # Только счётчик
@@ -673,15 +641,9 @@ def metadata_references_from(full_name: str, limit: int = 20, offset: int = 0) -
         LIMIT $limit
     """, {"fn": full_name, "offset": p.offset, "limit": p.limit})
 
-    end = p.offset + len(rows)
     return json.dumps({
         "object": full_name,
-        "total": total,
-        "returned": len(rows),
-        "offset": p.offset,
-        "limit": p.limit,
-        "has_more": end < total,
-        "next_offset": end if end < total else None,
+        **page_fields(total, p.offset, p.limit, len(rows)),
         "items": rows,
     }, ensure_ascii=False, indent=2)
 
@@ -716,15 +678,9 @@ def metadata_references_to(full_name: str, limit: int = 20, offset: int = 0) -> 
         LIMIT $limit
     """, {"fn": full_name, "offset": p.offset, "limit": p.limit})
 
-    end = p.offset + len(rows)
     return json.dumps({
         "object": full_name,
-        "total": total,
-        "returned": len(rows),
-        "offset": p.offset,
-        "limit": p.limit,
-        "has_more": end < total,
-        "next_offset": end if end < total else None,
+        **page_fields(total, p.offset, p.limit, len(rows)),
         "items": rows,
     }, ensure_ascii=False, indent=2)
 
@@ -761,16 +717,23 @@ def metadata_dependency_tree(full_name: str, depth: int = 2, limit: int = 50) ->
         LIMIT $limit
     """, {"fn": full_name, "limit": limit})
 
+    # B-4: обход дерева — не постраничная выдача: следующего offset у него
+    # нет, порядок обхода не гарантирован, и листать тут нечего. Раньше
+    # ответ обещал `has_more: true` и не давал, куда идти дальше.
     return json.dumps({
         "object": full_name,
         "depth": depth,
         "total_distinct_nodes": total,
-        "returned": len(rows),
         "limit": limit,
-        "has_more": total > len(rows),
-        "hint": ("Для больших деревьев используйте меньший depth или "
-                 "работайте через metadata_references_from/to постранично")
-                 if total > limit else None,
+        **no_pagination(
+            len(rows), limit,
+            reason=("обход дерева зависимостей не постраничный: порядок "
+                    "обхода не гарантирован, следующей страницы нет"),
+            instead=("для больших деревьев уменьшите depth или идите "
+                     "постранично через metadata_references_from / "
+                     "metadata_referrers"),
+        ),
+        "truncated": total > len(rows),
         "items": rows,
     }, ensure_ascii=False, indent=2)
 
@@ -841,18 +804,11 @@ def metadata_list_objects(kind: str = "", limit: int = 50, offset: int = 0,
         LIMIT $limit
     """, params)
 
-    end = p.offset + len(rows)
     response = {
         "kind_filter": kind or None,
-        "total": total,
-        "returned": len(rows),
-        "offset": p.offset,
-        "limit": p.limit,
-        "has_more": end < total,
+        **page_fields(total, p.offset, p.limit, len(rows)),
         "items": rows,
     }
-    if end < total:
-        response["next_offset"] = end
 
     response.update(scope_note(scope, total, bool(rows)))
 
@@ -909,14 +865,8 @@ def metadata_subsystems(limit: int = 30, offset: int = 0) -> str:
         LIMIT $limit
     """, {"offset": p.offset, "limit": p.limit})
 
-    end = p.offset + len(rows)
     return json.dumps({
-        "total": total,
-        "returned": len(rows),
-        "offset": p.offset,
-        "limit": p.limit,
-        "has_more": end < total,
-        "next_offset": end if end < total else None,
+        **page_fields(total, p.offset, p.limit, len(rows)),
         "items": rows,
         "hint": "Для состава конкретной подсистемы вызовите metadata_subsystem_members",
     }, ensure_ascii=False, indent=2)
@@ -966,15 +916,9 @@ def metadata_subsystem_members(
         LIMIT $limit
         """, {"name": subsystem_name, "offset": p.offset, "limit": p.limit})
 
-    end = p.offset + len(rows)
     return json.dumps({
         "subsystem": subsystem_name,
-        "total": total,
-        "returned": len(rows),
-        "offset": p.offset,
-        "limit": p.limit,
-        "has_more": end < total,
-        "next_offset": end if end < total else None,
+        **page_fields(total, p.offset, p.limit, len(rows)),
         "items": rows,
     }, ensure_ascii=False, indent=2)
 

@@ -2,6 +2,20 @@ import asyncio, sys
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
+# B-3/FAIL-2: печать не должна ронять то, что диагностирует. Консоль
+# PowerShell бывает cp1251, а в выводе стоит «←» — на нём скрипт падал бы с
+# UnicodeEncodeError вместо того, чтобы сказать, сошлась база или нет.
+#
+# errors=replace, а не encoding=utf-8: подмена кодировки дала бы кракозябры,
+# а замена — всего лишь «?» вместо стрелки.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except Exception:
+        pass
+
+
+
 SERVERS = {"metadata": 8001, "bsl": 8002, "help": 8003, "query": 8009}
 # v8std — чужой сервер (STD-4), нашего bearer не знает: ходим без него.
 NO_AUTH = {"v8std"}

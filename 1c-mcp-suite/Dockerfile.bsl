@@ -43,6 +43,13 @@ COPY mcp_http.py /app/mcp_http.py
 # Без этой строки сервер падает на импорте при старте. Копируется в ТРИ
 # образа; расхождение между ними ловит tests_refusal.py.
 COPY refusal.py /app/refusal.py
+# B-4: единый словарь постраничности. Строку не пришлось вспоминать —
+# tests_delivery.py (B-6) назвал её сам, как только сервер начал
+# импортировать модуль.
+COPY mcp_pagination.py /app/mcp_pagination.py
+# PERF-7: клиент BSL LS в режиме LSP. Третья подряд строка COPY, которую
+# назвал tests_delivery.py, а не память.
+COPY mcp-bsl-checker/bsl_lsp.py /app/bsl_lsp.py
 
 EXPOSE 8002
 

@@ -23,7 +23,16 @@
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 from typing import Callable, Optional
+
+# B-4: единый словарь постраничности — тот же, что у остальных серверов.
+try:
+    from mcp_pagination import page_fields
+except ImportError:  # pragma: no cover — путь только для локального запуска
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from mcp_pagination import page_fields
 
 
 def register_v3_tools(mcp, neo4j_query: Callable, neo4j_rows: Callable,
@@ -281,16 +290,10 @@ def register_v3_tools(mcp, neo4j_query: Callable, neo4j_rows: Callable,
             {"tid": target_id, "offset": offset, "limit": limit},
         )
 
-        end = offset + len(items)
         return json.dumps({
             "found":   True,          # FIX-19: симметрично ветке «не найдено»
             "object":  target_id,
-            "total":   total,
-            "returned": len(items),
-            "offset":  offset,
-            "limit":   limit,
-            "has_more": end < total,
-            "next_offset": end if end < total else None,
+            **page_fields(total, offset, limit, len(items)),
             "items":   items,
         }, ensure_ascii=False, indent=2)
 
@@ -467,15 +470,9 @@ def register_v3_tools(mcp, neo4j_query: Callable, neo4j_rows: Callable,
             SKIP $offset LIMIT $limit
             """, params,
         )
-        end = offset + len(items)
         return json.dumps({
             "kind_filter":  kind or "all (кроме Subsystem)",
-            "total":        total,
-            "returned":     len(items),
-            "offset":       offset,
-            "limit":        limit,
-            "has_more":     end < total,
-            "next_offset":  end if end < total else None,
+            **page_fields(total, offset, limit, len(items)),
             "items":        items,
         }, ensure_ascii=False, indent=2)
 

@@ -21,7 +21,7 @@ from pathlib import Path
 
 from mcp_client import MCPSession, ToolCallResult
 from metrics import aggregate
-from predicates import PredicateOutcome, evaluate
+from predicates import KNOWN_PREDICATES, PredicateOutcome, evaluate
 from report import generate_reports, utcnow
 
 
@@ -52,7 +52,52 @@ def load_dataset(path: Path) -> list[dict]:
                 break
         else:
             items.append(obj)
+
+    _check_predicate_types(path, items)
     return items
+
+
+def _check_predicate_types(path: Path, items: list[dict]) -> None:
+    """
+    Все ли типы предикатов известны ЭТОМУ раннеру.
+
+    Приёмка 16 августа. В датасет добавился новый предикат
+    `field_at_least`, датасеты монтируются в контейнер, а код раннера —
+    нет: он лежит в образе. Раннер прочитал незнакомый тип, вернул
+    `passed: False` с пометкой `unknown_predicate_type` и поехал дальше.
+
+    Снаружи это выглядело обычным промахом: строка «soft мимо: mg-002
+    (field_at_least)» неотличима от настоящей просадки качества. То есть
+    отказ инструмента притворился результатом измерения — ровно тот жанр,
+    против которого затевался весь заход с `answerable` и `shortfall`.
+
+    Теперь это остановка на входе, до первого вызова, с готовой командой
+    починки. Предикат, которого раннер не знает, не может ни пройти, ни
+    провалиться — он может только соврать.
+    """
+    unknown: dict[str, list[str]] = {}
+    for item in items:
+        expect = item.get("expect") or {}
+        for section in ("hard", "soft"):
+            for pred in (expect.get(section) or []):
+                ptype = (pred or {}).get("type", "")
+                if ptype and ptype not in KNOWN_PREDICATES:
+                    unknown.setdefault(ptype, []).append(item.get("id", "?"))
+    if not unknown:
+        return
+
+    lines = [f"{path.name}: датасет использует предикаты, которых этот "
+             f"раннер не знает:"]
+    for ptype, ids in sorted(unknown.items()):
+        lines.append(f"  {ptype} — в примерах: {', '.join(sorted(set(ids)))}")
+    lines.append("")
+    lines.append("Раннер лежит В ОБРАЗЕ (монтируется только ./evals с")
+    lines.append("датасетами и отчётами), поэтому новый предикат туда не")
+    lines.append("доезжает сам. Пересоберите образ:")
+    lines.append("    docker compose --profile evals build eval-runner")
+    lines.append("")
+    lines.append(f"Раннер знает: {', '.join(sorted(KNOWN_PREDICATES))}")
+    raise SystemExit("\n".join(lines))
 
 
 def _mrr_info_from_hard(example: dict, outcomes: list[PredicateOutcome]) -> tuple[int | None, int | None]:
@@ -171,6 +216,15 @@ async def main_async(args: argparse.Namespace) -> int:
                     ht = len(r["hard"])
                     marker = "✓" if hp == ht else "✗"
                     print(f"        {marker} hard {hp}/{ht}  ({r['duration_ms']:.0f} ms, mode={r['search_type']})", flush=True)
+                    # Soft-промах называется сразу. Раньше строка молчала о
+                    # нём, и узнать, какой предикат не сошёлся, можно было
+                    # только открыв .md-отчёт — чего никто не делал, пока
+                    # hard держался на 100%.
+                    soft_bad = [p for p in r["soft"] if not p["passed"]]
+                    if soft_bad:
+                        names = ", ".join(p["type"] for p in soft_bad)
+                        print(f"        ~ soft {len(r['soft']) - len(soft_bad)}"
+                              f"/{len(r['soft'])} мимо: {names}", flush=True)
     except Exception as e:
         print(f"[eval] FATAL session error: {type(e).__name__}: {e}", file=sys.stderr)
         return 1

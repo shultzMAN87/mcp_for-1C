@@ -42,11 +42,17 @@ import logging
 from mcp.server.fastmcp import FastMCP
 
 # OBS-1: единый словарь отказа.
+# B-4: единый словарь постраничности. Справка листаться не умеет и не
+# должна — см. no_pagination ниже, — но контракт обязана соблюдать, иначе
+# правило «видишь has_more: true — запроси следующую страницу» получает
+# исключение, а исключения в правилах агенты роняют первыми.
 try:
     from refusal import install_answerable_field
+    from mcp_pagination import no_pagination
 except ImportError:  # pragma: no cover — путь только для локального запуска
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from refusal import install_answerable_field
+    from mcp_pagination import no_pagination
 
 # Прореживание и перемешивание выдачи (см. help_ranking.py).
 # Импорт намеренно без try/except: если файл забыли положить в образ,
@@ -772,6 +778,14 @@ def platform_help_search(query: str, limit: int = 10, kind: str = "") -> str:
                 # метода в списке ничего не говорит о платформе.
                 "answerable": False,
                 "query": query,
+                **no_pagination(
+                    len(bi_hits), limit,
+                    reason=("выдача ранжирована по смыслу: за пределами топа "
+                                    "релевантность падает, и следующая страница почти "
+                                    "всегда мусор — страниц здесь нет по существу"),
+                    instead=("уточните запрос или поднимите limit; для точного "
+                                     "имени метода — platform_help_lookup"),
+                ),
                 "results": bi_hits,
                 "note": "Индекс справки недоступен или пуст; показаны 20 встроенных "
                         "функций. Это НЕ полная справка платформы — ответы, "
@@ -794,6 +808,14 @@ def platform_help_search(query: str, limit: int = 10, kind: str = "") -> str:
             "query": query,
             "results": [],
             "results_count": 0,
+        **no_pagination(
+            len([]), limit,
+            reason=("выдача ранжирована по смыслу: за пределами топа "
+                    "релевантность падает, и следующая страница почти "
+                    "всегда мусор — страниц здесь нет по существу"),
+            instead=("уточните запрос или поднимите limit; для точного "
+                     "имени метода — platform_help_lookup"),
+        ),
             "note": ("Поиск недоступен: коллекция пуста или Qdrant не отвечает. "
                      "Проверь help-indexer и platform_help_stats."
                      if mode == "unavailable" else
@@ -813,6 +835,14 @@ def platform_help_search(query: str, limit: int = 10, kind: str = "") -> str:
         "query": query,
         "filter": {"kind": kind} if kind else None,
         "results_count": len(hits),
+        **no_pagination(
+            len(hits), limit,
+            reason=("выдача ранжирована по смыслу: за пределами топа "
+                    "релевантность падает, и следующая страница почти "
+                    "всегда мусор — страниц здесь нет по существу"),
+            instead=("уточните запрос или поднимите limit; для точного "
+                     "имени метода — platform_help_lookup"),
+        ),
         "results": hits,
     }, ensure_ascii=False, indent=2)
 
@@ -937,6 +967,10 @@ def platform_help_lookup(name: str, limit: int = 10) -> str:
             "availability": p.get("availability", ""),
             "returns": p.get("returns", ""),
             "text": p.get("text", ""),
+            # A-7: без hbk_file пара «контейнер + путь» не собирается, и
+            # фильтр связанных чанков ниже вырождается обратно в поиск по
+            # одному пути — то есть правка была бы косметической.
+            "hbk_file": p.get("hbk_file", ""),
             "file_path": p.get("file_path", ""),
         })
 
@@ -944,6 +978,14 @@ def platform_help_lookup(name: str, limit: int = 10) -> str:
         "lookup": name,
         "parent_filter": parent or None,
         "results_count": len(hits),
+        **no_pagination(
+            len(hits), limit,
+            reason=("выдача ранжирована по смыслу: за пределами топа "
+                    "релевантность падает, и следующая страница почти "
+                    "всегда мусор — страниц здесь нет по существу"),
+            instead=("уточните запрос или поднимите limit; для точного "
+                     "имени метода — platform_help_lookup"),
+        ),
         "results": hits,
         "hint": (
             "Если ничего не найдено, попробуй platform_help_search — "
@@ -983,6 +1025,7 @@ def platform_help_details(name: str) -> str:
     # Шаг 2: для лучшего совпадения берём связанные чанки (params, syntax, example)
     best = cards[0]
     file_path = best.get("file_path", "")
+    hbk_file = best.get("hbk_file", "")
 
     related = {"params": "", "syntax": "", "example": "", "description": ""}
     if file_path:
@@ -990,13 +1033,27 @@ def platform_help_details(name: str) -> str:
         if client is not None:
             try:
                 from qdrant_client import models
-                fp_filter = models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="file_path", match=models.MatchValue(value=file_path)
-                        )
-                    ]
-                )
+                # A-7. Фильтр стоял по одному `file_path`, и это был самый
+                # дорогой из трёх его случаев: 11 путей заняты дважды, и на
+                # них карточка собирала синтаксис, параметры и пример ЧУЖОЙ
+                # страницы — из другого контейнера справки.
+                #
+                # Наружу это выходило не отказом, а неверным ответом:
+                # правдоподобная карточка с параметрами не того метода.
+                # Отличить такую от верной по ответу нельзя.
+                #
+                # Пара «контейнер + путь» уникальна; `hbk_file` лежит в
+                # payload с самого начала.
+                must = [
+                    models.FieldCondition(
+                        key="file_path", match=models.MatchValue(value=file_path)
+                    )
+                ]
+                if hbk_file:
+                    must.append(models.FieldCondition(
+                        key="hbk_file", match=models.MatchValue(value=hbk_file)
+                    ))
+                fp_filter = models.Filter(must=must)
                 result, _ = client.scroll(
                     collection_name=COLLECTION_NAME,
                     scroll_filter=fp_filter,
@@ -1020,6 +1077,7 @@ def platform_help_details(name: str) -> str:
             {
                 "full_name": c.get("full_name", ""),
                 "kind": c.get("kind", ""),
+                "hbk_file": c.get("hbk_file", ""),   # A-7: путь без контейнера неоднозначен
                 "file_path": c.get("file_path", ""),
             }
             for c in cards[1:]

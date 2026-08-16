@@ -280,7 +280,42 @@ class Neo4jProvider(MetadataProvider):
         return _neo4j_rows(cypher, params)
 
     def suggest(self, name: str, limit: int = 3) -> list:
-        return [f"{r['kind_ru']}.{r['name']}" for r in self.search(name, limit)]
+        """
+        Похожие имена для ответа «объект не найден».
+
+        FIX-21. Сюда приходит имя ровно в том виде, в каком его написал
+        агент, — то есть чаще всего с префиксом вида: `Справочник.Номенклат`.
+        А `search` ищет подстроку в `o.name`, где префикса нет никогда:
+        в графе лежит `Номенклатура`, а не `Справочник.Номенклатура`.
+
+        Значит `CONTAINS "справочник.номенклат"` не совпадал НИ С ЧЕМ, и
+        подсказки не работали вовсе — ни на опечатке, ни на чём-либо ещё.
+        Наружу это выходило пустым списком, то есть выглядело как «похожих
+        имён нет», а не как «искали не то».
+
+        Дефект нашёлся примером qb-005 (опечатка в настоящем имени) на
+        следующий же день после того, как пример появился, — до этого
+        датасет проверял только заведомо бессмысленное имя, где пустой
+        ответ законен, и различить эти два случая было нечем.
+
+        Если вид указан, ищем ещё и в его пределах: `Справочник.Заказ`
+        должен подсказывать справочники, а не документы.
+        """
+        head, _, tail = name.partition(".")
+        kind_ru = ""
+        if tail:
+            # TABLE_PREFIXES отдаёт вид в каноническом написании
+            # («СПРАВОЧНИК» → «Справочник»), а не то, как его набрал агент.
+            kind_ru = TABLE_PREFIXES.get(head.upper(), "")
+            bare = tail.split(".")[0]
+        else:
+            bare = name
+
+        rows = self.search(bare, limit, kind_ru=kind_ru) if kind_ru else []
+        if not rows:
+            # Вид не опознан или в его пределах пусто — ищем по всей базе.
+            rows = self.search(bare, limit)
+        return [f"{r['kind_ru']}.{r['name']}" for r in rows]
 
 
 def _attr_from_row(r: dict) -> AttrInfo:
@@ -441,9 +476,18 @@ def query_join_hint(table1: str, table2: str) -> str:
 
     tbl1, tbl2 = _query_table_name(obj1), _query_table_name(obj2)
     joins = []
+    # Сколько пар реквизитов рассмотрено. Пустой `joins` без этого числа
+    # означает сразу две разные вещи — «связи между таблицами нет» и
+    # «связи не искали» (у объектов не разобрались реквизиты, граф отдал
+    # пустой список, инструмент отработал вхолостую). Различить их по
+    # ответу было нечем, и soft-предикат на `joins` поэтому ничего не
+    # измерял: он краснел одинаково в обоих случаях.
+    examined = 0
 
     def scan(src_obj, dst_obj, src_alias, dst_alias, src_tbl, dst_tbl):
+        nonlocal examined
         for a in src_obj.attributes:
+            examined += 1
             if any(t == dst_obj.id for _, t in a.types):
                 joins.append({
                     "type": "ЛЕВОЕ СОЕДИНЕНИЕ",
@@ -454,6 +498,7 @@ def query_join_hint(table1: str, table2: str) -> str:
                 })
         for ts_name, attrs in src_obj.tabular_sections.items():
             for a in attrs:
+                examined += 1
                 if any(t == dst_obj.id for _, t in a.types):
                     joins.append({
                         "type": "ЧЕРЕЗ ТАБЛИЧНУЮ ЧАСТЬ",
@@ -470,12 +515,19 @@ def query_join_hint(table1: str, table2: str) -> str:
     scan(obj2, obj1, "Т2", "Т1", tbl2, tbl1)
 
     result = {"table1": tbl1, "table2": tbl2,
-              "joins_found": len(joins), "joins": joins}
+              "joins_found": len(joins), "joins": joins,
+              "candidates_examined": examined}
     if not joins:
         result["hint"] = (
             "Прямая ссылочная связь не найдена. Варианты: соединение через "
             "промежуточную таблицу (регистр или справочник-связку); "
             "соединение по значению реквизита, а не по ссылке; подзапрос."
+        )
+        result["meaning"] = (
+            f"Рассмотрено {examined} реквизитов обеих таблиц, ссылки друг на "
+            f"друга ни у одного нет. Это достоверный ответ «связи нет», а не "
+            f"отказ. Ноль рассмотренных означал бы обратное: реквизиты не "
+            f"разобрались, и про связь не известно ничего."
         )
     return json.dumps(result, ensure_ascii=False, indent=2)
 

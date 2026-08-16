@@ -227,5 +227,77 @@ class TestNoHarm(unittest.TestCase):
         self.assertEqual(names(diversify_hits(hits, 8)), names(hits))
 
 
+class TestPageKeyIsUniqueAcrossContainers(unittest.TestCase):
+    """
+    A-7. `file_path` уникален внутри одного .hbk — и только внутри него.
+    После HBK-1 контейнеров сорок, и индексатор насчитал 11 страниц из 27
+    тысяч под уже занятым путём.
+
+    Цена именно здесь: `collapse_pages` считала такие страницы одной и
+    выбрасывала вторую как дубль. Не отказ и не ошибка — просто выдача
+    беднее на страницу, и заметить это со стороны нельзя.
+    """
+
+    def test_same_path_in_different_books_is_two_pages(self):
+        hits = [
+            {"file_path": "objects/catalog213/Add4692.html",
+             "hbk_file": "shcntx_ru.hbk", "name_ru": "Добавить", "score": 9},
+            {"file_path": "objects/catalog213/Add4692.html",
+             "hbk_file": "shlang_ru.hbk", "name_ru": "Добавить", "score": 8},
+        ]
+        self.assertNotEqual(page_key(hits[0]), page_key(hits[1]))
+        self.assertEqual(len(collapse_pages(hits)), 2,
+                         "страница из другого контейнера выброшена как дубль")
+
+    def test_same_path_same_book_is_one_page(self):
+        hits = [
+            {"file_path": "objects/catalog213/Add4692.html",
+             "hbk_file": "shcntx_ru.hbk", "chunk_type": "description", "score": 9},
+            {"file_path": "objects/catalog213/Add4692.html",
+             "hbk_file": "shcntx_ru.hbk", "chunk_type": "params", "score": 8},
+        ]
+        self.assertEqual(page_key(hits[0]), page_key(hits[1]))
+        self.assertEqual(len(collapse_pages(hits)), 1)
+
+    def test_old_payload_without_hbk_file_still_works(self):
+        """Схема без `hbk_file` — путь остаётся ключом, как раньше."""
+        hit = {"file_path": "a/b.html", "name_ru": "X"}
+        self.assertEqual(page_key(hit), "a/b.html")
+
+    def test_no_path_falls_back_to_name(self):
+        self.assertEqual(page_key({"full_name": "Массив.Добавить"}),
+                         "Массив.Добавить")
+        self.assertEqual(page_key({}), "")
+
+
+class TestRelatedChunksAreFilteredByPair(unittest.TestCase):
+    """
+    Контрактная часть: карточка `platform_help_lookup` собирает синтаксис,
+    параметры и пример через фильтр Qdrant. Пока фильтр стоял по одному
+    пути, на 11 занятых путях карточка собирала части ЧУЖОЙ страницы — и
+    наружу это выходило не отказом, а правдоподобным неверным ответом.
+
+    Проверяем текстом по исходнику: server.py не импортируется — он тянет
+    FastMCP и qdrant_client.
+    """
+
+    def setUp(self):
+        self.src = (Path(__file__).resolve().parent / "server.py").read_text(
+            encoding="utf-8")
+
+    def test_filter_includes_hbk_file(self):
+        self.assertIn('key="hbk_file"', self.src,
+                      "фильтр связанных чанков не учитывает контейнер")
+
+    def test_lookup_card_carries_hbk_file(self):
+        """
+        Без `hbk_file` в карточке пара не собирается, и фильтр вырождается
+        обратно в поиск по одному пути — правка стала бы косметической.
+        """
+        card_block = self.src[self.src.index('"lookup": name,') - 2000:
+                              self.src.index('"lookup": name,')]
+        self.assertIn('"hbk_file"', card_block)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

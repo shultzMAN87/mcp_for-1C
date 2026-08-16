@@ -29,6 +29,97 @@ MAX_LIMIT = 100
 DEFAULT_PREVIEW = 5  # Сколько элементов показывать в «сводке»
 
 
+# ─── B-4: один словарь постраничности на весь набор ──────────────────────
+#
+# Диагноз AUDIT-2: словарей было три с половиной. У metadata-graph —
+# правильный, у bsl-checker — свой с теми же именами, у query-builder —
+# `attributes_total` и больше ничего, у platform-help — только `limit`.
+#
+# Цена не в дубликате кода, а в отсутствии контракта: правила Cursor не
+# могли сказать «видишь has_more: true — запроси следующую страницу»,
+# потому что у двух серверов из четырёх такого поля нет вовсе.
+#
+# Отсюда контракт, обязательный для всех четырёх:
+#
+#   pagination   — "paged" или "none". Есть ВСЕГДА;
+#   has_more     — есть всегда, у "none" всегда false;
+#   next_offset  — есть всегда, null когда следующей страницы нет;
+#   returned     — сколько отдано этим вызовом.
+#
+# `next_offset` присутствует и в отрицательной ветке нарочно. Урок FIX-19:
+# поле, по которому отличают одно состояние от другого, обязано быть в
+# обеих ветках, иначе проверка на него получает null там, где всё хорошо, и
+# «поля нет, потому что страниц больше нет» неотличимо от «поля нет, потому
+# что сервер старой версии».
+#
+# Отдельная ветка "none" — не отговорка. Она для выдачи, где страниц нет ПО
+# СУЩЕСТВУ: семантический поиск ранжирует, и вторая страница по убыванию
+# релевантности почти всегда мусор. Ответ говорит это прямо, вместо того
+# чтобы предлагать листать и молча ухудшать результат. Правило при этом
+# остаётся без исключений: has_more есть у всех, просто у справки он всегда
+# false, а что делать вместо листания — сказано в поле рядом.
+
+PAGINATION_PAGED = "paged"
+PAGINATION_NONE = "none"
+
+
+def page_fields(total: int, offset: int, limit: int, returned: int,
+                alias: str = "") -> dict:
+    """
+    Канонический блок постраничности. Единственное место, где эти имена
+    появляются на свет.
+
+    `alias` — префикс для тех, кто листает вложенную коллекцию, а не свой
+    главный список (`query_fields` листает реквизиты). Тогда рядом с
+    каноническими полями кладутся `attributes_total`, `attributes_has_more`
+    и `attributes_next_offset` — из того же расчёта, не из второй формулы.
+    """
+    total = max(0, int(total))
+    offset = max(0, int(offset))
+    returned = max(0, int(returned))
+    end = offset + returned
+    has_more = end < total
+    out = {
+        "pagination": PAGINATION_PAGED,
+        "total": total,
+        "returned": returned,
+        "offset": offset,
+        "limit": int(limit),
+        "has_more": has_more,
+        "next_offset": end if has_more else None,
+    }
+    if alias:
+        out[f"{alias}_total"] = total
+        out[f"{alias}_has_more"] = has_more
+        out[f"{alias}_next_offset"] = end if has_more else None
+        out["paginated_field"] = alias
+    return out
+
+
+def no_pagination(returned: int, limit: int = 0, reason: str = "",
+                  instead: str = "") -> dict:
+    """
+    Блок для выдачи, у которой страниц нет по существу.
+
+    `reason` — почему их нет; `instead` — что делать вместо листания. Оба
+    попадают в ответ: сказать «страниц нет» и не сказать, что делать, —
+    значит оставить агента ровно там, откуда он пришёл.
+    """
+    out = {
+        "pagination": PAGINATION_NONE,
+        "returned": max(0, int(returned)),
+        "has_more": False,
+        "next_offset": None,
+    }
+    if limit:
+        out["limit"] = int(limit)
+    if reason:
+        out["pagination_reason"] = reason
+    if instead:
+        out["pagination_instead"] = instead
+    return out
+
+
 @dataclass
 class PaginationParams:
     """Параметры пагинации с валидацией."""
@@ -67,20 +158,11 @@ def paginate(items: list, params: PaginationParams, extra: dict | None = None) -
         ...extra...
       }
     """
-    total = len(items)
-    end = params.offset + params.limit
-    page = items[params.offset:end]
-    has_more = end < total
-
-    response = {
-        "total": total,
-        "returned": len(page),
-        "offset": params.offset,
-        "limit": params.limit,
-        "has_more": has_more,
-    }
-    if has_more:
-        response["next_offset"] = end
+    page = items[params.offset:params.offset + params.limit]
+    # B-4: блок собирается там же, где и у остальных серверов. Раньше здесь
+    # была своя формула, и `next_offset` она клала только при наличии
+    # следующей страницы — та самая асимметрия, которую чинил FIX-19.
+    response = page_fields(len(items), params.offset, params.limit, len(page))
     response["items"] = page
 
     if extra:
@@ -141,7 +223,8 @@ def truncate_text_window(text: str, offset: int = 0, window: int = 2000) -> dict
     Позволяет листать большие модули по частям.
     """
     if not text:
-        return {"text": "", "offset": 0, "window": window, "total": 0, "has_more": False}
+        return {"text": "", "offset": 0, "window": window, "total": 0,
+                "has_more": False, "next_offset": None}
 
     total = len(text)
     if offset < 0:
@@ -153,6 +236,7 @@ def truncate_text_window(text: str, offset: int = 0, window: int = 2000) -> dict
             "window": window,
             "total": total,
             "has_more": False,
+            "next_offset": None,
             "hint": "offset превышает размер текста",
         }
 
@@ -166,8 +250,7 @@ def truncate_text_window(text: str, offset: int = 0, window: int = 2000) -> dict
         "total": total,
         "shown_chars": end - offset,
         "has_more": has_more,
+        "next_offset": end if has_more else None,
     }
-    if has_more:
-        result["next_offset"] = end
 
     return result

@@ -270,19 +270,35 @@ class AnalysisLog:
         # Счётчик по кодам отказа: видно, что именно ломается — таймаут на
         # большом каталоге и отсутствующая java лечатся по-разному.
         self.failures_by_error: dict[str, int] = {}
+        # PERF-7: каким путём шёл анализ — `lsp` (долгоживущий процесс),
+        # `analyze` (запуск JVM) или `analyze_fallback` (LSP не сработал,
+        # ушли на прежний путь). Это главное число после правки: если
+        # быстрый путь не используется, выигрыш существует только на
+        # бумаге, и увидеть это надо не по секундомеру, а по счётчику.
+        self.by_mode: dict[str, int] = {}
+        self.last_mode = ""
 
-    def record_ok(self, seconds: float) -> None:
+    def record_ok(self, seconds: float, mode: str = "") -> None:
         with self._lock:
             self.runs_total += 1
             self.runs_ok += 1
             self.last_ok_at = self._clock()
             self.last_ok_sec = round(seconds, 2)
+            self._note_mode(mode)
+
+    def _note_mode(self, mode: str) -> None:
+        """Вызывать под замком: считаем пути анализа (PERF-7)."""
+        if not mode:
+            return
+        self.by_mode[mode] = self.by_mode.get(mode, 0) + 1
+        self.last_mode = mode
 
     def record_fail(self, error: str, message: str = "",
-                    seconds: float = 0.0) -> None:
+                    seconds: float = 0.0, mode: str = "") -> None:
         with self._lock:
             self.runs_total += 1
             self.runs_failed += 1
+            self._note_mode(mode)
             self.last_fail_at = self._clock()
             self.last_fail_error = error or "unknown"
             self.last_fail_message = (message or "")[:300]
@@ -297,6 +313,8 @@ class AnalysisLog:
                 "runs_ok": self.runs_ok,
                 "runs_failed": self.runs_failed,
                 "failures_by_error": dict(self.failures_by_error),
+                "by_mode": dict(self.by_mode),
+                "last_mode": self.last_mode,
                 "last_ok_iso": _iso(self.last_ok_at),
                 "last_ok_age_sec": (round(now - self.last_ok_at, 1)
                                     if self.last_ok_at else None),
@@ -333,7 +351,8 @@ MEANING_OK = (
 def health_report(jar_path: str, java_cmd: str = "java",
                   java_opts: str = "", analysis_timeout_sec: int = 120,
                   config_path: str = "", log: AnalysisLog | None = None,
-                  java_probe=None, jar_probe=None, now: float | None = None) -> dict:
+                  java_probe=None, jar_probe=None, now: float | None = None,
+                  lsp_state: dict | None = None) -> dict:
     """
     Полный ответ `bsl_stats`.
 
@@ -385,6 +404,21 @@ def health_report(jar_path: str, java_cmd: str = "java",
         "probe_note": ("Проверка выполнена сейчас, кеша нет: инструмент "
                        "состояния обязан отвечать про «прямо сейчас»."),
     }
+    if lsp_state is not None:
+        # PERF-7: долгоживущий процесс — состояние, а скрытое состояние
+        # делает систему неотлаживаемой. Поэтому оно здесь, рядом со
+        # всем остальным, что можно спросить одним вызовом.
+        report["lsp"] = lsp_state
+        if lsp_state.get("mode") != "off" and not lsp_state.get("running"):
+            if lsp_state.get("last_error"):
+                # Не отказ: проверки идут прежним путём и дают тот же
+                # результат. Но медленнее — и молчать об этом нельзя.
+                reasons.append(
+                    "быстрый путь (LSP) не работает: "
+                    f"{lsp_state['last_error']}; проверки идут прежним "
+                    "путём --analyze, это медленнее в десятки раз"
+                )
+
     if reasons:
         report["degradation_reasons"] = reasons
         report["hint"] = (

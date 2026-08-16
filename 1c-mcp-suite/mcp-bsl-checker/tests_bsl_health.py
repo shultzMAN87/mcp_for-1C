@@ -367,9 +367,16 @@ class TestDelivery(unittest.TestCase):
         разойдётся с действительностью.
         """
         src = (HERE / "server.py").read_text(encoding="utf-8")
-        self.assertIn("_run_analysis_inner", src)
+        # PERF-7 переименовал внутреннюю функцию: `_run_analysis_inner`
+        # стал `_analyze_dir` — теперь это не «внутренность», а один из
+        # двух путей анализа, и имя должно говорить, какой именно.
+        self.assertIn("_analyze_dir", src)
         self.assertIn("record_fail", src)
         self.assertIn("record_ok", src)
+        # Учёт по-прежнему в одном месте: обёртка `_run_analysis` знает про
+        # оба пути, а не каждый путь про журнал.
+        self.assertEqual(src.count("_analysis_log.record_"), 3,
+                         "запись исхода расползлась по точкам возврата")
 
     def test_tool_is_measured(self):
         """

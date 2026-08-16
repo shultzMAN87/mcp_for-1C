@@ -74,7 +74,32 @@ def test_predicates():
     out = evaluate({"type": "bogus"}, r)
     assert out.detail.get("error") == "unknown_predicate_type"
 
-    print(f"[1/5] predicates: OK ({len(cases)} cases + rank checks)")
+    print(f"[1/6] predicates: OK ({len(cases)} cases + rank checks)")
+
+
+def test_field_at_least():
+    """
+    Числовой предикат. Его отсутствие стоило четырёх красных примеров:
+    `path_non_empty` меряет len и на int даёт осечку, `field_equals`
+    требует точного совпадения — прибивать ожидание к числу из живой базы
+    значит получить красный пример при первом изменении конфигурации.
+    """
+    cases = [
+        ({"type": "field_at_least", "path": "total", "min": 20}, {"total": 45}, True),
+        ({"type": "field_at_least", "path": "total", "min": 20}, {"total": 10}, False),
+        ({"type": "field_at_least", "path": "a.b", "min": 1}, {"a": {"b": 1}}, True),
+        # True не должен проходить как единица: это ошибка в датасете,
+        # а не осознанная проверка.
+        ({"type": "field_at_least", "path": "flag", "min": 1}, {"flag": True}, False),
+        ({"type": "field_at_least", "path": "x", "min": 1}, {"x": "пять"}, False),
+        ({"type": "field_at_least", "path": "нет", "min": 1}, {}, False),
+        ({"type": "field_at_least", "path": "", "min": 1}, {"a": 1}, False),
+    ]
+    for pred, result, want in cases:
+        got = evaluate(pred, result)
+        assert got.passed == want, (pred, result, got.detail)
+        assert got.type == "field_at_least"
+    print("[6/6] field_at_least: OK")
 
 
 def test_metrics():
@@ -121,7 +146,7 @@ def test_metrics():
     assert empty["hard_pass_rate"] == 0.0
     assert empty["mrr"] is None
 
-    print(f"[2/5] metrics: OK (hard={a['hard_passed']}/{a['total']}, "
+    print(f"[2/6] metrics: OK (hard={a['hard_passed']}/{a['total']}, "
           f"MRR={a['mrr']:.3f}, recall@5={a['recall_at_5']:.3f})")
 
 
@@ -179,7 +204,7 @@ def test_load_dataset():
     assert has_trap, ("в датасете нет ни одного примера, проверяющего отказ — "
                       "см. критерий готовности блока A в PLAN-5")
 
-    print(f"[3/5] load_dataset: OK ({len(real)} примеров, ловушка на отказ есть)")
+    print(f"[3/6] load_dataset: OK ({len(real)} примеров, ловушка на отказ есть)")
 
 
 def test_mrr_info():
@@ -203,7 +228,7 @@ def test_mrr_info():
     r, k = _mrr_info_from_hard(ex3, out3)
     assert (r, k) == (None, None)
 
-    print("[4/5] _mrr_info_from_hard: OK")
+    print("[4/6] _mrr_info_from_hard: OK")
 
 
 class FakeSession:
@@ -325,7 +350,7 @@ async def _async_test_run_one_and_report():
         assert "err-003" in md
         assert "**ERROR**" in md
 
-    print("[5/5] run_one + report: OK")
+    print("[5/6] run_one + report: OK")
 
 
 def test_run_one_and_report():
@@ -334,6 +359,7 @@ def test_run_one_and_report():
 
 if __name__ == "__main__":
     test_predicates()
+    test_field_at_least()
     test_metrics()
     test_load_dataset()
     test_mrr_info()

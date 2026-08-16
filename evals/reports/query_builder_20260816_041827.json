@@ -1,0 +1,1330 @@
+{
+  "meta": {
+    "dataset": "/app/evals/datasets/query_builder.jsonl",
+    "endpoint": "http://mcp-query-builder:8009/mcp",
+    "started_at": "2026-08-16T04:18:23.253480+00:00",
+    "finished_at": "2026-08-16T04:18:27.086919+00:00",
+    "duration_s": 3.833439,
+    "examples_total": 15
+  },
+  "summary": {
+    "total": 15,
+    "hard_passed": 15,
+    "hard_pass_rate": 1.0,
+    "soft_total": 9,
+    "soft_passed": 7,
+    "soft_pass_rate": 0.7777777777777778,
+    "examples_with_mrr": 0,
+    "recall_at_1": null,
+    "recall_at_5": null,
+    "recall_at_10": null,
+    "mrr": null,
+    "latency_ms": {
+      "min": 26.27050200010217,
+      "median": 150.57388200000332,
+      "p95": 594.0730709000032,
+      "max": 824.8502349999853
+    },
+    "search_type_dist": {
+      "unknown": 15
+    },
+    "transport_errors": 0,
+    "tool_errors": 0
+  },
+  "examples": [
+    {
+      "id": "qb-001",
+      "tool": "query_fields",
+      "args": {
+        "object_name": "Справочник.ЭдоОбщийУчастникиДО"
+      },
+      "notes": "База: инструмент читает граф и отдаёт состав полей. Именно этого не было при FIX-6 — три инструмента возвращали пустоту, потому что спрашивали у графа несуществующие свойства, и пустота выглядела как «у объекта нет реквизитов».",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 824.8502349999853,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "table_name",
+            "found": true,
+            "size": 30,
+            "type": "str"
+          },
+          "match_rank": null
+        },
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "kind",
+            "expected": "Справочник",
+            "actual": "Справочник",
+            "found": true
+          },
+          "match_rank": null
+        },
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "standard_fields",
+            "found": true,
+            "size": 7,
+            "type": "list"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "attributes",
+            "found": true,
+            "size": 10,
+            "type": "list"
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "table_name": "Справочник.ЭдоОбщийУчастникиДО",
+        "object": "Catalog.ЭдоОбщийУчастникиДО",
+        "kind": "Справочник",
+        "synonym": "ЭДО Общий участники ДО",
+        "standard_fields": [
+          "Ссылка",
+          "Код",
+          "Наименование",
+          "ПометкаУдаления",
+          "Предопределенный",
+          "ПредопределенноеИмяЗначения",
+          "Представление"
+        ],
+        "attributes": [
+          {
+            "name": "Адрес",
+            "role": "attribute",
+            "type": "Catalog.ЭдоОбщийАдреса",
+            "synonym": "Адрес"
+          },
+          {
+            "name": "ВидУчастника",
+            "role": "attribute",
+            "type": "Enum.ЭдоВидыКонтрагентов",
+            "synonym": "Вид участника"
+          },
+          {
+            "name": "ИНН",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ИНН"
+          },
+          {
+            "name": "ИдУчастника",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ИД Участника"
+          },
+          {
+            "name": "КПП",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "КПП"
+          },
+          {
+            "name": "НаименованиеПолное",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "Наименование полное"
+          },
+          {
+            "name": "ОГРН",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ОГРН"
+          },
+          {
+            "name": "ОКПО",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ОКПО"
+          },
+          {
+            "name": "ОрганизацияЭДО",
+            "role": "attribute",
+            "type": "Catalog.ОрганизацииЭДО",
+            "synonym": "Организация ЭДО"
+          },
+          {
+            "name": "ХешДанных",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "Хеш данных"
+          }
+        ],
+        "tabular_sections": {
+          "БанковскиеРеквизиты": {
+            "attributes_count": 2
+          },
+          "ДляУчастниковДО": {
+            "attributes_count": 2
+          },
+          "ДополнительныеДанные": {
+            "attributes_count": 2
+          },
+          "КонтактныеДанные": {
+            "attributes_count": 2
+          }
+        },
+        "virtual_tables": [],
+        "pagination": "paged",
+        "total": 10,
+        "returned": 10,
+        "offset": 0,
+        "limit": 50,
+        "has_more": false,
+        "next_offset": null,
+        "attributes_total": 10,
+        "attributes_has_more": false,
+        "attributes_next_offset": null,
+        "paginated_field": "attributes",
+        "note_tabular_sections": "Показаны только имена табличных частей. Состав одной — повторный вызов с tabular_section=\"<имя>\".",
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    },
+    {
+      "id": "qb-002",
+      "tool": "query_fields",
+      "args": {
+        "object_name": "ЭдоОбщийУчастникиДО"
+      },
+      "notes": "Имя без префикса вида. Агент пишет и так, и так; если работает только полная форма — это надо знать, а не выяснять в переписке.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 495.1685720000114,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "table_name",
+            "found": true,
+            "size": 30,
+            "type": "str"
+          },
+          "match_rank": null
+        },
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "kind",
+            "expected": "Справочник",
+            "actual": "Справочник",
+            "found": true
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "table_name": "Справочник.ЭдоОбщийУчастникиДО",
+        "object": "Catalog.ЭдоОбщийУчастникиДО",
+        "kind": "Справочник",
+        "synonym": "ЭДО Общий участники ДО",
+        "standard_fields": [
+          "Ссылка",
+          "Код",
+          "Наименование",
+          "ПометкаУдаления",
+          "Предопределенный",
+          "ПредопределенноеИмяЗначения",
+          "Представление"
+        ],
+        "attributes": [
+          {
+            "name": "Адрес",
+            "role": "attribute",
+            "type": "Catalog.ЭдоОбщийАдреса",
+            "synonym": "Адрес"
+          },
+          {
+            "name": "ВидУчастника",
+            "role": "attribute",
+            "type": "Enum.ЭдоВидыКонтрагентов",
+            "synonym": "Вид участника"
+          },
+          {
+            "name": "ИНН",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ИНН"
+          },
+          {
+            "name": "ИдУчастника",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ИД Участника"
+          },
+          {
+            "name": "КПП",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "КПП"
+          },
+          {
+            "name": "НаименованиеПолное",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "Наименование полное"
+          },
+          {
+            "name": "ОГРН",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ОГРН"
+          },
+          {
+            "name": "ОКПО",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ОКПО"
+          },
+          {
+            "name": "ОрганизацияЭДО",
+            "role": "attribute",
+            "type": "Catalog.ОрганизацииЭДО",
+            "synonym": "Организация ЭДО"
+          },
+          {
+            "name": "ХешДанных",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "Хеш данных"
+          }
+        ],
+        "tabular_sections": {
+          "БанковскиеРеквизиты": {
+            "attributes_count": 2
+          },
+          "ДляУчастниковДО": {
+            "attributes_count": 2
+          },
+          "ДополнительныеДанные": {
+            "attributes_count": 2
+          },
+          "КонтактныеДанные": {
+            "attributes_count": 2
+          }
+        },
+        "virtual_tables": [],
+        "pagination": "paged",
+        "total": 10,
+        "returned": 10,
+        "offset": 0,
+        "limit": 50,
+        "has_more": false,
+        "next_offset": null,
+        "attributes_total": 10,
+        "attributes_has_more": false,
+        "attributes_next_offset": null,
+        "paginated_field": "attributes",
+        "note_tabular_sections": "Показаны только имена табличных частей. Состав одной — повторный вызов с tabular_section=\"<имя>\".",
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    },
+    {
+      "id": "qb-003",
+      "tool": "query_fields",
+      "args": {
+        "object_name": "Справочник.ЭдоОбщийУчастникиДО",
+        "attributes_limit": 5
+      },
+      "notes": "TOOL-2: постраничная выдача реквизитов. Ответ обязан сообщать общее число, иначе обрезка неотличима от того, что реквизитов столько и есть, — но проверить ЧИСЛО предикатом path_non_empty нельзя: он меряет len, а у int его нет. Та же грабля, что в mg-404 и bsl-009. Проверяем то, что проверяется; сам контракт постраничности закрыт примером qb-013 и набором tests_pagination.py.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 148.28017000002092,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "table_name",
+            "found": true,
+            "size": 30,
+            "type": "str"
+          },
+          "match_rank": null
+        },
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "attributes",
+            "found": true,
+            "size": 5,
+            "type": "list"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "object",
+            "found": true,
+            "size": 27,
+            "type": "str"
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "table_name": "Справочник.ЭдоОбщийУчастникиДО",
+        "object": "Catalog.ЭдоОбщийУчастникиДО",
+        "kind": "Справочник",
+        "synonym": "ЭДО Общий участники ДО",
+        "standard_fields": [
+          "Ссылка",
+          "Код",
+          "Наименование",
+          "ПометкаУдаления",
+          "Предопределенный",
+          "ПредопределенноеИмяЗначения",
+          "Представление"
+        ],
+        "attributes": [
+          {
+            "name": "Адрес",
+            "role": "attribute",
+            "type": "Catalog.ЭдоОбщийАдреса",
+            "synonym": "Адрес"
+          },
+          {
+            "name": "ВидУчастника",
+            "role": "attribute",
+            "type": "Enum.ЭдоВидыКонтрагентов",
+            "synonym": "Вид участника"
+          },
+          {
+            "name": "ИНН",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ИНН"
+          },
+          {
+            "name": "ИдУчастника",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ИД Участника"
+          },
+          {
+            "name": "КПП",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "КПП"
+          }
+        ],
+        "tabular_sections": {
+          "БанковскиеРеквизиты": {
+            "attributes_count": 2
+          },
+          "ДляУчастниковДО": {
+            "attributes_count": 2
+          },
+          "ДополнительныеДанные": {
+            "attributes_count": 2
+          },
+          "КонтактныеДанные": {
+            "attributes_count": 2
+          }
+        },
+        "virtual_tables": [],
+        "pagination": "paged",
+        "total": 10,
+        "returned": 5,
+        "offset": 0,
+        "limit": 5,
+        "has_more": true,
+        "next_offset": 5,
+        "attributes_total": 10,
+        "attributes_has_more": true,
+        "attributes_next_offset": 5,
+        "paginated_field": "attributes",
+        "note_attributes": "Показано 5 из 10 реквизитов. Остальные — повторный вызов с attributes_offset=5.",
+        "note_tabular_sections": "Показаны только имена табличных частей. Состав одной — повторный вызов с tabular_section=\"<имя>\".",
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    },
+    {
+      "id": "qb-013",
+      "tool": "query_fields",
+      "args": {
+        "object_name": "Справочник.ЭдоОбщийУчастникиДО",
+        "attributes_limit": 5
+      },
+      "notes": "B-4. У query-builder был огрызок словаря: attributes_total есть, has_more нет ни под каким именем — и правило «видишь has_more: true, запроси следующую страницу» этот сервер выполнить не мог. Теперь блок общий. has_more здесь предикатом не проверяется намеренно: его значение зависит от числа реквизитов в вашей конфигурации, а прибивать ожидание к данным базы — способ получить красный пример на ровном месте (урок BASE-1). Проверяем то, что от данных не зависит: словарь и имя листаемой коллекции.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 123.31630799997129,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "pagination",
+            "expected": "paged",
+            "actual": "paged",
+            "found": true
+          },
+          "match_rank": null
+        },
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "paginated_field",
+            "expected": "attributes",
+            "actual": "attributes",
+            "found": true
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "offset",
+            "expected": 0,
+            "actual": 0,
+            "found": true
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "table_name": "Справочник.ЭдоОбщийУчастникиДО",
+        "object": "Catalog.ЭдоОбщийУчастникиДО",
+        "kind": "Справочник",
+        "synonym": "ЭДО Общий участники ДО",
+        "standard_fields": [
+          "Ссылка",
+          "Код",
+          "Наименование",
+          "ПометкаУдаления",
+          "Предопределенный",
+          "ПредопределенноеИмяЗначения",
+          "Представление"
+        ],
+        "attributes": [
+          {
+            "name": "Адрес",
+            "role": "attribute",
+            "type": "Catalog.ЭдоОбщийАдреса",
+            "synonym": "Адрес"
+          },
+          {
+            "name": "ВидУчастника",
+            "role": "attribute",
+            "type": "Enum.ЭдоВидыКонтрагентов",
+            "synonym": "Вид участника"
+          },
+          {
+            "name": "ИНН",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ИНН"
+          },
+          {
+            "name": "ИдУчастника",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ИД Участника"
+          },
+          {
+            "name": "КПП",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "КПП"
+          }
+        ],
+        "tabular_sections": {
+          "БанковскиеРеквизиты": {
+            "attributes_count": 2
+          },
+          "ДляУчастниковДО": {
+            "attributes_count": 2
+          },
+          "ДополнительныеДанные": {
+            "attributes_count": 2
+          },
+          "КонтактныеДанные": {
+            "attributes_count": 2
+          }
+        },
+        "virtual_tables": [],
+        "pagination": "paged",
+        "total": 10,
+        "returned": 5,
+        "offset": 0,
+        "limit": 5,
+        "has_more": true,
+        "next_offset": 5,
+        "attributes_total": 10,
+        "attributes_has_more": true,
+        "attributes_next_offset": 5,
+        "paginated_field": "attributes",
+        "note_attributes": "Показано 5 из 10 реквизитов. Остальные — повторный вызов с attributes_offset=5.",
+        "note_tabular_sections": "Показаны только имена табличных частей. Состав одной — повторный вызов с tabular_section=\"<имя>\".",
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    },
+    {
+      "id": "qb-004",
+      "tool": "query_fields",
+      "args": {
+        "object_name": "Справочник.ТакогоНетВообщеXYZ"
+      },
+      "notes": "Критерий готовности блока A (PLAN-5): на каждом сервере хотя бы один пример проверяет ОТКАЗ. Несуществующий объект обязан приезжать полем error, а не пустым составом полей: пустой состав агент прочитает как «у объекта нет реквизитов» и построит запрос по одной Ссылке.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 310.71640899995145,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "error",
+            "found": true,
+            "size": 61,
+            "type": "str"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "path_non_empty",
+          "passed": false,
+          "detail": {
+            "path": "suggestions",
+            "found": true,
+            "size": 0,
+            "type": "list"
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "error": "Объект 'Справочник.ТакогоНетВообщеXYZ' не найден в метаданных",
+        "suggestions": [],
+        "hint": "Если это временная таблица, передайте текст пакета в параметре query_text.",
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    },
+    {
+      "id": "qb-101",
+      "tool": "query_join_hint",
+      "args": {
+        "table1": "Справочник.ЭдоОбщийУчастникиДО",
+        "table2": "Справочник.ЭдоДанныеМЧД"
+      },
+      "notes": "Обе таблицы обязаны разрешиться — это hard. Найдётся ли между ними ссылочная связь, зависит от конфигурации, поэтому joins в soft: отсутствие связи между двумя конкретными справочниками — законный ответ, а вот неразрешённое имя — нет.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 150.57388200000332,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "table1",
+            "found": true,
+            "size": 30,
+            "type": "str"
+          },
+          "match_rank": null
+        },
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "table2",
+            "found": true,
+            "size": 23,
+            "type": "str"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "path_non_empty",
+          "passed": false,
+          "detail": {
+            "path": "joins",
+            "found": true,
+            "size": 0,
+            "type": "list"
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "table1": "Справочник.ЭдоОбщийУчастникиДО",
+        "table2": "Справочник.ЭдоДанныеМЧД",
+        "joins_found": 0,
+        "joins": [],
+        "hint": "Прямая ссылочная связь не найдена. Варианты: соединение через промежуточную таблицу (регистр или справочник-связку); соединение по значению реквизита, а не по ссылке; подзапрос.",
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    },
+    {
+      "id": "qb-102",
+      "tool": "query_join_hint",
+      "args": {
+        "table1": "Справочник.ЭдоОбщийУчастникиДО",
+        "table2": "Справочник.ТакогоНетВообщеXYZ"
+      },
+      "notes": "Ловушка. Одна таблица есть, вторая нет — ответ обязан быть отказом, а не подсказкой по соединению с пустотой.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 314.49261699992803,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "error",
+            "found": true,
+            "size": 49,
+            "type": "str"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "suggestions",
+            "found": true,
+            "size": 1,
+            "type": "dict"
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "error": "Не найдены объекты: Справочник.ТакогоНетВообщеXYZ",
+        "suggestions": {
+          "Справочник.ТакогоНетВообщеXYZ": []
+        },
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    },
+    {
+      "id": "qb-201",
+      "tool": "query_validate",
+      "args": {
+        "query_text": "ВЫБРАТЬ\n\tТ.Ссылка\nИЗ\n\tСправочник.ЭдоОбщийУчастникиДО КАК Т"
+      },
+      "notes": "Заведомо корректный запрос по стандартному полю. Ссылка есть у любого справочника, поэтому пример не зависит от состава реквизитов и не сломается при правке конфигурации.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 115.84462799999073,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "valid",
+            "expected": true,
+            "actual": true,
+            "found": true
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "valid": true,
+        "errors": [],
+        "warnings": [],
+        "info": [
+          "✓ Справочник.ЭдоОбщийУчастникиДО КАК Т"
+        ],
+        "tables_checked": 1,
+        "fields_checked": 1,
+        "temp_tables": [],
+        "statements": 1,
+        "meaning": "errors — доказанные расхождения с метаданными: объект в графе есть, состав его полей известен, такого имени среди них нет. warnings — места, где проверка не смогла ничего утверждать.",
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    },
+    {
+      "id": "qb-202",
+      "tool": "query_validate",
+      "args": {
+        "query_text": "ВЫБРАТЬ\n\tТ.ЗаведомоНетТакогоПоляXYZ\nИЗ\n\tСправочник.ЭдоОбщийУчастникиДО КАК Т"
+      },
+      "notes": "Главный пример датасета. Объект в графе есть, состав полей известен, такого имени среди них нет — проверка ОБЯЗАНА это увидеть. Молчаливое valid=true здесь означало бы, что инструмент штампует «годен» не глядя, — ровно тот отказ-под-видом-успеха, из-за которого bsl_check_* прожил заход с пустым «ошибок не найдено».",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 119.17431299991676,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "valid",
+            "expected": false,
+            "actual": false,
+            "found": true
+          },
+          "match_rank": null
+        },
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "errors",
+            "found": true,
+            "size": 1,
+            "type": "list"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "valid": false,
+        "errors": [
+          "Строка 2: у источника 'Справочник.ЭдоОбщийУчастникиДО' нет поля 'ЗаведомоНетТакогоПоляXYZ'."
+        ],
+        "warnings": [],
+        "info": [
+          "✓ Справочник.ЭдоОбщийУчастникиДО КАК Т"
+        ],
+        "tables_checked": 1,
+        "fields_checked": 1,
+        "temp_tables": [],
+        "statements": 1,
+        "meaning": "errors — доказанные расхождения с метаданными: объект в графе есть, состав его полей известен, такого имени среди них нет. warnings — места, где проверка не смогла ничего утверждать.",
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    },
+    {
+      "id": "qb-203",
+      "tool": "query_validate",
+      "args": {
+        "query_text": "ВЫБРАТЬ\n\tТ.Ссылка\nИЗ\n\tСправочник.ТакогоНетВообщеXYZ КАК Т"
+      },
+      "notes": "Ловушка на несуществующую таблицу. Отличается от qb-202: там неверное поле у реального объекта, здесь объекта нет вовсе. Оба случая обязаны давать valid=false, но по разным причинам, и обе ветки надо держать под проверкой.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 202.811913000005,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "valid",
+            "expected": false,
+            "actual": false,
+            "found": true
+          },
+          "match_rank": null
+        },
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "errors",
+            "found": true,
+            "size": 1,
+            "type": "list"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "valid": false,
+        "errors": [
+          "Строка 4: Таблица 'Справочник.ТакогоНетВообщеXYZ' не найдена в метаданных конфигурации."
+        ],
+        "warnings": [],
+        "info": [],
+        "tables_checked": 1,
+        "fields_checked": 0,
+        "temp_tables": [],
+        "statements": 1,
+        "meaning": "errors — доказанные расхождения с метаданными: объект в графе есть, состав его полей известен, такого имени среди них нет. warnings — места, где проверка не смогла ничего утверждать.",
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    },
+    {
+      "id": "qb-301",
+      "tool": "query_build",
+      "args": {
+        "description": "список участников документооборота",
+        "tables": "Справочник.ЭдоОбщийУчастникиДО"
+      },
+      "notes": "self_check.valid=true — не украшение, а условие годности: построенный запрос прогоняется через ту же проверку, что query_validate, и инструмент не должен отдавать агенту текст с полями, которых нет. Если этот пример краснеет, значит query_build сочиняет имена.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 112.46551700003238,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "query",
+            "found": true,
+            "size": 191,
+            "type": "str"
+          },
+          "match_rank": null
+        },
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "self_check.valid",
+            "expected": true,
+            "actual": true,
+            "found": true
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "available_fields",
+            "found": true,
+            "size": 1,
+            "type": "dict"
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "query": "ВЫБРАТЬ\n\tТ.Ссылка,\n\tТ.Адрес,\n\tТ.ВидУчастника,\n\tТ.ИНН,\n\tТ.ИдУчастника,\n\tТ.КПП,\n\tТ.НаименованиеПолное,\n\tТ.ОГРН,\n\tТ.ОКПО,\n\tТ.ОрганизацияЭДО,\n\tТ.ХешДанных\nИЗ\n\tСправочник.ЭдоОбщийУчастникиДО КАК Т",
+        "source_table": "Справочник.ЭдоОбщийУчастникиДО",
+        "is_virtual_table": false,
+        "tables_used": [
+          "Справочник.ЭдоОбщийУчастникиДО"
+        ],
+        "self_check": {
+          "valid": true,
+          "errors": []
+        },
+        "available_fields": {
+          "Справочник.ЭдоОбщийУчастникиДО": {
+            "standard": [
+              "Ссылка",
+              "Код",
+              "Наименование",
+              "ПометкаУдаления",
+              "Предопределенный",
+              "ПредопределенноеИмяЗначения",
+              "Представление"
+            ],
+            "attributes": [
+              "Адрес",
+              "ВидУчастника",
+              "ИНН",
+              "ИдУчастника",
+              "КПП",
+              "НаименованиеПолное",
+              "ОГРН",
+              "ОКПО",
+              "ОрганизацияЭДО",
+              "ХешДанных"
+            ],
+            "tabular_sections": [
+              "БанковскиеРеквизиты",
+              "ДляУчастниковДО",
+              "ДополнительныеДанные",
+              "КонтактныеДанные"
+            ]
+          }
+        },
+        "hints": [],
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    },
+    {
+      "id": "qb-302",
+      "tool": "query_build",
+      "args": {
+        "description": "совершенно неопределённое нечто про абракадабру"
+      },
+      "notes": "Ловушка. Из описания таблицы не выводятся — обязан быть отказ с подсказкой указать tables явно, а не запрос по случайно подвернувшемуся объекту. Худший исход здесь не ошибка, а правдоподобный запрос не к той таблице.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 473.34060500008945,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "error",
+            "found": true,
+            "size": 78,
+            "type": "str"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "hint",
+            "found": true,
+            "size": 77,
+            "type": "str"
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "error": "Не удалось определить таблицы из описания. Укажите их явно в параметре tables.",
+        "hint": "Например: tables='Справочник.Номенклатура, РегистрНакопления.ТоварыНаСкладах'",
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    },
+    {
+      "id": "qb-401",
+      "tool": "query_optimize",
+      "args": {
+        "query_text": "ВЫБРАТЬ\n\t*\nИЗ\n\tСправочник.ЭдоОбщийУчастникиДО КАК Т"
+      },
+      "notes": "Единственный инструмент сервера, не ходящий в граф: analyze() работает по тексту. Полезное свойство для диагностики — если зелёный только он, значит сервер жив, а Neo4j нет.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 26.27050200010217,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "recommendations",
+            "found": true,
+            "size": 2,
+            "type": "list"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "recommendations_count": 2,
+        "recommendations": [
+          {
+            "priority": "MEDIUM",
+            "rule": "Отсутствие ограничения выборки",
+            "issue": "Выборка без ПЕРВЫЕ и без условий ГДЕ из: Справочник.ЭдоОбщийУчастникиДО",
+            "fix": "Добавьте ПЕРВЫЕ N, условие ГДЕ или параметры виртуальной таблицы, чтобы ограничить объём читаемых данных"
+          },
+          {
+            "priority": "MEDIUM",
+            "rule": "Выборка всех полей",
+            "issue": "ВЫБРАТЬ * читает все поля, включая неиспользуемые",
+            "fix": "Перечислите нужные поля явно — это уменьшает объём чтения и позволяет платформе выбрать покрывающий индекс"
+          }
+        ],
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    },
+    {
+      "id": "qb-501",
+      "tool": "query_fields",
+      "args": {
+        "object_name": "Справочник.ЭдоОбщийУчастникиДО"
+      },
+      "notes": "OBS-1, симметрия. Отказы этот сервер отдавал в общем формате и раньше (graph_error), но на удачных ответах поля не было — проверить его было негде.",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 103.70593799996186,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "answerable",
+            "expected": true,
+            "actual": true,
+            "found": true
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "degraded",
+            "expected": false,
+            "actual": false,
+            "found": true
+          },
+          "match_rank": null
+        }
+      ],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "table_name": "Справочник.ЭдоОбщийУчастникиДО",
+        "object": "Catalog.ЭдоОбщийУчастникиДО",
+        "kind": "Справочник",
+        "synonym": "ЭДО Общий участники ДО",
+        "standard_fields": [
+          "Ссылка",
+          "Код",
+          "Наименование",
+          "ПометкаУдаления",
+          "Предопределенный",
+          "ПредопределенноеИмяЗначения",
+          "Представление"
+        ],
+        "attributes": [
+          {
+            "name": "Адрес",
+            "role": "attribute",
+            "type": "Catalog.ЭдоОбщийАдреса",
+            "synonym": "Адрес"
+          },
+          {
+            "name": "ВидУчастника",
+            "role": "attribute",
+            "type": "Enum.ЭдоВидыКонтрагентов",
+            "synonym": "Вид участника"
+          },
+          {
+            "name": "ИНН",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ИНН"
+          },
+          {
+            "name": "ИдУчастника",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ИД Участника"
+          },
+          {
+            "name": "КПП",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "КПП"
+          },
+          {
+            "name": "НаименованиеПолное",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "Наименование полное"
+          },
+          {
+            "name": "ОГРН",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ОГРН"
+          },
+          {
+            "name": "ОКПО",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "ОКПО"
+          },
+          {
+            "name": "ОрганизацияЭДО",
+            "role": "attribute",
+            "type": "Catalog.ОрганизацииЭДО",
+            "synonym": "Организация ЭДО"
+          },
+          {
+            "name": "ХешДанных",
+            "role": "attribute",
+            "type": "String",
+            "synonym": "Хеш данных"
+          }
+        ],
+        "tabular_sections": {
+          "БанковскиеРеквизиты": {
+            "attributes_count": 2
+          },
+          "ДляУчастниковДО": {
+            "attributes_count": 2
+          },
+          "ДополнительныеДанные": {
+            "attributes_count": 2
+          },
+          "КонтактныеДанные": {
+            "attributes_count": 2
+          }
+        },
+        "virtual_tables": [],
+        "pagination": "paged",
+        "total": 10,
+        "returned": 10,
+        "offset": 0,
+        "limit": 50,
+        "has_more": false,
+        "next_offset": null,
+        "attributes_total": 10,
+        "attributes_has_more": false,
+        "attributes_next_offset": null,
+        "paginated_field": "attributes",
+        "note_tabular_sections": "Показаны только имена табличных частей. Состав одной — повторный вызов с tabular_section=\"<имя>\".",
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    },
+    {
+      "id": "qb-502",
+      "tool": "query_fields",
+      "args": {
+        "object_name": "Справочник.ТакогоНетВообщеXYZ"
+      },
+      "notes": "OBS-1: «такого объекта нет» — ответ, а не отказ. Граф на месте, ответ достоверен, опираться на него можно. Если бы здесь стояло answerable=false, модель перестала бы верить честному «нет».",
+      "ok": true,
+      "error": null,
+      "is_error_flag": false,
+      "duration_ms": 210.88072400004876,
+      "search_type": null,
+      "hard": [
+        {
+          "type": "field_equals",
+          "passed": true,
+          "detail": {
+            "path": "answerable",
+            "expected": true,
+            "actual": true,
+            "found": true
+          },
+          "match_rank": null
+        },
+        {
+          "type": "path_non_empty",
+          "passed": true,
+          "detail": {
+            "path": "error",
+            "found": true,
+            "size": 61,
+            "type": "str"
+          },
+          "match_rank": null
+        }
+      ],
+      "soft": [],
+      "mrr_rank": null,
+      "mrr_max_k": null,
+      "response_preview": {
+        "error": "Объект 'Справочник.ТакогоНетВообщеXYZ' не найден в метаданных",
+        "suggestions": [],
+        "hint": "Если это временная таблица, передайте текст пакета в параметре query_text.",
+        "answerable": true,
+        "degraded": false,
+        "results": []
+      }
+    }
+  ]
+}

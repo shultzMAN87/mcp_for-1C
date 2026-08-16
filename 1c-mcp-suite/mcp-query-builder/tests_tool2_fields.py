@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from query_check import (FIELDS_DEFAULT_LIMIT, FIELDS_MAX_LIMIT,
                          trim_fields_payload)
@@ -63,7 +64,12 @@ class TestAttributePaging(unittest.TestCase):
 
     def test_no_note_when_everything_fits(self):
         out = trim_fields_payload(_payload(5), attributes_limit=50)
-        self.assertNotIn("attributes_has_more", out)
+        # B-4: поле есть всегда и равно False. Раньше здесь стояло
+        # assertNotIn — то есть проверка закрепляла асимметрию, из-за
+        # которой «страниц больше нет» было неотличимо от «сервер про
+        # страницы не знает». Это ровно та болезнь, которую лечил FIX-19.
+        self.assertFalse(out["attributes_has_more"])
+        self.assertIsNone(out["attributes_next_offset"])
         self.assertNotIn("note_attributes", out)
         self.assertEqual(out["attributes_total"], 5)
 
@@ -79,7 +85,7 @@ class TestAttributePaging(unittest.TestCase):
         out = trim_fields_payload(_payload(60), attributes_limit=25,
                                   attributes_offset=50)
         self.assertEqual(len(out["attributes"]), 10)
-        self.assertNotIn("attributes_has_more", out)
+        self.assertFalse(out["attributes_has_more"])   # B-4: поле есть всегда
 
     def test_pages_cover_everything_without_gaps(self):
         """Страницы обязаны склеиваться обратно в исходный список."""
@@ -97,7 +103,7 @@ class TestAttributePaging(unittest.TestCase):
     def test_zero_limit_returns_all(self):
         out = trim_fields_payload(_payload(200), attributes_limit=0)
         self.assertEqual(len(out["attributes"]), 200)
-        self.assertNotIn("attributes_has_more", out)
+        self.assertFalse(out["attributes_has_more"])   # B-4: поле есть всегда
 
     def test_limit_is_capped(self):
         out = trim_fields_payload(_payload(2000), attributes_limit=99999)
@@ -197,6 +203,78 @@ class TestUntouchedParts(unittest.TestCase):
         trim_fields_payload(p, attributes_limit=5)
         self.assertEqual(len(p["attributes"]), before)
         self.assertIsInstance(p["tabular_sections"]["КонтактныеДанные"], list)
+
+
+class TestJoinHintSaysHowMuchItLooked(unittest.TestCase):
+    """
+    Пустой `joins` без числа рассмотренных кандидатов означает сразу две
+    разные вещи: «связи между таблицами нет» и «связи не искали» — реквизиты
+    не разобрались, инструмент отработал вхолостую. Различить их по ответу
+    было нечем, и soft-предикат `qb-101` поэтому ничего не измерял: он
+    краснел одинаково в обоих случаях.
+
+    Проверяем по исходнику: server.py тянет FastMCP и не импортируется.
+    """
+
+    def setUp(self):
+        self.src = (Path(__file__).resolve().parent / "server.py").read_text(
+            encoding="utf-8")
+
+    def test_field_is_in_the_answer(self):
+        self.assertIn('"candidates_examined"', self.src)
+
+    def test_counter_grows_in_both_scans(self):
+        """Считаются и обычные реквизиты, и реквизиты табличных частей."""
+        self.assertEqual(self.src.count("examined += 1"), 2)
+
+    def test_empty_result_explains_itself(self):
+        """
+        «Связи нет» — достоверный ответ, и он обязан сказать это словами,
+        иначе агент прочитает пустоту как отказ.
+        """
+        self.assertIn('"meaning"', self.src)
+
+
+class TestSuggestStripsThePrefix(unittest.TestCase):
+    """
+    FIX-21. `suggest` получал имя в том виде, в каком его написал агент —
+    `Справочник.Номенклат`, — и искал эту строку подстрокой в `o.name`, где
+    префикса вида нет никогда. Совпадений не было НИ РАЗУ, при любой
+    опечатке.
+
+    Наружу выходил пустой список, то есть «похожих имён нет» вместо
+    «искали не то». Отличить эти два случая по ответу было нельзя, и
+    датасет их не различал: единственный пример проверял заведомо
+    бессмысленное имя, где пустой ответ законен.
+
+    Проверяем по исходнику: server.py тянет FastMCP и не импортируется.
+    """
+
+    def setUp(self):
+        self.src = (Path(__file__).resolve().parent / "server.py").read_text(
+            encoding="utf-8")
+
+    def test_prefix_is_split_off(self):
+        body = self.src[self.src.index("def suggest(self, name"):
+                        self.src.index("def _attr_from_row")]
+        self.assertIn('name.partition(".")', body,
+                      "suggest снова ищет по имени вместе с видом")
+
+    def test_kind_is_used_as_a_filter(self):
+        body = self.src[self.src.index("def suggest(self, name"):
+                        self.src.index("def _attr_from_row")]
+        self.assertIn("kind_ru=kind_ru", body,
+                      "вид не сужает поиск: Справочник.Заказ подскажет документы")
+
+    def test_falls_back_to_whole_base(self):
+        """
+        Неопознанный вид или пусто в его пределах — ищем по всей базе.
+        Иначе опечатка в самом виде («Справочнк.Контрагенты») давала бы
+        пустоту вместо подсказки.
+        """
+        body = self.src[self.src.index("def suggest(self, name"):
+                        self.src.index("def _attr_from_row")]
+        self.assertIn("if not rows:", body)
 
 
 if __name__ == "__main__":
