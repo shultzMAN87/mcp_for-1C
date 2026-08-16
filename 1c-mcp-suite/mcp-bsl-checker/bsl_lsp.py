@@ -599,6 +599,46 @@ class BslLspClient:
 # ─── проверка на живой машине ────────────────────────────────────────────
 
 
+# Куда в контейнере смонтирована выгрузка. Первый существующий и берём.
+# Список нужен потому, что путь монтирования — вещь, которую держат в
+# голове ровно до первого раза, когда она понадобилась.
+SOURCE_ROOTS = ("/data/1c-src", "/workspace", "/data/1c-config")
+
+
+def find_sample(root: str = "") -> str:
+    """
+    Любой .bsl из выгрузки — чтобы сверку можно было запустить, не зная,
+    где что лежит внутри контейнера.
+
+    Берём не первый попавшийся, а средний по размеру из первых полусотни:
+    на пустом модуле сверка ничего не покажет (диагностик нет у обоих
+    путей), а на самом большом — будет долго идти прежним путём.
+    """
+    roots = [root] if root else list(SOURCE_ROOTS)
+    found = []
+    for candidate in roots:
+        base = Path(candidate)
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*.bsl"):
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            if size > 200:
+                found.append((size, str(path)))
+            if len(found) >= 50:
+                break
+        if found:
+            break
+    if not found:
+        return ""
+    found.sort()
+    # Смещение к меньшему: при двух кандидатах берём тот, что быстрее
+    # пройдёт прежним путём — сверке важна одинаковость, а не объём.
+    return found[(len(found) - 1) // 2][1]
+
+
 def _compare(file_path: str, java_cmd: str, java_opts: str, jar: str,
              config: str) -> int:
     """
@@ -611,10 +651,26 @@ def _compare(file_path: str, java_cmd: str, java_opts: str, jar: str,
     """
     import tempfile
 
-    path = Path(file_path)
-    if not path.exists():
-        print(f"нет файла: {path}")
+    path = Path(file_path) if file_path else Path("")
+    if file_path and not path.exists():
+        print(f"Нет файла: {path}\n")
+        print("Внутри контейнера выгрузка лежит не там, где на диске. "
+              "Смонтировано:")
+        for candidate in SOURCE_ROOTS:
+            base = Path(candidate)
+            print(f"  {candidate:<18} {'есть' if base.is_dir() else 'нет'}")
+        print("\nЗапустите без аргумента — файл найдётся сам:")
+        print("  docker exec mcp-bsl-checker python3 /app/bsl_lsp.py --compare")
         return 2
+
+    if not file_path:
+        sample = find_sample()
+        if not sample:
+            print("Не нашёл ни одного .bsl в " + ", ".join(SOURCE_ROOTS))
+            print("Укажите файл явно: --compare <путь внутри контейнера>")
+            return 2
+        path = Path(sample)
+        print(f"Файл выбран сам: {path}")
 
     print(f"Файл: {path}")
     print(f"jar:  {jar}")
@@ -689,8 +745,10 @@ def main() -> int:  # pragma: no cover — ручной инструмент
     import argparse
 
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--compare", metavar="FILE",
-                    help="сверить --analyze и LSP на одном файле")
+    ap.add_argument("--compare", metavar="FILE", nargs="?", const="",
+                    default=None,
+                    help="сверить --analyze и LSP на одном файле; без "
+                         "аргумента файл берётся из выгрузки сам")
     args = ap.parse_args()
 
     jar = os.environ.get("BSL_LS_JAR", "/opt/bsl-language-server/bsl-ls.jar")
@@ -698,7 +756,7 @@ def main() -> int:  # pragma: no cover — ручной инструмент
     java_opts = os.environ.get("JAVA_OPTS", "-Xmx512m")
     config = os.environ.get("BSL_LS_CONFIG", "")
 
-    if args.compare:
+    if args.compare is not None:
         return _compare(args.compare, java_cmd, java_opts, jar, config)
     ap.print_help()
     return 0

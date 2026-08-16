@@ -113,7 +113,7 @@ BSL LS без аргументов работает языковым серве�
 Для этого в модуле есть сверка. Одна команда:
 
 ```powershell
-docker exec mcp-bsl-checker python3 /app/bsl_lsp.py --compare /app/пример.bsl
+docker exec mcp-bsl-checker python3 /app/bsl_lsp.py --compare
 ```
 
 Она прогоняет один файл обоими путями и печатает:
@@ -130,8 +130,19 @@ LSP тёплый:   0.34 с, диагностик 3
 При расхождении — печатает, какие диагностики есть только у одного пути.
 **Если расходится — не переключайте**, пришлите вывод, разберём.
 
-Файла для сверки под рукой нет? Подойдёт любой `.bsl` из выгрузки, она
-смонтирована в контейнер.
+Аргумент не нужен: без него файл берётся из выгрузки сам — не пустой и не
+самый большой, средний по размеру. Это исправление моей же ошибки: в первой
+редакции инструкции стояло `/workspace/...`, тогда как в `bsl-checker`
+выгрузка смонтирована в `/data/1c-src`, и первая попытка приёмки уткнулась
+в «нет файла». Вывод не «впредь быть внимательнее», а «пусть инструмент
+найдёт сам»; если путь всё же указан и не существует, сверка печатает,
+какие каталоги смонтированы на самом деле.
+
+Конкретный файл, если он нужен:
+
+```powershell
+docker exec mcp-bsl-checker python3 /app/bsl_lsp.py --compare /data/1c-src/<путь>.bsl
+```
 
 ## Откат
 
@@ -168,13 +179,13 @@ BSL_LSP_MODE=off
 
 ```powershell
 # 1. Распаковать поверх корня
-python scripts/run_all_tests.py            # ждём 891 тест в 27 наборах
+python scripts/run_all_tests.py            # ждём 893 теста в 27 наборах
 
 # 2. Пересобрать bsl-checker
 docker compose up -d --build --force-recreate mcp-bsl-checker
 
 # 3. СВЕРКА — главное действие приёмки
-docker exec mcp-bsl-checker python3 /app/bsl_lsp.py --compare /workspace/<любой>.bsl
+docker exec mcp-bsl-checker python3 /app/bsl_lsp.py --compare
 
 # 4. Датасет
 python scripts/eval.py --dataset evals/datasets/bsl_checker.jsonl

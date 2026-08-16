@@ -42,6 +42,25 @@ from bsl_lsp import (  # noqa: E402
 HERE = Path(__file__).resolve().parent
 SUITE = HERE.parent
 
+# Боевые таймауты здесь ни к чему: 90 секунд на старт JVM осмысленны в
+# контейнере и бессмысленны против поддельного сервера, который отвечает
+# мгновенно или не отвечает вовсе.
+#
+# Это не косметика. Один прогон из тридцати занял 101 секунду — набор
+# упёрся ровно в эти 90 секунд и провалился по времени. Тест, способный
+# ждать полторы минуты, рано или поздно съест прогон целиком, а причину
+# будут искать в другом месте.
+_REAL_TIMEOUTS = (bsl_lsp.STARTUP_TIMEOUT_SEC, bsl_lsp.REQUEST_TIMEOUT_SEC)
+
+
+def setUpModule():
+    bsl_lsp.STARTUP_TIMEOUT_SEC = 3.0
+    bsl_lsp.REQUEST_TIMEOUT_SEC = 3.0
+
+
+def tearDownModule():
+    bsl_lsp.STARTUP_TIMEOUT_SEC, bsl_lsp.REQUEST_TIMEOUT_SEC = _REAL_TIMEOUTS
+
 
 class FakeServer:
     """
@@ -334,7 +353,7 @@ class TestDialogue(unittest.TestCase):
             with self.assertRaises(LspUnavailable):
                 client.diagnostics(str(self.tmp))
         finally:
-            bsl_lsp.STARTUP_TIMEOUT_SEC = 90.0
+            bsl_lsp.STARTUP_TIMEOUT_SEC = 3.0
         client.stop()
 
     def test_broken_frames_do_not_hang(self):
@@ -344,7 +363,7 @@ class TestDialogue(unittest.TestCase):
             with self.assertRaises(LspUnavailable):
                 client.diagnostics(str(self.tmp))
         finally:
-            bsl_lsp.STARTUP_TIMEOUT_SEC = 90.0
+            bsl_lsp.STARTUP_TIMEOUT_SEC = 3.0
         client.stop()
 
     def test_death_during_a_call_is_a_refusal_not_an_empty_answer(self):
@@ -463,6 +482,35 @@ class TestCooldown(unittest.TestCase):
         self.assertFalse(state["running"])
         self.assertIn("java", state["last_error"])
         self.assertTrue(state["cooling_down"])
+
+
+class TestSampleSearch(unittest.TestCase):
+    """
+    Сверка должна запускаться, не требуя знать, где внутри контейнера
+    лежит выгрузка. Я сам ошибся этим путём в инструкции — написал
+    `/workspace`, тогда как смонтировано `/data/1c-src`, — и первая же
+    попытка приёмки уткнулась в «нет файла».
+
+    Вывод не «впредь быть внимательнее», а «пусть инструмент найдёт сам».
+    """
+
+    def test_picks_a_non_empty_file(self):
+        import tempfile
+        from bsl_lsp import find_sample
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "a").mkdir()
+            (root / "пусто.bsl").write_text("", encoding="utf-8")
+            (root / "a" / "Мал.bsl").write_text("Процедура Т() КонецПроцедуры" * 10,
+                                                encoding="utf-8")
+            picked = find_sample(str(root))
+            self.assertTrue(picked.endswith("Мал.bsl"),
+                            "выбран пустой файл — сверка на нём ничего не покажет")
+
+    def test_missing_root_is_empty_not_an_exception(self):
+        from bsl_lsp import find_sample
+        self.assertEqual(find_sample("/нет/такого/каталога"), "")
 
 
 class TestShutdownOrder(unittest.TestCase):

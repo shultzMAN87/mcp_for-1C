@@ -51,6 +51,9 @@ COPY refusal.py                            /app/refusal.py
 # Справка платформы: сервер
 COPY mcp-platform-help/server.py           /app/mcp_platform_help.py
 COPY mcp-platform-help/help_ranking.py     /app/help_ranking.py
+# PERF-6: реестр моделей и замер их загрузки. Четвёртая подряд строка COPY,
+# которую назвал tests_delivery.py, а не память.
+COPY mcp-platform-help/model_warmup.py    /app/model_warmup.py
 
 # Справка платформы: новый hybrid-индексатор (задача 4.7, поддержка .hbk 8.3.22+)
 COPY mcp-platform-help-embeddings/hbk_reader.py    /app/hbk_reader.py

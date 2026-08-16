@@ -31,7 +31,6 @@ import os
 import json
 import re
 import sys
-import threading
 import time
 import urllib.request
 import urllib.error
@@ -59,6 +58,9 @@ except ImportError:  # pragma: no cover — путь только для лок�
 # сервер должен упасть на старте, а не тихо отдавать выдачу без обработки —
 # ровно этот класс отказов и разбирался в HBK-1.
 from help_ranking import diversify_hits
+
+# PERF-6: модели грузятся ровно один раз, кто бы ни попросил.
+from model_warmup import build_warmup
 
 # FAIL-2. Диагностическое сообщение не должно ронять то, что диагностирует.
 #
@@ -121,25 +123,30 @@ COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION", "platform_help")
 EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
 BM25_MODEL_NAME = os.environ.get("BM25_MODEL", "Qdrant/bm25")
 
-# ─── Dense модель (ленивая загрузка) ──────────────────────────────────────
-
-_model = None
-_model_loaded = False
+# ─── Модели: грузятся ровно один раз (PERF-6) ────────────────────────────
+#
+# Здесь стояли две пары «глобальная переменная + флаг», и обе имели один и
+# тот же дефект:
+#
+#     if not _model_loaded:
+#         _model = SentenceTransformer(...)   # 10+ секунд
+#         _model_loaded = True
+#
+# Флаг ставился ПОСЛЕ загрузки. Пока поток прогрева грузил модель, флаг
+# оставался ложным — и пришедший запрос заходил в ту же ветку и начинал
+# грузить вторую копию тех же двух гигабайтов. Отсюда 23 секунды на первый
+# `ph-001` вместо примерно двенадцати: две загрузки конкурировали за память
+# и диск.
+#
+# Флаг отвечал на вопрос «уже загружено?» и во время загрузки честно
+# отвечал «нет»; из этого «нет» второй поток делал вывод «значит, надо
+# грузить». Спрашивать надо было другое — «этим уже кто-то занят?», — и на
+# это отвечает замок, а не флаг. Он теперь в model_warmup.LazyModel.
+_models = build_warmup()
 
 
 def _get_model():
-    global _model, _model_loaded
-    if not _model_loaded:
-        try:
-            from sentence_transformers import SentenceTransformer
-            _say(f"Загрузка модели {EMBEDDING_MODEL_NAME}...")
-            _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-            _say(f"  ✓ Модель загружена (dim={_model.get_sentence_embedding_dimension()})")
-            _model_loaded = True
-        except Exception as e:
-            _say(f"  ⚠ Не удалось загрузить модель: {e}")
-            _model_loaded = True  # Не пробуем повторно
-    return _model
+    return _models.models["dense"].get()
 
 
 def _embed_query(query):
@@ -153,24 +160,8 @@ def _embed_query(query):
     return emb[0].tolist()
 
 
-# ─── Sparse BM25 модель (ленивая загрузка, для гибридного поиска) ────────
-
-_sparse_model = None
-_sparse_loaded = False
-
-
 def _get_sparse_model():
-    global _sparse_model, _sparse_loaded
-    if not _sparse_loaded:
-        try:
-            from fastembed import SparseTextEmbedding
-            _say(f"Загрузка BM25-модели {BM25_MODEL_NAME}...")
-            _sparse_model = SparseTextEmbedding(model_name=BM25_MODEL_NAME)
-            _say("  ✓ BM25-модель загружена")
-        except Exception as e:
-            _say(f"  ⚠ Не удалось загрузить BM25-модель: {e}")
-        _sparse_loaded = True
-    return _sparse_model
+    return _models.models["sparse"].get()
 
 
 def _embed_query_sparse(query):
@@ -1205,6 +1196,10 @@ def platform_help_stats() -> str:
                      "Это кешированный ответ, а не свежая проверка."),
             "embedding_model": EMBEDDING_MODEL_NAME,
             "bm25_model": BM25_MODEL_NAME,
+            # Состояние моделей от Qdrant не зависит: они грузятся из
+            # образа. В быстрой ветке отказа оно тем более уместно —
+            # именно здесь выясняют, что вообще происходит.
+            "warmup": _models.state(),
             "fallback_items": len(set(i["name"] for i in BUILTIN.values())),
         }, ensure_ascii=False, indent=2)
 
@@ -1260,6 +1255,10 @@ def platform_help_stats() -> str:
         "embedding_model": EMBEDDING_MODEL_NAME,
         "bm25_model": BM25_MODEL_NAME,
         "model_loaded": model is not None,
+        # PERF-6: из чего складывается цена первого запроса и на каком она
+        # этапе прямо сейчас. Без этого «двадцать три секунды» — всё, что
+        # знал наблюдатель, а выбирать по такому числу, что чинить, нельзя.
+        "warmup": _models.state(),
         "fallback_items": len(set(i["name"] for i in BUILTIN.values())),
     }, ensure_ascii=False, indent=2)
 
@@ -1269,42 +1268,26 @@ def platform_help_stats() -> str:
 _load_builtin()
 
 
-# FIX-14: прогрев модели в фоне при старте.
+# FIX-14 + PERF-6: прогрев моделей в фоне при старте.
 #
-# `_get_model()` тянет e5 в память при первом обращении. В прогоне датасета
-# это выглядело безобидно — одна аномалия на десять примеров, — но цифра
-# была 31 950 мс против 120–700 мс у остальных.
+# FIX-14 завёл прогрев, потому что первый запрос после рестарта стоил
+# 31 950 мс против 120–700 мс у остальных — тридцать секунд тишины,
+# достаточных, чтобы агент счёл инструмент неотвечающим и пошёл отвечать по
+# памяти. Ровно тот исход, ради предотвращения которого весь набор строился.
 #
-# В чате это тридцать секунд тишины на первый вопрос про платформу после
-# каждого рестарта контейнера. Достаточно, чтобы агент счёл инструмент
-# неотвечающим и пошёл отвечать по памяти, — то есть ровно тот исход,
-# ради предотвращения которого весь набор и строился.
+# PERF-6 добавил к этому две вещи, без которых прогрев работал вполсилы:
+#
+#   • загрузка стала происходить один раз (см. комментарий у _models выше);
+#     до этого прогрев и первый запрос грузили по копии одновременно;
+#   • греется не только dense, но и BM25. Поиск гибридный и зовёт их
+#     подряд, так что загрузка sparse целиком лежала на первом запросе — и
+#     не была видна за спиной более крупной проблемы.
 #
 # Греем в фоновом потоке (daemon), а не синхронно: сервер должен принимать
-# соединения сразу, иначе healthcheck не дождётся старта. Первый запрос,
-# если он придёт раньше прогрева, просто подождёт на том же месте, что и
-# раньше — хуже не станет.
+# соединения сразу, иначе healthcheck не дождётся старта. Запрос, пришедший
+# во время прогрева, теперь ЖДЁТ его, а не запускает вторую загрузку.
 #
-# Отключается HELP_WARMUP=0: в тестах и при отладке лишняя загрузка модели
-# на 2 ГБ ни к чему.
-
-
-def _warmup() -> None:
-    """Загружает модель и делает один холостой прогон."""
-    try:
-        model = _get_model()
-        if model is None:
-            return
-        # Прогреваем не только загрузку весов, но и первый forward: ленивая
-        # инициализация внутри torch тоже стоит секунд.
-        model.encode(["query: прогрев"], show_progress_bar=False)
-        _say("  ✓ Модель прогрета, поиск готов")
-    except Exception as exc:
-        # Прогрев — оптимизация, а не условие работы. Упал — просто вернулись
-        # к ленивой загрузке, о чём и сообщаем.
-        _say(f"  ⚠ Прогрев не удался ({type(exc).__name__}), "
-             f"модель загрузится при первом запросе")
-
+# Отключается HELP_WARMUP=0: при отладке лишняя загрузка модели ни к чему.
 
 if os.environ.get("HELP_WARMUP", "1").strip().lower() not in ("0", "false", "no"):
-    threading.Thread(target=_warmup, name="model-warmup", daemon=True).start()
+    _models.start_background(_say)
