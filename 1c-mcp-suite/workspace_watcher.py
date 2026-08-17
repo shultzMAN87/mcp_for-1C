@@ -2,19 +2,31 @@
 Workspace watcher — задача 2.3.
 
 Следит за изменениями BSL-кода и XML-метаданных и инкрементально обновляет
-RAG-коллекции. Работает поверх уже существующих MCP-серверов через SSE:
+граф Neo4j. Работает поверх уже существующего MCP-сервера:
 
-  • .bsl / .os   → mcp-code-rag:   tools `code_reindex_file` / `code_remove_file`
-  • .xml         → mcp-metadata-graph: tools `metadata_upsert_file` /
-                   `metadata_remove_file` (задача 4.6.5). Включается через
-                   METADATA_WATCH_ENABLED=true; до 4.6.5 эти tools отсутствовали,
-                   поэтому флаг по умолчанию выключен — оставлен на случай,
-                   если пользователь захочет включить XML-watch без BSL.
-                   Сам BSL-апдейт идёт через mcp-code-rag (для Qdrant) И
-                   при необходимости — через эти же metadata-tools (для Neo4j-
-                   графа); чтобы получить полную картину в графе, поднимите
-                   METADATA_WATCH_ENABLED=true и расширьте CODE_EXTENSIONS
-                   привязку (см. ниже).
+  • .bsl / .os / .xml → mcp-metadata-graph: tools `metadata_upsert_file` /
+                        `metadata_remove_file`. Включается через
+                        METADATA_WATCH_ENABLED=true.
+
+HYG-4: здесь был второй адресат — `mcp-code-rag` (коллекция Qdrant по коду).
+Сервер удалён из проекта вместе с пятью другими в Заходе 2, поэтому ветка
+`target='code'` убрана целиком, а не оставлена под выключенным флагом.
+Выключенный флаг к несуществующему сервису читается как недоделка и
+заставляет каждого следующего читателя выяснять, чего тут не хватает;
+ответ — ничего, решение принято и исполнено. Если код-RAG когда-нибудь
+вернётся, вернуть надо будет сервер, а не эти девять строк.
+
+Из-за того же решения `target` у события стал единственным. Поле оставлено:
+дедупликация ведётся по паре `(path, target)`, и это правильный ключ на
+случай второго адресата — но fan-out одного события в два сервиса сейчас
+не используется.
+
+ВАЖНО про рентабельность. На боевой выгрузке (56 410 файлов) слежение
+оказалось невыгодным: события с диска Windows в контейнер не доходят,
+watcher работает опросом, один цикл опроса = полный обход каталога, то есть
+те же минуты, что и явный запуск обновления. В `.env` он выключен
+(WATCHER_ENABLED=false), и это осознанно — см. раздел про обновление
+выгрузки в README.
 
 Ключевые свойства:
   • Debounce: серия событий по одному файлу (IDE сохраняет → linter → formatter
@@ -61,9 +73,6 @@ XML_DIR = os.environ.get("WATCH_XML_DIR", "/data/1c-src")
 # TR-1: транспорт Streamable HTTP, эндпоинт /mcp. Старые имена переменных
 # (*_SSE_URL) читаются как запасной вариант, чтобы не ломать чужие .env,
 # но /sse у серверов больше нет — путь надо поправить.
-CODE_RAG_URL = os.environ.get(
-    "CODE_RAG_URL", os.environ.get("CODE_RAG_SSE_URL", "http://mcp-code-rag:8011/mcp")
-)
 METADATA_GRAPH_URL = os.environ.get(
     "METADATA_GRAPH_URL",
     os.environ.get("METADATA_GRAPH_SSE_URL", "http://mcp-metadata-graph:8001/mcp"),
@@ -81,14 +90,6 @@ METADATA_GRAPH_URL = os.environ.get(
 # если они расходятся — упсёрт молча скипнется (status=skipped,
 # reason=path_outside_src_root в логе watcher'а). Для bsl-watch'а в Neo4j
 # поднимайте WATCH_CODE_DIR=METADATA_SRC_DIR (одна точка монтирования).
-# CODE_WATCH_ENABLED: фанаут .bsl-событий в mcp-code-rag (Qdrant).
-# Сервер mcp-code-rag удалён из проекта, поэтому по умолчанию выключено —
-# иначе watcher на каждое сохранение файла долбится в несуществующий
-# контейнер и пишет в лог таймауты. Вернуть в true вместе с сервером.
-CODE_WATCH_ENABLED = os.environ.get(
-    "CODE_WATCH_ENABLED", "false"
-).strip().lower() in ("1", "true", "yes", "on")
-
 METADATA_WATCH_ENABLED = os.environ.get(
     "METADATA_WATCH_ENABLED", "false"
 ).strip().lower() in ("1", "true", "yes", "on")
@@ -145,7 +146,8 @@ class PendingEvent:
     kind: 'upsert' (модификация/создание) или 'remove' (удаление/уход).
     last_seen: последний момент, когда что-то пришло по этому пути — от него
                считается debounce.
-    target:    'code' (mcp-code-rag) | 'metadata' (mcp-metadata-graph).
+    target:    'metadata' (mcp-metadata-graph). Других адресатов сейчас нет
+               (HYG-4), но ключ дедупликации остаётся парой — см. ниже.
     """
     path: str
     kind: str
@@ -165,10 +167,10 @@ class DebouncedQueue:
     нагрузка мизерная (единицы событий/сек), гоняться за lock-free нет
     смысла.
 
-    Ключ дедупликации — `(path, target)`, НЕ `path` в одиночку. Это нужно
-    для fan-out'а одного .bsl-события в два таргета (code-rag для Qdrant
-    + metadata-graph для Neo4j после 4.6.5): они должны жить как два
-    независимо дебаунсимых события на один файл.
+    Ключ дедупликации — `(path, target)`, НЕ `path` в одиночку. Адресат
+    сейчас один (HYG-4 убрал code-rag), так что пара избыточна; оставлена
+    намеренно — второй адресат означал бы два независимо дебаунсимых
+    события на один файл, и ключ по одному лишь пути их бы схлопнул.
     """
 
     def __init__(self, debounce_sec: float, handler):
@@ -272,10 +274,7 @@ def _dispatch(event: PendingEvent) -> None:
     asyncio.run() в фоновом потоке watcher'а — виснет до таймаута.
     Один стабильный loop на отдельном треде устраняет это начисто.
     """
-    if event.target == "code":
-        tool = "code_reindex_file" if event.kind == "upsert" else "code_remove_file"
-        url = CODE_RAG_URL
-    elif event.target == "metadata":
+    if event.target == "metadata":
         tool = "metadata_upsert_file" if event.kind == "upsert" else "metadata_remove_file"
         url = METADATA_GRAPH_URL
     else:
@@ -415,17 +414,12 @@ class CodeXmlHandler(FileSystemEventHandler):
         if _should_ignore(path):
             return
         ext = path.suffix.lower()
-        # Решаем, в какие таргеты слать событие.
-        # .bsl/.os: всегда → code-rag (Qdrant); опционально → metadata-graph
-        #           (Neo4j call graph, 4.6.5) при METADATA_WATCH_ENABLED.
-        # .xml:     только → metadata-graph при METADATA_WATCH_ENABLED.
+        # Решаем, в какие таргеты слать событие. Адресат один:
+        # metadata-graph (слой 1 из .xml, слой 2 из .bsl) при
+        # METADATA_WATCH_ENABLED.
         targets: list[str] = []
-        if ext in CODE_EXTENSIONS:
-            if CODE_WATCH_ENABLED:
-                targets.append("code")
-            if METADATA_WATCH_ENABLED:
-                targets.append("metadata")
-        elif ext in XML_EXTENSIONS and METADATA_WATCH_ENABLED:
+        if (ext in CODE_EXTENSIONS or ext in XML_EXTENSIONS) \
+                and METADATA_WATCH_ENABLED:
             targets.append("metadata")
         if not targets:
             return
@@ -464,9 +458,14 @@ def main() -> int:
     _log(f"config: debounce={DEBOUNCE_SEC}s, mcp_timeout={MCP_CALL_TIMEOUT_SEC}s")
     _log(f"code dir: {CODE_DIR} (exists={code_path.is_dir()})")
     _log(f"xml dir:  {XML_DIR} (exists={xml_path.is_dir()}, enabled={METADATA_WATCH_ENABLED})")
-    _log(f"code-rag:       {CODE_RAG_URL} (enabled={CODE_WATCH_ENABLED})")
     if METADATA_WATCH_ENABLED:
         _log(f"metadata-graph: {METADATA_GRAPH_URL}")
+    else:
+        # Иначе watcher поднимается, крутит опрос и не делает НИЧЕГО — а в
+        # логе про это ни строки. Молчаливый холостой ход в этом проекте
+        # уже разбирали (FIX-3): состояние надо называть вслух.
+        _log("METADATA_WATCH_ENABLED=false — адресатов нет, события никуда "
+             "не отправляются. Watcher будет крутить опрос вхолостую.")
 
     # Долгоживущий event loop для всех MCP-вызовов из фонового потока
     # DebouncedQueue. Поднимаем ДО очереди, чтобы он точно был готов

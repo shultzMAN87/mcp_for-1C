@@ -54,6 +54,10 @@ from bsl_health import AnalysisLog, health_report
 # Лежит рядом с server.py и в образе тоже попадает в /app.
 from bsl_lsp import BslLspClient, LspUnavailable, to_report
 
+# PERF-9: прогрев JVM при старте контейнера. Лежит рядом с server.py и в
+# образе тоже попадает в /app.
+from bsl_warmup import Warmup, say as _warmup_say
+
 # B-4: единый словарь постраничности — тот же модуль, что у остальных.
 try:
     from mcp_pagination import page_fields
@@ -79,13 +83,20 @@ ANALYSIS_TIMEOUT_SEC = int(os.environ.get("BSL_ANALYSIS_TIMEOUT_SEC", "120"))
 # в одном месте — в `_run_analysis`, ниже.
 _analysis_log = AnalysisLog()
 
-# PERF-7. Единственное долгоживущее состояние во всём сервере. Процесс не
-# поднимается при старте: пока никто не просил проверить код, платить за
-# JVM не за что. Первый вызов заплатит ~10 с, все следующие — миллисекунды.
+# PERF-7. Единственное долгоживущее состояние во всём сервере.
+#
+# PERF-9 изменил здесь одно слово. Раньше стояло: «процесс не поднимается
+# при старте: пока никто не просил проверить код, платить за JVM не за
+# что». Довод выглядел бережливым, а счёт выставлялся не тому: платил не
+# контейнер простоем, а первый пришедший агент — четырнадцатью секундами
+# тишины в отчёте `bsl-001`. Теперь процесс поднимается фоновым потоком при
+# старте, а лениво — только если BSL_WARMUP=false.
 _lsp_client = BslLspClient(
     java_cmd=JAVA_CMD, java_opts=JAVA_OPTS,
     jar=BSL_LS_JAR, config=BSL_LS_CONFIG,
 )
+
+_warmup = Warmup(_lsp_client)
 
 # STD-5. Подсказка агенту одинаковая во всех трёх инструментах — держим одной
 # строкой, чтобы формулировка не разъехалась при первой же правке.
@@ -334,6 +345,7 @@ def bsl_stats() -> str:
             config_path=BSL_LS_CONFIG,
             log=_analysis_log,
             lsp_state=_lsp_client.state(),
+            warmup_state=_warmup.state(),
         ),
         ensure_ascii=False, indent=2,
     )
@@ -523,10 +535,15 @@ def bsl_check_directory(dir_path: str, limit: int = 50, offset: int = 0) -> str:
 
 if __name__ == "__main__":
     if not Path(BSL_LS_JAR).exists():
-        print(f"⚠ BSL Language Server не найден: {BSL_LS_JAR}")
-        print("  Скачайте с https://github.com/1c-syntax/bsl-language-server/releases")
+        _warmup_say(f"⚠ BSL Language Server не найден: {BSL_LS_JAR}", err=True)
+        _warmup_say("  Скачайте с https://github.com/1c-syntax/"
+                    "bsl-language-server/releases", err=True)
     else:
-        print(f"✓ BSL Language Server: {BSL_LS_JAR}")
+        _warmup_say(f"✓ BSL Language Server: {BSL_LS_JAR}")
+        # PERF-9: поднимаем JVM фоном, не задерживая открытие порта.
+        # Запрос, пришедший в середине прогрева, встанет на замке внутри
+        # клиента и получит готовый процесс — вторая JVM не появится.
+        _warmup.start_background()
 
     # TR-1: Streamable HTTP (/mcp, stateless) вместо SSE.
     # SEC-3: без MCP_SHARED_SECRET сервер не стартует — mcp_http.run

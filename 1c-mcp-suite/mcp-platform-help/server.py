@@ -31,6 +31,7 @@ import os
 import json
 import re
 import sys
+import threading
 import time
 import urllib.request
 import urllib.error
@@ -60,7 +61,20 @@ except ImportError:  # pragma: no cover — путь только для лок�
 from help_ranking import diversify_hits
 
 # PERF-6: модели грузятся ровно один раз, кто бы ни попросил.
-from model_warmup import build_warmup
+# PERF-6.1: клиент Qdrant — третья запись того же реестра.
+#
+# Отсюда же приезжают имена моделей и адрес Qdrant. Раньше окружение читал
+# и этот файл, и model_warmup.py — два чтения с двумя копиями умолчаний.
+# Пока умолчания совпадают, расхождения не видно; оно появляется в тот
+# день, когда поправят одно из них, и выглядит как «в stats написан один
+# таймаут, а клиент живёт с другим». Читатель окружения теперь один.
+from model_warmup import (
+    build_warmup,
+    EMBEDDING_MODEL_NAME,
+    BM25_MODEL_NAME,
+    QDRANT_URL,
+    QDRANT_TIMEOUT_SEC,
+)
 
 # FAIL-2. Диагностическое сообщение не должно ронять то, что диагностирует.
 #
@@ -118,10 +132,10 @@ install_answerable_field(mcp)
 
 logger = logging.getLogger(__name__)
 
-QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
+# QDRANT_URL, EMBEDDING_MODEL_NAME, BM25_MODEL_NAME и QDRANT_TIMEOUT_SEC
+# импортированы из model_warmup — там они читаются из окружения, и только
+# там.
 COLLECTION_NAME = os.environ.get("QDRANT_COLLECTION", "platform_help")
-EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
-BM25_MODEL_NAME = os.environ.get("BM25_MODEL", "Qdrant/bm25")
 
 # ─── Модели: грузятся ровно один раз (PERF-6) ────────────────────────────
 #
@@ -146,7 +160,7 @@ _models = build_warmup()
 
 
 def _get_model():
-    return _models.models["dense"].get()
+    return _models.parts["dense"].get()
 
 
 def _embed_query(query):
@@ -161,7 +175,7 @@ def _embed_query(query):
 
 
 def _get_sparse_model():
-    return _models.models["sparse"].get()
+    return _models.parts["sparse"].get()
 
 
 def _embed_query_sparse(query):
@@ -177,23 +191,30 @@ def _embed_query_sparse(query):
         return None
 
 
-# ─── Qdrant client (ленивая загрузка) ────────────────────────────────────
-
-_qclient = None
-_qclient_loaded = False
+# ─── Клиент Qdrant: третья запись реестра (PERF-6.1) ─────────────────────
+#
+# Здесь была третья пара «переменная + флаг» с тем же дефектом, что у
+# моделей:
+#
+#     if not _qclient_loaded:
+#         from qdrant_client import QdrantClient   # секунда с лишним
+#         _qclient = QdrantClient(...)
+#         _qclient_loaded = True
+#
+# Цена ошибки меньше — импорт секундный, а не двенадцатисекундный, и вторая
+# копия клиента не стоит двух гигабайтов, — но вопрос флаг задаёт тот же
+# неправильный: «уже готово?» вместо «этим уже кто-то занят?». Плюс клиент
+# не грелся вовсе, и эта секунда оставалась на первом запросе: 1,9 с у
+# ph-001 после того, как модели перестали быть виноваты.
+#
+# Поведение при отказе сохранено ровно прежнее: не загрузилось — None,
+# повторных попыток нет. Пакета в образе либо нет, либо он есть; повторять
+# безнадёжный импорт на каждый вызов незачем.
 
 
 def _get_qclient():
     """Возвращает qdrant_client.QdrantClient или None."""
-    global _qclient, _qclient_loaded
-    if not _qclient_loaded:
-        try:
-            from qdrant_client import QdrantClient
-            _qclient = QdrantClient(url=QDRANT_URL, timeout=QDRANT_TIMEOUT_SEC)
-        except Exception as e:
-            _say(f"  ⚠ qdrant-client недоступен: {e}")
-        _qclient_loaded = True
-    return _qclient
+    return _models.parts["qdrant"].get()
 
 
 # ─── Qdrant клиент ────────────────────────────────────────────────────────
@@ -255,27 +276,56 @@ MISSING_RECHECK_SEC = int(os.environ.get("HELP_MISSING_RECHECK_SEC", "30"))
 # мгновенно, а через MISSING_RECHECK_SEC сервер сам перепроверит и поднимет
 # режим обратно, когда Qdrant вернётся. Проверка живости остаётся
 # автоматической — руками перезапускать сервер не нужно.
-QDRANT_TIMEOUT_SEC = int(os.environ.get("HELP_QDRANT_TIMEOUT_SEC", "4"))
+# QDRANT_TIMEOUT_SEC — тот самый таймаут, с которым создаётся клиент.
+# Читается в model_warmup.py (там же, где клиент и создаётся) и импортирован
+# в начале файла: два чтения одного окружения расходятся молча, а видно это
+# становится по строке `qdrant_timeout_sec` в stats, которая перестанет
+# описывать живого клиента.
 TRANSPORT_FAILS_BEFORE_GIVING_UP = int(
     os.environ.get("HELP_TRANSPORT_FAILS_BEFORE_GIVING_UP", "2")
 )
 
 _transport_fails = 0
 
+# AUDIT-3. Замок вокруг счётчика — и только вокруг него.
+#
+# `_transport_fails += 1` это чтение, сложение и запись тремя отдельными
+# шагами. Два потока, вошедшие сюда одновременно, читают одно и то же
+# значение и записывают одно и то же — один инкремент теряется.
+#
+# Когда это случается: ровно тогда, когда FAIL-1 нужен. Qdrant лёг, агент
+# задал три вопроса подряд, три обработчика ушли в таймаут и вернулись
+# почти одновременно. Порог в два отказа не набирается, быстрый отказ не
+# включается, и каждый следующий вызов снова платит восемь секунд — то
+# есть механизм молча не срабатывает именно в своём сценарии.
+#
+# Чего замок здесь НЕ делает: он не защищает `_help_collection_kind` в
+# `_detect_help_collection_kind`. Это сделано намеренно. Тот кеш пишется
+# одним присваиванием (терять нечего), а гонка за него стоит одной лишней
+# пробы Qdrant. Держать же замок через сетевой поход значило бы выстроить
+# все запросы в очередь за одним таймаутом — ровно та задержка, против
+# которой FAIL-1 и построен. Замок, делающий отказ медленнее, хуже гонки,
+# которая стоит одного HTTP-запроса.
+_transport_lock = threading.RLock()
+
 
 def _note_transport_failure(where: str) -> None:
     """Отказ транспорта. После порога роняем кеш формата в 'missing'."""
     global _transport_fails, _help_collection_kind, _help_collection_kind_at
-    _transport_fails += 1
-    if _transport_fails < TRANSPORT_FAILS_BEFORE_GIVING_UP:
-        return
-    if _help_collection_kind in (None, "missing"):
-        return
-    _say(f"  ⚠ platform_help: {_transport_fails} отказа транспорта подряд "
+    with _transport_lock:
+        _transport_fails += 1
+        if _transport_fails < TRANSPORT_FAILS_BEFORE_GIVING_UP:
+            return
+        if _help_collection_kind in (None, "missing"):
+            return
+        fails = _transport_fails
+        _help_collection_kind = "missing"
+        _help_collection_kind_at = time.monotonic()
+    # Печать — вне замка: она уходит в stderr, который может блокироваться
+    # на медленном потребителе, и держать на этом счётчик незачем.
+    _say(f"  ⚠ platform_help: {fails} отказа транспорта подряд "
          f"({where}) — считаю коллекцию недоступной и перестаю ждать "
          f"таймаутов. Перепроверю через {MISSING_RECHECK_SEC} с.", err=True)
-    _help_collection_kind = "missing"
-    _help_collection_kind_at = time.monotonic()
 
 
 # Дешёвая проба вместо тяжёлого клиента. qdrant_client на мёртвом адресе
@@ -288,7 +338,8 @@ QDRANT_PROBE_TIMEOUT_SEC = int(os.environ.get("HELP_QDRANT_PROBE_TIMEOUT_SEC", "
 def _note_transport_success() -> None:
     """Любой удавшийся поход в Qdrant обнуляет счётчик отказов."""
     global _transport_fails
-    _transport_fails = 0
+    with _transport_lock:
+        _transport_fails = 0
 
 
 def _qdrant_down_now() -> bool:
@@ -396,6 +447,40 @@ def _detect_help_collection_kind():
         _help_collection_kind = "legacy_dense"
 
     return _help_collection_kind
+
+
+def _prewarm_collection_kind(say=None):
+    """
+    Определить схему коллекции на старте — но запомнить только удачу.
+
+    PERF-6.1, вторая половина. После прогрева клиента у первого запроса
+    оставалось ещё одно неоплаченное дело: сходить в Qdrant и выяснить,
+    гибридная коллекция или плоская. Дёшево (сотни миллисекунд), но платит
+    за это первый пришедший, а не старт контейнера.
+
+    Почему нельзя просто позвать `_detect_help_collection_kind()` и
+    оставить как есть. На старте стек поднимается целиком, и `help-indexer`
+    в этот момент вполне может ещё строить индекс: коллекции нет, ответ —
+    "missing", и он ляжет в кеш на MISSING_RECHECK_SEC. Пришедший через
+    пять секунд запрос получит «поиск недоступен» из кеша, хотя проверка
+    живьём сказала бы обратное. Это ровно `FIX-12`, только теперь мы бы
+    завели его сами и своими руками — ускорением.
+
+    Поэтому положительный ответ запоминаем (схема на ходу не меняется), а
+    "missing" выбрасываем: на старте это не факт, а «ещё не готово».
+    Счётчик отказов транспорта при этом не трогаем — если Qdrant правда
+    лежит, отказ был настоящий, и `FAIL-1` должен его засчитать.
+    """
+    global _help_collection_kind
+    say = say or _say
+    kind = _detect_help_collection_kind()
+    if kind == "missing":
+        _help_collection_kind = None
+        say("[warmup] схема коллекции: пока не определяется — не запоминаю, "
+            "первый запрос проверит заново (индексатор мог ещё не закончить)")
+        return "discarded"
+    say(f"[warmup] схема коллекции: {kind}")
+    return kind
 
 
 # ─── Hybrid-поиск по platform_help (dense + BM25 sparse + RRF) ───────────
@@ -1283,6 +1368,11 @@ _load_builtin()
 #     подряд, так что загрузка sparse целиком лежала на первом запросе — и
 #     не была видна за спиной более крупной проблемы.
 #
+# PERF-6.1 добавил третье: клиент Qdrant (тот же дефект флага, только
+# дешевле) и заключительный шаг — определение схемы коллекции. Шаг сделан
+# отдельным `then`, а не четвёртой записью реестра, потому что реестр
+# помнит ответ навсегда, а «missing» на старте помнить нельзя.
+#
 # Греем в фоновом потоке (daemon), а не синхронно: сервер должен принимать
 # соединения сразу, иначе healthcheck не дождётся старта. Запрос, пришедший
 # во время прогрева, теперь ЖДЁТ его, а не запускает вторую загрузку.
@@ -1290,4 +1380,4 @@ _load_builtin()
 # Отключается HELP_WARMUP=0: при отладке лишняя загрузка модели ни к чему.
 
 if os.environ.get("HELP_WARMUP", "1").strip().lower() not in ("0", "false", "no"):
-    _models.start_background(_say)
+    _models.start_background(_say, then=_prewarm_collection_kind)

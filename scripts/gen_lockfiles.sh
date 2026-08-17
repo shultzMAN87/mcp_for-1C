@@ -35,6 +35,12 @@ PAIRS=(
   "requirements-v8std.txt:requirements-v8std.lock.txt:python:3.12-slim"
 )
 
+# PERF-11: `--emit-index-url` переносит в лок строку `--extra-index-url` из
+# requirements-embeddings.txt (индекс CPU-сборок torch). Без неё лок
+# получится «правильным по версиям, но без адреса, откуда их брать», и
+# сборка образа снова притащит CUDA-колёса из PyPI. Флаг стоит у всех
+# четырёх пар, а не у одной: разные флаги у разных пар — второй способ
+# завести молча расходящиеся списки (LOCK-1).
 compile_local() {
   command -v pip-compile >/dev/null 2>&1 || {
     echo "pip-compile не найден. Установите: pip install pip-tools" >&2
@@ -45,7 +51,7 @@ compile_local() {
   for pair in "${PAIRS[@]}"; do
     src="${pair%%%%:*}"; rest="${pair#*:}"; dst="${rest%%%%:*}"
     echo "→ $src → $dst"
-    pip-compile --quiet --strip-extras --output-file "$dst" "$src"
+    pip-compile --quiet --strip-extras --emit-index-url --output-file "$dst" "$src"
   done
 }
 
@@ -56,7 +62,7 @@ compile_docker() {
     echo "→ $src → $dst (в $image)"
     docker run --rm -v "$PWD:/w" -w /w "$image" sh -c "
       pip install --quiet pip-tools typing_extensions &&
-      pip-compile --quiet --strip-extras --output-file '$dst' '$src'
+      pip-compile --quiet --strip-extras --emit-index-url --output-file '$dst' '$src'
     "
   done
 }

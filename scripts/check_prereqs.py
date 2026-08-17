@@ -147,6 +147,15 @@ def is_placeholder(value: str) -> bool:
 
 # ─── Сами проверки ──────────────────────────────────────────────────────────
 
+# B-3, третья встреча. Вывод `docker` читается ЯВНО в utf-8 с заменой
+# нечитаемого. Без этого `text=True` берёт кодировку консоли (cp1251 на
+# русской Windows), и любое сообщение docker'а с не-ASCII символом роняет
+# декодирование в потоке-читателе — причём `run()` этого не замечает и
+# отдаёт stderr=None.
+#
+# Особенно неудачно это здесь: к `check_prereqs.py` приходят именно тогда,
+# когда что-то не работает, то есть ровно тогда, когда docker и печатает
+# необычные сообщения.
 def check_docker() -> CheckResult:
     """Docker установлен и запущен."""
     if not shutil.which("docker"):
@@ -158,7 +167,8 @@ def check_docker() -> CheckResult:
     try:
         out = subprocess.run(
             ["docker", "info"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, timeout=10,
+            encoding="utf-8", errors="replace",
         )
         if out.returncode != 0:
             return fail(
@@ -177,7 +187,8 @@ def check_docker_compose() -> CheckResult:
     try:
         out = subprocess.run(
             ["docker", "compose", "version"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, timeout=10,
+            encoding="utf-8", errors="replace",
         )
         if out.returncode != 0:
             return fail(

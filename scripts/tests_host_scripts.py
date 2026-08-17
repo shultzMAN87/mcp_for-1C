@@ -191,5 +191,115 @@ class TestSuiteCounting(unittest.TestCase):
         self.assertEqual(how, "")
 
 
+class TestSubprocessOutputIsDecodedSafely(unittest.TestCase):
+    """
+    `B-3`, третья встреча — и с обратной стороны трубы.
+
+    Первые две правки чинили СВОЙ вывод: `_say()` в сервере справки и
+    `PYTHONIOENCODING` дочерним процессам в `run_all_tests.py`. Этот набор
+    проверяет ровно их — что каждый хостовый скрипт настраивает свои
+    потоки.
+
+    А `archive_docs.py` сломался на ЧТЕНИИ чужого:
+
+        subprocess.run([...], capture_output=True, text=True)
+
+    Без явной кодировки `text=True` декодирует вывод тем, что вернёт
+    `locale.getpreferredencoding()` — на русской Windows это cp1251. Git на
+    отказе печатает имя файла, а имена документов здесь кириллические.
+    Поток-читатель падает с `UnicodeDecodeError` **в отдельном потоке**,
+    `run()` этого не замечает и возвращает `stderr = None`, дальше
+    `.strip()` на `None` — и скрипт умирает посреди переноса, оставив
+    половину файлов в корне.
+
+    Чинить это по одному месту бессмысленно: болезнь не в скрипте, а в
+    привычке писать `text=True`. Поэтому проверяется форма записи во всех
+    хостовых скриптах разом.
+    """
+
+    CALL_RE = re.compile(r"subprocess\.(run|Popen|check_output)\s*\(",
+                         re.MULTILINE)
+
+    @staticmethod
+    def _strip_docstrings(text: str) -> str:
+        """
+        Разборы дефектов в этом проекте цитируют плохой код целиком —
+        иначе объяснение не читается. Проверка формы записи обязана
+        отличать цитату от вызова, иначе она ловит собственную
+        документацию и учит писать про дефекты обтекаемо.
+        """
+        out = []
+        parts = re.split(r'("""|\'\'\')', text)
+        inside = False
+        for part in parts:
+            if part in ('"""', "\'\'\'"):
+                inside = not inside
+                out.append(part)
+            else:
+                out.append(" " * len(part) if inside else part)
+        return "".join(out)
+
+    def _calls(self, text: str):
+        """(смещение, текст вызова) для каждого обращения к subprocess."""
+        text = self._strip_docstrings(text)
+        for m in self.CALL_RE.finditer(text):
+            depth, i = 0, m.end() - 1
+            while i < len(text):
+                if text[i] == "(":
+                    depth += 1
+                elif text[i] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+            yield m.start(), text[m.start():i + 1]
+
+    def test_no_text_true_without_encoding(self):
+        offenders = []
+        for name in HOST_SCRIPTS:
+            path = SCRIPTS / name
+            text = path.read_text(encoding="utf-8")
+            for pos, call in self._calls(text):
+                asks_str = "text=True" in call or "universal_newlines=True" in call
+                if not asks_str:
+                    continue
+                if "encoding=" in call:
+                    continue
+                line = text[:pos].count("\n") + 1
+                offenders.append(f"{name}:{line}")
+        self.assertFalse(
+            offenders,
+            "вывод дочернего процесса декодируется кодировкой консоли:\n  "
+            + "\n  ".join(offenders) +
+            "\n\ntext=True без encoding= берёт cp1251 на русской Windows и "
+            "падает на кириллице в чужом сообщении об ошибке — причём в "
+            "отдельном потоке, так что run() вернёт stderr=None. "
+            "Пишите: encoding=\"utf-8\", errors=\"replace\".",
+        )
+
+    def test_decoding_never_kills_the_operation(self):
+        """
+        `errors="replace"` обязателен, а не желателен.
+
+        Диагностика печатается ради операции, а не наоборот. Строгий режим
+        превращает нечитаемое сообщение в отказ всей команды — здесь это
+        стоило половины переноса.
+        """
+        offenders = []
+        for name in HOST_SCRIPTS:
+            text = (SCRIPTS / name).read_text(encoding="utf-8")
+            for pos, call in self._calls(text):
+                if "encoding=" not in call:
+                    continue
+                if "errors=" in call:
+                    continue
+                offenders.append(f"{name}:{text[:pos].count(chr(10)) + 1}")
+        self.assertFalse(
+            offenders,
+            "encoding= задан, errors= нет:\n  " + "\n  ".join(offenders) +
+            "\nНечитаемый байт в чужом выводе уронит операцию целиком.",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

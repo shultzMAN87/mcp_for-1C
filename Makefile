@@ -5,7 +5,8 @@
 # напрямую запускать python3/py.
 
 .PHONY: help check-prereqs up down build restart logs clean lock v8std v8std-check \
-        test test-full test-strict baseline-update eval-all eval-summary
+        test test-full test-strict baseline-update eval-all eval-summary \
+        check-publish archive-index
 
 help:
 	@echo "1C MCP Suite — доступные команды:"
@@ -27,6 +28,9 @@ help:
 	@echo "  make baseline-update — перезаписать эталонные числа"
 	@echo "  make eval-all        — прогнать ВСЕ датасеты и показать сводку (EVAL-3)"
 	@echo "  make eval-summary    — сводка по последним отчётам, без прогона"
+	@echo ""
+	@echo "  make check-publish   — что мешает выложить репозиторий наружу (DOC-2)"
+	@echo "  make archive-index   — пересобрать указатель docs/archive/README.md (DOC-3)"
 
 test:
 	@echo "CI-1: прогон всех наборов тестов"
@@ -57,6 +61,19 @@ baseline-update:
 
 check-prereqs:
 	@python3 scripts/check_prereqs.py
+
+# DOC-2. Секреты в истории, проприетарные файлы, обязательные для
+# публикации файлы. Прогонять перед каждым выкладыванием, а не однажды:
+# история растёт, а вывод «проверено» остаётся тем же.
+check-publish:
+	@python3 scripts/check_publish.py
+
+# DOC-3. Указатель по архиву собирается из самих файлов. Запускать после
+# того, как в docs/archive/ что-то добавилось, — иначе шестой список в
+# проекте разойдётся с содержимым так же молча, как разошлись пять
+# предыдущих (LOCK-1, B-6, HYG-2, HYG-4).
+archive-index:
+	@python3 scripts/gen_archive_index.py
 
 up:
 	docker compose up -d --build

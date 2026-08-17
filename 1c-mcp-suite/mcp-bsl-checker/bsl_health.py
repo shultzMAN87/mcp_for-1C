@@ -352,7 +352,8 @@ def health_report(jar_path: str, java_cmd: str = "java",
                   java_opts: str = "", analysis_timeout_sec: int = 120,
                   config_path: str = "", log: AnalysisLog | None = None,
                   java_probe=None, jar_probe=None, now: float | None = None,
-                  lsp_state: dict | None = None) -> dict:
+                  lsp_state: dict | None = None,
+                  warmup_state: dict | None = None) -> dict:
     """
     Полный ответ `bsl_stats`.
 
@@ -418,6 +419,25 @@ def health_report(jar_path: str, java_cmd: str = "java",
                     f"{lsp_state['last_error']}; проверки идут прежним "
                     "путём --analyze, это медленнее в десятки раз"
                 )
+
+    if warmup_state is not None:
+        # PERF-9. Прогрев виден отдельно от процесса, потому что это разные
+        # вопросы. `lsp.running=false` отвечает «быстрого пути сейчас нет»;
+        # `warmup.state` отвечает, ПОЧЕМУ: ещё греется (подождите), не
+        # включён (так настроено) или упал (чинить). Без этого разделения
+        # медленный первый вызов и сломанная java выглядят одинаково — а
+        # приходят в bsl_stats именно с этим вопросом.
+        report["warmup"] = warmup_state
+        if warmup_state.get("state") == "warming":
+            reasons.append(
+                "прогрев JVM ещё идёт: первая проверка подождёт его "
+                "окончания. Это разовая цена старта контейнера, не поломка"
+            )
+        elif warmup_state.get("state") == "failed" and warmup_state.get("error"):
+            reasons.append(
+                f"прогрев JVM не удался ({warmup_state['error']}); проверки "
+                f"идут путём --analyze"
+            )
 
     if reasons:
         report["degradation_reasons"] = reasons

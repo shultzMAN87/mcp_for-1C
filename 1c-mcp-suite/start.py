@@ -119,11 +119,23 @@ def main():
 
     # TOOL-1 / TOOL-2 / SEC-5: приводим набор инструментов к целевому
     # ДО обёртки метриками, иначе обернём то, что сейчас удалим.
+    #
+    # API-1. Здесь жила вторая половина того же дефекта, что и в самом
+    # фильтре: `except Exception` вокруг вызова означал, что даже падение
+    # apply_profile не мешало серверу подняться — с metadata_reload и
+    # metadata_cypher в наборе. Ловить исключение, чтобы записать строчку в
+    # stderr, и продолжать — это и есть fail-open, только вежливый.
+    #
+    # Теперь исходы разделены. Отказ фильтра (реестр не найден, опасное
+    # осталось в наборе) — EX_CONFIG, как пустой MCP_SHARED_SECRET. Всё
+    # остальное (сам модуль не доехал в образ, ошибка импорта) — тоже отказ:
+    # молча работать без фильтра нельзя ни по какой причине.
+    from mcp_tool_filter import apply_profile, ToolRegistryUnavailable
     try:
-        from mcp_tool_filter import apply_profile
         apply_profile(mcp_obj, name)
-    except Exception as e:
-        sys.stderr.write(f"[tool-filter] не удалось применить профиль: {e}\n")
+    except ToolRegistryUnavailable as e:
+        sys.stderr.write(f"[FATAL] [tool-filter] {e}\n")
+        raise SystemExit(78)  # EX_CONFIG, тот же код, что у SEC-3
 
     _wrap_tools_with_metrics(mcp_obj, name)
     _start_metrics_dashboard_async()

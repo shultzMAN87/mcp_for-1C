@@ -50,6 +50,10 @@ COPY mcp_pagination.py /app/mcp_pagination.py
 # PERF-7: клиент BSL LS в режиме LSP. Третья подряд строка COPY, которую
 # назвал tests_delivery.py, а не память.
 COPY mcp-bsl-checker/bsl_lsp.py /app/bsl_lsp.py
+# PERF-9: прогрев JVM при старте контейнера. Четвёртая подряд строка,
+# которую назвал tests_delivery.py. Без неё сервер падает на импорте — то
+# есть образ собирается, а контейнер не поднимается вовсе.
+COPY mcp-bsl-checker/bsl_warmup.py /app/bsl_warmup.py
 
 EXPOSE 8002
 

@@ -113,5 +113,129 @@ class TestLockfileGeneratorsAgree(unittest.TestCase):
         )
 
 
+class TestCiPinsSameMcpVersion(unittest.TestCase):
+    """
+    CI-2. Шестое место, где записана версия одной и той же библиотеки.
+
+    Workflow ставит `mcp[cli]` руками — образов у него нет, а
+    `evals/runner/tests.py` без пакета не запускается. Значит, появилась
+    ещё одна строка с версией, и появилась она вне лок-файлов.
+
+    Чем это грозит конкретно: SDK переименовал `streamablehttp_client`
+    между версиями. Разъедься эта строка с лок-файлом — CI начнёт краснеть
+    на импорте раннера, то есть на чужом релизе, а не на нашей правке. Это
+    ровно тот жанр, из-за которого CI перестают читать.
+
+    Проверяем то же, что `LOCK-1`: два места, описывающих одно, обязаны
+    совпадать, и сверять их должен не человек.
+    """
+
+    WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
+    LOCK = SUITE / "requirements.lock.txt"
+
+    def setUp(self):
+        if not self.WORKFLOW.exists():
+            self.skipTest("workflow не заведён — CI-2 ещё не сделан")
+
+    def test_workflow_pin_matches_lockfile(self):
+        wf = self.WORKFLOW.read_text(encoding="utf-8")
+        pinned = re.findall(r"mcp\[cli\]==([\d.]+)", wf)
+        self.assertTrue(
+            pinned, "в workflow нет закреплённой версии mcp — прогон "
+                    "возьмёт свежую и однажды сломается не по делу")
+
+        lock = self.LOCK.read_text(encoding="utf-8")
+        in_lock = re.findall(r"^mcp==([\d.]+)", lock, re.M)
+        self.assertTrue(in_lock, f"{self.LOCK.name}: строки mcp== нет")
+
+        self.assertEqual(
+            set(pinned), set(in_lock),
+            f"workflow ставит mcp {pinned}, а образы собираются с "
+            f"{in_lock}. Прогон в CI обязан идти на той же версии SDK, "
+            f"что и стенд — иначе он проверяет не то, что поедет.",
+        )
+
+
+class TestGeneratorsUseTheSameFlags(unittest.TestCase):
+    """
+    PERF-11. Одинаковые пары — половина дела; флаги тоже обязаны совпадать.
+
+    `--emit-index-url` переносит в лок-файл строку `--extra-index-url`,
+    которой `requirements-embeddings.txt` указывает индекс CPU-сборок
+    torch. Расходись этот флаг между `.sh` и `.ps1` — лок, собранный на
+    Windows, потерял бы адрес индекса, и образ снова притащил бы ~2,5 ГБ
+    колёс `nvidia-*` из PyPI.
+
+    Отличить такой лок от правильного на глаз нельзя: версии в нём те же,
+    нет только одной строки в заголовке. Это `LOCK-1` во второй одежде.
+    """
+
+    # Только настоящие вызовы: в обоих файлах слово pip-compile встречается
+    # и в комментариях, и в сообщении «pip-compile не найден».
+    FLAG_RE = re.compile(r"pip-compile --quiet[^\n\"']*")
+
+    def flags(self, path: Path) -> list[set[str]]:
+        text = path.read_text(encoding="utf-8")
+        out = []
+        for m in self.FLAG_RE.finditer(text):
+            out.append({w for w in m.group(0).split() if w.startswith("--")}
+                       - {"--output-file"})
+        return out
+
+    def test_both_generators_pass_the_same_flags(self):
+        sh_sets, ps_sets = self.flags(SH), self.flags(PS1)
+        self.assertTrue(sh_sets and ps_sets, "вызовов pip-compile не нашлось")
+        # В bash-версии два вызова (--local и docker), в PowerShell один.
+        # Набор флагов у всех обязан быть одинаковым.
+        all_sets = sh_sets + ps_sets
+        first = all_sets[0]
+        for other in all_sets[1:]:
+            self.assertEqual(
+                first, other,
+                f"флаги pip-compile разошлись: {sorted(first)} vs "
+                f"{sorted(other)}. Лок, собранный разными скриптами, "
+                f"описывал бы разные образы",
+            )
+
+    def test_emit_index_url_is_on(self):
+        """
+        Без него `--extra-index-url` из исходного requirements не попадёт в
+        лок, и правка `PERF-11` окажется написанной, но не работающей —
+        худший из исходов, потому что выглядит сделанной.
+        """
+        for path in (SH, PS1):
+            self.assertIn("--emit-index-url", path.read_text(encoding="utf-8"),
+                          f"{path.name}: нет --emit-index-url (PERF-11)")
+
+
+class TestCpuTorchIsDeclared(unittest.TestCase):
+    """
+    PERF-11, исходная сторона. Сам лок здесь не проверяется: пересобрать его
+    может только машина с сетью и docker (`make lock`), а до пересборки
+    проверка была бы красной по причине, которую сегодняшний коммит не
+    исправляет. Про непересобранный лок предупреждает `check_publish.py` —
+    предупреждением, а не отказом.
+    """
+
+    SRC = SUITE / "requirements-embeddings.txt"
+
+    def test_cpu_index_is_declared(self):
+        text = self.SRC.read_text(encoding="utf-8")
+        self.assertIn("download.pytorch.org/whl/cpu", text,
+                      "не объявлен индекс CPU-сборок torch — образ справки "
+                      "тянет ~2,5 ГБ мёртвых колёс nvidia-*")
+
+    def test_declaration_explains_itself(self):
+        """
+        Строка `--extra-index-url` без объяснения выглядит как случайность,
+        и первый же, кто будет чистить файл, её уберёт.
+        """
+        text = self.SRC.read_text(encoding="utf-8")
+        self.assertIn("PERF-11", text)
+        self.assertIn("make lock", text,
+                      "не сказано главного: правка этого файла без "
+                      "пересборки лока не меняет ничего")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

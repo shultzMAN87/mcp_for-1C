@@ -306,6 +306,81 @@ class TestOtherToolsFailFastToo(_Base):
         self.assertIn("кешированный", data["note"])
 
 
+class TestPrewarmCollectionKind(_Base):
+    """
+    PERF-6.1, вторая половина. Живёт в этом наборе, а не в
+    tests_model_warmup.py, по двум причинам: проверяется тот же кеш формата
+    коллекции, что и во всём файле, и здесь уже стоят заглушки, без которых
+    server.py на хосте не импортируется.
+
+    Правило одно: положительный ответ запоминаем, «missing» на старте
+    выбрасываем. Иначе прогрев своими руками заводит FIX-12 — стек
+    поднимается целиком, help-indexer ещё строит индекс, и запомненное
+    «коллекции нет» отвечает «поиск недоступен» следующие полминуты, хотя
+    проверка живьём сказала бы обратное.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Подменяем определение схемы, а не сеть: проверяется правило «что
+        # делать с ответом», а не то, как ответ получен. Оригинал
+        # возвращаем на место — `del` тут стёр бы настоящую функцию из
+        # модуля и увёз бы за собой весь остаток набора.
+        self._orig_detect = server._detect_help_collection_kind
+
+    def tearDown(self):
+        server._detect_help_collection_kind = self._orig_detect
+
+    def _detect_returns(self, verdict):
+        def detect():
+            server._help_collection_kind = verdict
+            server._help_collection_kind_at = server.time.monotonic()
+            return verdict
+        server._detect_help_collection_kind = detect
+
+    def test_successful_detection_is_remembered(self):
+        self._detect_returns("hybrid")
+        self.assertEqual(server._prewarm_collection_kind(lambda *_: None),
+                         "hybrid")
+        self.assertEqual(server._help_collection_kind, "hybrid",
+                         "схему определили и тут же забыли")
+
+    def test_missing_at_startup_is_discarded(self):
+        self._detect_returns("missing")
+        self.assertEqual(server._prewarm_collection_kind(lambda *_: None),
+                         "discarded")
+        self.assertIsNone(
+            server._help_collection_kind,
+            "«коллекции нет» на старте запомнено как факт — следующие "
+            "MISSING_RECHECK_SEC поиск будет отвечать «недоступен» из кеша")
+
+    def test_discarded_verdict_leaves_the_failure_counter_alone(self):
+        """
+        Выбрасываем вывод о коллекции, а не отказ транспорта: если Qdrant
+        правда лежит, отказ был настоящий, и FAIL-1 обязан его засчитать.
+        Обнулить счётчик здесь значило бы оттянуть быстрый отказ на один
+        лишний таймаут.
+        """
+        def detect():
+            server._note_transport_failure("проба коллекции")
+            server._help_collection_kind = "missing"
+            return "missing"
+
+        server._detect_help_collection_kind = detect
+        server._prewarm_collection_kind(lambda *_: None)
+        self.assertEqual(server._transport_fails, 1)
+
+    def test_prewarm_is_wired_into_the_warmup(self):
+        """
+        Шаг, который никто не зовёт, выглядит точно так же, как шаг,
+        который отработал: первый запрос просто чуть медленнее, и всё.
+        """
+        code = "\n".join(
+            line.split("#", 1)[0]
+            for line in (ROOT / "server.py").read_text(encoding="utf-8").splitlines())
+        self.assertIn("then=_prewarm_collection_kind", code)
+
+
 class TestTimeoutsAreShort(unittest.TestCase):
 
     def test_default_timeout_is_seconds_not_tens_of_seconds(self):
@@ -351,14 +426,28 @@ class TestDiagnosticsCannotKillTheCall(_Base):
         return io.TextIOWrapper(raw, encoding="cp1251", newline="")
 
     def test_model_diagnostics_survive_a_narrow_console(self):
+        """
+        После PERF-6 сообщение о неудачной загрузке печатает не
+        `_get_model()`, а прогрев. Первая редакция теста сбрасывала флаг
+        `_model_loaded`, которого в коде больше нет: тест продолжал
+        проходить, но проверял пустоту — заглушка модели грузится успешно,
+        и печатать было нечего.
+
+        Теперь путь воспроизводится честно: загрузка падает, прогрев
+        сообщает об этом в консоль cp1251, где знака ⚠ не существует.
+        """
         import contextlib
-        server._model_loaded = False
-        server._model = None
+        from model_warmup import build_warmup
+
+        def boom():
+            raise RuntimeError("нет весов")
+
+        warmup = build_warmup(dense_loader=boom, sparse_loader=lambda: "s",
+                              qdrant_loader=lambda: "q")
         stream = self._cp1251_stream()
         with contextlib.redirect_stdout(stream):
-            # Не должно бросить. Что именно вернётся — неважно: заглушка
-            # модели отдаёт объект, реальная среда без пакета отдаст None.
-            server._get_model()
+            warmup.run(server._say)        # не должно бросить
+        self.assertFalse(warmup.ready)
 
     def test_transport_warning_survives_a_narrow_console(self):
         import contextlib

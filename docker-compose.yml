@@ -198,8 +198,8 @@ services:
   # абсолютные /workspace-пути; на стороне metadata-graph _norm_rel с
   # tail-suffix фолбэком распознаёт хвост (CommonModules/X/Ext/Module.bsl
   # и т.п.) и резолвит независимо от точки монтирования. Поэтому нам не
-  # нужно держать единый путь /data/1c-xml в обоих контейнерах — у
-  # code-rag, например, своя точка /workspace и свой WORKSPACE_DIR.
+  # нужно держать единый путь /data/1c-xml в обоих контейнерах: каждый
+  # видит выгрузку под своим именем.
   workspace-watcher:
     build:
       context: ./1c-mcp-suite
@@ -219,10 +219,6 @@ services:
       # Образ пересобран, tools metadata_upsert_file/metadata_remove_file есть —
       # инкрементальный апдейт графа включён по умолчанию.
       - METADATA_WATCH_ENABLED=${METADATA_WATCH_ENABLED:-true}
-      # Сервер mcp-code-rag удалён из проекта — фанаут .bsl в Qdrant
-      # отключён. Возвращать вместе с сервером, если он понадобится
-      # для FEAT-3 (см. PLAN.md 3.1).
-      - CODE_WATCH_ENABLED=false
       - WATCH_CODE_DIR=/workspace
       - WATCH_XML_DIR=/workspace               # ← XML лежит вместе с BSL в ./workspace
       - METADATA_GRAPH_URL=http://mcp-metadata-graph:8001/mcp
@@ -328,6 +324,11 @@ services:
       - MCP_PORT=8002
       - BSL_LS_JAR=${BSL_LS_JAR:-/opt/bsl-language-server/bsl-ls.jar}
       - JAVA_OPTS=${JAVA_OPTS:--Xmx1g}
+      # PERF-9: JVM поднимается фоном при старте контейнера, а не на первой
+      # проверке агента. Раньше первый пришедший платил ~14 с тишины
+      # (bsl-001 в отчёте), а второй — 224 мс. Выключается BSL_WARMUP=false;
+      # тогда поведение возвращается к ленивому старту из PERF-7.
+      - BSL_WARMUP=${BSL_WARMUP:-true}
     restart: unless-stopped
 
   # ── 3. Справка по платформе 1С + ГИБРИДНЫЙ поиск по ИТС ───────────
@@ -494,17 +495,19 @@ volumes:
   # Кеш индекса v8std на случай, когда он тянется с сайта, а не из
   # ./v8std-data. Без тома старт зависел бы от сети при каждом рестарте.
   v8std-cache:
-  # ── Shared volume для интеграции с yaxunit-stack ──
-  # mcp-testing складывает сюда payload (config/ + tests/), раннер 1С
-  # читает по тому же пути. yaxunit-stack/docker-compose.yml импортирует
-  # этот том как external. Явное `name` нужно, чтобы оба compose ссылались
-  # на одну и ту же физическую сущность независимо от COMPOSE_PROJECT_NAME.
+  # HYG-4: здесь стоял комментарий про общий том с yaxunit-stack — и
+  # только комментарий: самого тома под ним не было. Описывал он работу
+  # сервера mcp-testing, удалённого вместе с yaxunit-stack в Заходе 2.
+  # Заметка, пережившая свой предмет, вводит в заблуждение сильнее, чем
+  # её отсутствие: следующий читатель идёт искать том, которого нет.
 
 # ───────────────────────────────────────────────────────────────────────
-# Общая сеть для интеграции с опциональным yaxunit-stack.
-# yaxunit-stack/docker-compose.yml импортирует её как external и
-# подключает свой сервис `app` под алиасом `onec-server`. Благодаря
-# этому mcp-testing достучится до раннера тестов по DNS-имени.
+# Общая сеть стека.
+#
+# Имя задано явно (не производное от COMPOSE_PROJECT_NAME), потому что на
+# него ссылались снаружи. Единственный внешний потребитель — yaxunit-stack
+# — из проекта удалён; имя оставлено, чтобы не переучивать руки и рабочие
+# .env, а не ради интеграции, которой больше нет.
 # ───────────────────────────────────────────────────────────────────────
 networks:
   default:

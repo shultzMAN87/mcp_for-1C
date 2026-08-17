@@ -70,6 +70,29 @@ ONNX. Прежде чем менять, стоит посмотреть на з�
 Поэтому замена реализации — не правка производительности, а смена
 математики поиска, и требует сверки косинусов на выборке чанков (порог
 0.999) либо переиндексации. Здесь этого нет намеренно.
+
+PERF-6.1: третья запись — клиент Qdrant
+───────────────────────────────────────
+После прогрева моделей у `ph-001` осталось 1,9 с вместо прежних 23,4.
+Разбор остатка показал знакомую картину — ещё один ленивый синглтон с той
+же ошибкой:
+
+    if not _qclient_loaded:
+        from qdrant_client import QdrantClient   # секунда с лишним
+        _qclient = QdrantClient(...)
+        _qclient_loaded = True
+
+Тот же флаг после загрузки, тот же ответ «нет» во время неё. Дефект тут
+дешевле — импорт секундный, а не двенадцатисекундный, и вторая копия
+клиента не съедает два гигабайта, — но вопрос флаг задаёт всё тот же
+неправильный. Поэтому клиент переехал сюда третьей записью реестра, а не
+получил собственный замок рядом со старым флагом.
+
+Отсюда же названия: запись реестра больше не «модель» (`LazyOnce` вместо
+`LazyModel`), а набор — не `models`, а `parts`. Клиент Qdrant моделью не
+является, и терпеть поле `warmup.models.qdrant` в ответе `stats` значило бы
+заводить в наблюдаемости ровно то расхождение слова и дела, против которого
+затевался весь заход.
 """
 from __future__ import annotations
 
@@ -77,22 +100,36 @@ import os
 import threading
 import time
 
-__all__ = ["LazyModel", "Warmup", "load_dense", "load_sparse", "build_warmup"]
+__all__ = ["LazyOnce", "Warmup", "load_dense", "load_sparse", "load_qdrant",
+           "build_warmup", "EMBEDDING_MODEL_NAME", "BM25_MODEL_NAME",
+           "QDRANT_URL", "QDRANT_TIMEOUT_SEC"]
 
+# Окружение читается ЗДЕСЬ и только здесь: server.py импортирует эти
+# четыре имени, а не перечитывает `os.environ` вторым экземпляром. Раньше
+# перечитывал — и `QDRANT_TIMEOUT_SEC` был двумя разными числами: тем, с
+# которым создан клиент, и тем, которое сервер показывает в `stats`. Пока
+# умолчания совпадают, расхождения не видно; оно появляется в тот день,
+# когда одно из них поправят.
 EMBEDDING_MODEL_NAME = os.environ.get(
     "EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
 BM25_MODEL_NAME = os.environ.get("BM25_MODEL", "Qdrant/bm25")
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
+QDRANT_TIMEOUT_SEC = int(os.environ.get("HELP_QDRANT_TIMEOUT_SEC", "4"))
 
 
-class LazyModel:
+class LazyOnce:
     """
-    Модель, которая грузится ровно один раз.
+    То, что грузится долго и ровно один раз, кто бы ни попросил.
 
     Ключевое отличие от прежнего `_get_model()` — замок вокруг загрузки, а
     не только флаг после неё. Флаг отвечает на вопрос «уже загружено?», и
     во время загрузки честно отвечает «нет»; из этого «нет» второй поток
     делал вывод «значит, надо грузить». Замок отвечает на другой вопрос —
     «этим уже кто-то занят?» — и именно его надо было задавать.
+
+    Класс назывался `LazyModel`, пока держал только модели. Клиент Qdrant
+    (`PERF-6.1`) моделью не является, а устроен был точно так же и болел
+    тем же — имя пришлось расширить вместе с реестром.
     """
 
     def __init__(self, name: str, loader, clock=time.monotonic):
@@ -164,42 +201,60 @@ class LazyModel:
 
 class Warmup:
     """
-    Набор моделей и фоновый прогрев.
+    Реестр долгих загрузок и фоновый прогрев.
 
     Прогрев — оптимизация, а не условие работы: если он упал, всё
     по-прежнему загрузится при первом запросе, просто медленно. Поэтому
     здесь ничего не бросается наружу.
     """
 
-    def __init__(self, models: dict, clock=time.monotonic):
-        self.models = models
+    def __init__(self, parts: dict, clock=time.monotonic):
+        self.parts = parts
         self._clock = clock
         self.started_at = None
         self.finished_at = None
         self._thread = None
 
-    def run(self, say=None) -> None:
+    def run(self, say=None, then=None) -> None:
+        """
+        Прогреть всё по очереди и, если попросили, сделать шаг `then`.
+
+        `then` — то, что имеет смысл только после прогрева и не является
+        загрузкой: у справки это предварительное определение схемы
+        коллекции, которому нужен уже созданный клиент. Отдельной записью
+        реестра оно быть не может — реестр помнит ответ навсегда, а схему
+        на старте запоминать нельзя (см. `_prewarm_collection_kind`).
+
+        Падение `then` прогрев не роняет по той же причине, по которой его
+        не роняет неудачная загрузка: это ускорение, а не условие работы.
+        """
         say = say or (lambda *_a, **_k: None)
         self.started_at = self._clock()
-        for name, model in self.models.items():
+        for name, part in self.parts.items():
             say(f"[warmup] {name}: загрузка...")
-            model.get()
-            state = model.state()
+            part.get()
+            state = part.state()
             if state["ready"]:
                 say(f"[warmup] {name}: готово за {state['seconds']} с")
             else:
                 say(f"[warmup] {name}: не загрузилось ({state['error']}), "
                     f"попробуем при первом запросе")
+        if then is not None:
+            try:
+                then(say)
+            except Exception as exc:  # noqa: BLE001
+                say(f"[warmup] заключительный шаг не выполнен "
+                    f"({type(exc).__name__}: {exc}) — на работу не влияет")
         self.finished_at = self._clock()
 
-    def start_background(self, say=None) -> None:
+    def start_background(self, say=None, then=None) -> None:
         self._thread = threading.Thread(
-            target=self.run, args=(say,), name="model-warmup", daemon=True)
+            target=self.run, args=(say, then), name="warmup", daemon=True)
         self._thread.start()
 
     @property
     def ready(self) -> bool:
-        return all(m.ready for m in self.models.values())
+        return all(p.ready for p in self.parts.values())
 
     def state(self) -> dict:
         total = None
@@ -211,12 +266,16 @@ class Warmup:
                       "warming" if running else
                       "idle" if self.started_at is None else "done_with_errors"),
             "total_sec": total,
-            "models": {name: m.state() for name, m in self.models.items()},
+            # Поле называлось `models`, пока в нём были только модели.
+            # Клиент Qdrant — не модель, и переименование дешевле, чем
+            # объяснение, почему он лежит среди них (PERF-6.1).
+            "parts": {name: p.state() for name, p in self.parts.items()},
             "note": (
-                "Модели грузятся один раз на жизнь контейнера. Пока идёт "
-                "прогрев, запрос ждёт его, а не запускает вторую загрузку "
-                "(PERF-6). Если state=warming, первый поиск будет медленным "
-                "— это разовая цена перезапуска, а не поломка."
+                "Модели и клиент Qdrant грузятся один раз на жизнь "
+                "контейнера. Пока идёт прогрев, запрос ждёт его, а не "
+                "запускает вторую загрузку (PERF-6). Если state=warming, "
+                "первый поиск будет медленным — это разовая цена "
+                "перезапуска, а не поломка."
             ),
         }
 
@@ -256,10 +315,37 @@ def load_sparse():
     return model
 
 
-def build_warmup(dense_loader=None, sparse_loader=None) -> Warmup:
+def load_qdrant():
+    """
+    Клиент Qdrant. Дорог здесь импорт, а не создание объекта.
+
+    `import qdrant_client` тянет httpx, grpc-заглушки и добрую сотню
+    pydantic-моделей — это и есть та секунда с небольшим, что оставалась у
+    первого запроса после прогрева моделей. Сам конструктор дёшев, но
+    versions-check в qdrant-client 1.19 ходит в сеть; при лежащем Qdrant он
+    только пишет предупреждение и не бросает, так что прогреву это не
+    мешает — он идёт фоновым потоком.
+    """
+    from qdrant_client import QdrantClient
+
+    return QdrantClient(url=QDRANT_URL, timeout=QDRANT_TIMEOUT_SEC)
+
+
+def build_warmup(dense_loader=None, sparse_loader=None,
+                 qdrant_loader=None) -> Warmup:
+    """
+    Реестр в порядке прогрева.
+
+    Клиент Qdrant первым намеренно: он грузится секунду против двенадцати у
+    dense, а нужен раньше — на нём держатся `lookup`, `stats` и определение
+    схемы коллекции, которым модель не нужна вовсе. Прогрев идёт одним
+    потоком последовательно, поэтому порядок решает, что именно будет
+    доступно запросу, пришедшему на пятой секунде.
+    """
     return Warmup({
-        "dense": LazyModel("dense", dense_loader or load_dense),
-        "sparse": LazyModel("sparse", sparse_loader or load_sparse),
+        "qdrant": LazyOnce("qdrant", qdrant_loader or load_qdrant),
+        "dense": LazyOnce("dense", dense_loader or load_dense),
+        "sparse": LazyOnce("sparse", sparse_loader or load_sparse),
     })
 
 
@@ -312,6 +398,18 @@ def _breakdown() -> int:  # pragma: no cover — ручной инструмен
     t0 = time.monotonic()
     next(iter(sparse.query_embed(["прогрев"])))
     rows.append(("первый BM25 embed", time.monotonic() - t0))
+
+    # PERF-6.1. Первая редакция замера обрывалась на BM25 и называла сумму
+    # «ценой первого запроса» — а первый запрос платил ещё и за клиент.
+    # Ровно те 1,9 с, которые остались у ph-001 после прогрева моделей и
+    # которые пришлось искать отдельно, хотя мерило стояло рядом.
+    t0 = time.monotonic()
+    from qdrant_client import QdrantClient  # noqa: F401
+    rows.append(("импорт qdrant_client", time.monotonic() - t0))
+
+    t0 = time.monotonic()
+    QdrantClient(url=QDRANT_URL, timeout=QDRANT_TIMEOUT_SEC)
+    rows.append(("создание клиента Qdrant", time.monotonic() - t0))
 
     width = max(len(name) for name, _ in rows)
     total = 0.0

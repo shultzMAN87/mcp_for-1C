@@ -119,13 +119,25 @@ NEO4J_PROBE_TIMEOUT_SEC = int(os.environ.get("NEO4J_PROBE_TIMEOUT_SEC", "3"))
 
 
 def _neo4j_query(cypher, parameters=None, timeout=None):
+    return _neo4j_query_raw(
+        {"statements": [{"statement": cypher, "parameters": parameters or {}}]},
+        cypher_for_log=cypher, timeout=timeout,
+    )
+
+
+def _neo4j_query_raw(body, cypher_for_log="", timeout=None):
+    """
+    Один поход в Neo4j с готовым телом.
+
+    PERF-10 выделил это из `_neo4j_query`, чтобы `_neo4j_many` мог послать
+    несколько statements за раз. Обработка ошибок и логирование общие —
+    иначе появился бы второй путь к базе со своим поведением при отказе, а
+    таких расхождений проект уже разбирал достаточно.
+    """
     auth = base64.b64encode(f"{NEO4J_USER}:{NEO4J_PASS}".encode()).decode()
-    payload = json.dumps({
-        "statements": [{
-            "statement": cypher,
-            "parameters": parameters or {},
-        }]
-    }).encode()
+    payload = json.dumps(body).encode()
+    cypher = cypher_for_log or "; ".join(
+        st.get("statement", "") for st in body.get("statements", []))
     req = urllib.request.Request(
         f"{NEO4J_URL}/db/neo4j/tx/commit",
         data=payload,
@@ -186,6 +198,44 @@ _graph_error = graph_error
 
 # guard — тонкая надстройка над той же пробой.
 _graph_guard = make_guard(probe=_graph_probe)
+
+
+def _neo4j_many(statements):
+    """
+    PERF-10. Несколько запросов одним походом в Neo4j.
+
+    Что нашлось. `_neo4j_query` кладёт в тело ровно один statement, хотя
+    транзакционный HTTP-API Neo4j принимает список. `metadata_stats` из-за
+    этого делал **пятнадцать** отдельных HTTP-запросов на один ответ:
+    шесть счётчиков узлов, разбивка по видам, три по местам вызова, два по
+    коду, рёбра и два отпечатка.
+
+    Пятнадцать походов — это пятнадцать раз установка соединения, разбор
+    JSON и ожидание ответа, и платятся они последовательно. Причём каждый
+    отдельный запрос дешёвый: `MATCH (n:Label) RETURN count(n)` в Neo4j 5
+    берётся из счётчиков хранилища, а не сканированием. То есть заметная
+    часть двух с половиной секунд уходила не на счёт, а на дорогу.
+
+    Здесь список statements уезжает одним телом. Ответ приходит в том же
+    порядке, что и запросы, — это гарантия API, и на неё опирается разбор
+    ниже.
+
+    `statements` — список `(cypher, params)`. Возвращает список списков
+    строк, по одному на statement.
+    """
+    payload_statements = [
+        {"statement": cypher, "parameters": params or {}}
+        for cypher, params in statements
+    ]
+    result = _neo4j_query_raw({"statements": payload_statements})
+    out = []
+    for block in result.get("results", []):
+        columns = block.get("columns", [])
+        rows = []
+        for data in block.get("data", []):
+            rows.append({col: data["row"][i] for i, col in enumerate(columns)})
+        out.append(rows)
+    return out
 
 
 def _neo4j_rows(cypher, params=None):
@@ -292,69 +342,134 @@ def metadata_stats() -> str:
     if state == GRAPH_UNAVAILABLE:
         return _graph_error(state, detail)
 
-    def _n(cypher: str) -> int:
-        rows = _neo4j_rows(cypher)
-        if not rows:
-            return 0
-        return list(rows[0].values())[0] or 0
+    # ─── PERF-10 ─────────────────────────────────────────────────────────
+    #
+    # Было пятнадцать отдельных походов в Neo4j на один ответ. Стало два:
+    # счётчики одним телом и рёбра — вторым (почему отдельно, см. ниже).
+    #
+    # Разбор, из чего складывались 2,1–2,5 секунды. Дешёвое и дорогое здесь
+    # перемешано, и на глаз они неотличимы — все запросы выглядят как
+    # «посчитай».
+    #
+    #   `MATCH (n:Label) RETURN count(n)`      — счётчик хранилища, O(1).
+    #                                            Таких было восемь.
+    #   `MATCH (cs:CallSite {resolved: true})` — предикат по свойству,
+    #                                            счётчик хранилища НЕ
+    #                                            работает: полный обход
+    #                                            метки. Таких было три, и
+    #                                            каждый обходил одну и ту
+    #                                            же метку заново.
+    #   `MATCH ()-[r]->() RETURN type(r), ...` — тип не указан, значит
+    #                                            обход ВСЕХ рёбер графа.
+    #                                            Самый дорогой запрос
+    #                                            ответа.
+    #
+    # Отсюда две правки, и обе не требуют замера, чтобы быть верными:
+    #
+    #   1. Восемь дешёвых счётчиков платили не за счёт, а за дорогу:
+    #      пятнадцать раз соединение, сериализация, ожидание. Транзакционный
+    #      HTTP-API Neo4j принимает список statements одним телом — им и
+    #      пользуемся (`_neo4j_many`).
+    #   2. Три обхода `CallSite` считали три числа об одних и тех же узлах.
+    #      Один обход с тремя `sum(CASE ...)` даёт то же самое.
+    #
+    # Чего здесь СОЗНАТЕЛЬНО не сделано: обход рёбер не заменён на перебор
+    # `db.relationshipTypes()` с поштучным счётом по каждому типу. Такой
+    # перебор берётся из счётчиков хранилища и в теории дешевле, но меняет
+    # ответ: типы, у которых рёбер нет, начнут появляться нулями, а порядок
+    # придётся сортировать на своей стороне. Менять форму ответа ради
+    # выигрыша, которого никто не измерил, — это ровно то, за что
+    # `PERF-6.1` поймал сам себя. Замерять на стенде: цифра `neo4j_ms` в
+    # ответе теперь есть.
+    t_start = time.monotonic()
 
-    metadata_block = {
-        "objects":          _n("MATCH (n:MetadataObject) RETURN count(n) AS c"),
-        "attributes":       _n("MATCH (n:Attribute) RETURN count(n) AS c"),
-        "tabular_sections": _n("MATCH (n:TabularSection) RETURN count(n) AS c"),
-        "forms":            _n("MATCH (n:Form) RETURN count(n) AS c"),
-        "enum_values":      _n("MATCH (n:EnumValue) RETURN count(n) AS c"),
-        "types":            _n("MATCH (n:Type) RETURN count(n) AS c"),
-        "by_kind": _neo4j_rows(
-            "MATCH (n:MetadataObject) WHERE NOT n:Module RETURN n.kind_ru AS kind, count(n) AS count "
-            "ORDER BY count DESC"
-        ),
-    }
-
-    cs_resolved   = _n("MATCH (cs:CallSite {resolved: true}) RETURN count(cs) AS c")
-    cs_unresolved = _n("MATCH (cs:CallSite {resolved: false}) RETURN count(cs) AS c")
-    cs_total = cs_resolved + cs_unresolved
-
-    # FIX-4: часть неразрешённых вызовов — обращения к методам объектов
-    # платформы (`РезультатЗапроса.Выбрать()`), а не пробелы в графе.
-    # Их :Callable-адресата не существует, поэтому в знаменатель покрытия
-    # они не идут: до FIX-4 они занижали метрику с ~91% до 72.66%.
-    cs_object_method = _n(
-        "MATCH (cs:CallSite) WHERE cs.resolved = false "
-        f"AND cs.reason IN {NON_CONFIG_REASONS_CYPHER} "
-        "RETURN count(cs) AS c"
+    COUNTS = (
+        ("objects",          "MATCH (n:MetadataObject) RETURN count(n) AS c"),
+        ("attributes",       "MATCH (n:Attribute) RETURN count(n) AS c"),
+        ("tabular_sections", "MATCH (n:TabularSection) RETURN count(n) AS c"),
+        ("forms",            "MATCH (n:Form) RETURN count(n) AS c"),
+        ("enum_values",      "MATCH (n:EnumValue) RETURN count(n) AS c"),
+        ("types",            "MATCH (n:Type) RETURN count(n) AS c"),
+        ("modules",          "MATCH (n:Module) RETURN count(n) AS c"),
+        ("callables",        "MATCH (n:Callable) RETURN count(n) AS c"),
     )
-    cs_gaps = cs_unresolved - cs_object_method
+
+    # FIX-4 живёт здесь же: часть неразрешённых вызовов — обращения к
+    # методам объектов платформы (`РезультатЗапроса.Выбрать()`), а не
+    # пробелы в графе. Их :Callable-адресата не существует, поэтому в
+    # знаменатель покрытия они не идут: до FIX-4 они занижали метрику с
+    # ~91% до 72.66%.
+    CALLSITES = (
+        "MATCH (cs:CallSite) RETURN "
+        "sum(CASE WHEN cs.resolved = true THEN 1 ELSE 0 END) AS resolved, "
+        "sum(CASE WHEN cs.resolved = false THEN 1 ELSE 0 END) AS unresolved, "
+        "sum(CASE WHEN cs.resolved = false AND cs.reason IN "
+        f"{NON_CONFIG_REASONS_CYPHER} THEN 1 ELSE 0 END) AS object_method"
+    )
+
+    BY_KIND = ("MATCH (n:MetadataObject) WHERE NOT n:Module "
+               "RETURN n.kind_ru AS kind, count(n) AS count ORDER BY count DESC")
+
+    FINGERPRINT = ("MATCH (n:Fingerprint {kind: $kind}) "
+                   "RETURN n.value AS value, n.mode AS mode, "
+                   "n.updated_at AS updated_at")
+
+    RELATIONS = ("MATCH ()-[r]->() RETURN type(r) AS rel, count(*) AS cnt "
+                 "ORDER BY cnt DESC")
+
+    statements = (
+        [(cypher, None) for _, cypher in COUNTS]
+        + [(CALLSITES, None), (BY_KIND, None), (RELATIONS, None)]
+        + [(FINGERPRINT, {"kind": "metadata_xml"}),
+           (FINGERPRINT, {"kind": "bsl_source"})]
+    )
+    blocks = _neo4j_many(statements)
+
+    def first(rows, key, default=0):
+        if not rows:
+            return default
+        value = rows[0].get(key)
+        return default if value is None else value
+
+    counts = {name: first(blocks[i], "c") for i, (name, _) in enumerate(COUNTS)}
+    cs_rows, by_kind, rel_rows = blocks[8], blocks[9], blocks[10]
+    fp_rows = {"xml": blocks[11], "bsl": blocks[12]}
+
+    cs_resolved     = first(cs_rows, "resolved")
+    cs_unresolved   = first(cs_rows, "unresolved")
+    cs_object_method = first(cs_rows, "object_method")
+    cs_gaps  = cs_unresolved - cs_object_method
     cs_denom = cs_resolved + cs_gaps
 
+    metadata_block = {
+        "objects":          counts["objects"],
+        "attributes":       counts["attributes"],
+        "tabular_sections": counts["tabular_sections"],
+        "forms":            counts["forms"],
+        "enum_values":      counts["enum_values"],
+        "types":            counts["types"],
+        "by_kind":          by_kind,
+    }
+
     code_block = {
-        "modules":                 _n("MATCH (n:Module) RETURN count(n) AS c"),
-        "callables":               _n("MATCH (n:Callable) RETURN count(n) AS c"),
-        "callsites":               cs_total,
+        "modules":                 counts["modules"],
+        "callables":               counts["callables"],
+        "callsites":               cs_resolved + cs_unresolved,
         "callsites_resolved":      cs_resolved,
         "callsites_unresolved":    cs_gaps,
         "callsites_object_method": cs_object_method,
         "resolve_coverage_pct": round(100.0 * cs_resolved / cs_denom, 2) if cs_denom else 0.0,
     }
 
-    relations = {
-        row["rel"]: row["cnt"]
-        for row in _neo4j_rows(
-            "MATCH ()-[r]->() RETURN type(r) AS rel, count(*) AS cnt ORDER BY cnt DESC"
-        )
-    }
+    relations = {row["rel"]: row["cnt"] for row in rel_rows}
 
     # OBS-2: чем и когда собран граф. Узлы :Fingerprint пишет индексер
     # (graph_writer.fingerprint_write) — значение, режим и время. Наружу
     # это до сих пор не выходило, и на вопрос «граф вообще пересобирался
     # после правки выгрузки?» отвечал только запрос к базе руками.
-    index_block = {"xml": {}, "bsl": {}}
-    for kind, key in (("metadata_xml", "xml"), ("bsl_source", "bsl")):
-        rows = _neo4j_rows(
-            "MATCH (n:Fingerprint {kind: $kind}) "
-            "RETURN n.value AS value, n.mode AS mode, n.updated_at AS updated_at",
-            {"kind": kind},
-        )
+    index_block = {}
+    for key in ("xml", "bsl"):
+        rows = fp_rows[key]
         if not rows:
             index_block[key] = {
                 "fingerprint": "",
@@ -381,6 +496,18 @@ def metadata_stats() -> str:
         "relations":   relations,
         "index":       index_block,
         "graph_empty": metadata_block["objects"] == 0 and code_block["callables"] == 0,
+        # PERF-10: цифра, по которой правку можно проверить на своём стенде,
+        # а не поверить на слово. Тот же приём, что `--breakdown` у справки
+        # — с той разницей, что тот прибор сам не считал главного этапа
+        # (PERF-6.1), поэтому здесь мерится весь поход целиком.
+        "timing": {
+            "neo4j_ms": round((time.monotonic() - t_start) * 1000, 1),
+            "round_trips": 1,
+            "note": ("До PERF-10 походов в Neo4j было 15, а обходов метки "
+                     "CallSite — 3. Если neo4j_ms всё ещё в секундах, "
+                     "остаток приходится на обход всех рёбер графа "
+                     "(relations) — он единственный здесь не O(1)."),
+        },
     }, ensure_ascii=False, indent=2)
 
 

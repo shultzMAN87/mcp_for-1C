@@ -91,9 +91,13 @@ try {
         # объявляет его зависимостью, и импорт падает. Диагноз «старый pip»
         # был неверен: обновление pip и отдельный venv проблему не сняли.
         # На 3.12 пакет лишний, но безвредный.
+        # PERF-11: --emit-index-url переносит в лок адрес индекса CPU-сборок
+        # torch из requirements-embeddings.txt. Без него сборка образа снова
+        # притащит ~2,5 ГБ колёс nvidia-* из PyPI. Флаг обязан совпадать с
+        # bash-версией — за этим следит scripts/tests_lockfile_pairs.py.
         $cmd = $p.prep +
                "pip install --quiet pip-tools typing_extensions && " +
-               "pip-compile --quiet --strip-extras --output-file '$($p.dst)' '$($p.src)'"
+               "pip-compile --quiet --strip-extras --emit-index-url --output-file '$($p.dst)' '$($p.src)'"
         docker run --rm -v "${PWD}:/w" -w /w $p.image sh -c $cmd
         if ($LASTEXITCODE -ne 0) {
             throw "pip-compile завершился с кодом $LASTEXITCODE на $($p.src)"
