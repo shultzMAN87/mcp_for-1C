@@ -100,6 +100,52 @@ def read_report(path: Path) -> dict | None:
         return None
 
 
+def count_examples(dataset: Path) -> int:
+    """
+    Сколько примеров в датасете сейчас — без JSON-разбора каждой строки:
+    считаются непустые строки, не начинающиеся с `//`.
+
+    Нужно для `FIX-25`: если в отчёте примеров меньше, чем в датасете, то
+    отчёт снят на другой его редакции, и цифры относятся не к тому, что
+    лежит на диске.
+    """
+    try:
+        lines = dataset.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return 0
+    return sum(1 for s in (l.strip() for l in lines)
+               if s and not s.startswith("//"))
+
+
+def report_verdict(*, rc, latest_name, prev_name, report_total,
+                   want_examples, summary_only) -> tuple[str | None, str]:
+    """
+    Можно ли верить показанию по этому датасету.
+
+    `FIX-25`. Вынесено отдельной функцией не ради красоты: логика «этот
+    отчёт от этого прогона» проверяется тестом, а до сих пор она жила
+    внутри `main()` и не проверялась ничем — потому и отсутствовала.
+
+    Возвращает (вид проблемы, текст в строку сводки). `None` — показанию
+    верить можно.
+    """
+    if rc:
+        return "not_run", f"ПРОГОН НЕ СОСТОЯЛСЯ (код {rc})"
+    if not latest_name:
+        return "no_report", "отчёта нет"
+    if not summary_only and prev_name and latest_name == prev_name:
+        # Прогон вернул ноль и не создал отчёта. Без этой ветки в сводку
+        # пошли бы прошлые цифры.
+        return "stale_file", f"ОТЧЁТ НЕ ОБНОВИЛСЯ: {latest_name}"
+    if want_examples and report_total and report_total != want_examples:
+        # Ветка, которая поймала бы 18 августа раньше всех: в датасете
+        # справки 27 примеров, а сводка показывала 20.
+        return "stale_edition", (f"ОТЧЁТ ОТ ДРУГОЙ РЕДАКЦИИ: в нём "
+                                 f"{report_total} примеров, в датасете "
+                                 f"{want_examples}")
+    return None, ""
+
+
 def row_from_report(path: Path) -> dict:
     data = read_report(path) or {}
     s = data.get("summary") or {}
@@ -180,12 +226,44 @@ def main() -> int:
     regressed: list[str] = []
     missing: list[str] = []
 
+    stale: list[str] = []
+    not_run: list[tuple[str, int]] = []
+
     for d in datasets:
+        # FIX-25. Код возврата прогона собирался в `run_codes` и не
+        # читался ни разу. 18 августа Docker Desktop был выключен: все
+        # пять прогонов упали с «failed to connect to the docker API»,
+        # сводка прочла отчёты недельной давности и написала «OK: все
+        # датасеты дали 100% hard, регрессов нет».
+        #
+        # Та же семья, что FIX-23 и FIX-16: правдоподобный неверный
+        # результат вместо отказа. Здесь опаснее прочих — это
+        # ЕДИНСТВЕННЫЙ прибор, которым проверяют, не сломалось ли
+        # качество.
+        rc_run = run_codes.get(d.stem)
         reports = latest_reports(d.stem, 1)
-        if not reports:
-            missing.append(d.stem)
-            print(f"{d.stem:<18} {'—':>9} {'—':>9} {'—':>6} {'—':>7}  отчёта нет")
+        prev_path_check = before.get(d.stem)
+        latest_name = reports[0].name if reports else None
+        report_total = row_from_report(reports[0])["total"] if reports else 0
+
+        problem, note = report_verdict(
+            rc=rc_run,
+            latest_name=latest_name,
+            prev_name=prev_path_check.name if prev_path_check else None,
+            report_total=report_total,
+            want_examples=count_examples(d),
+            summary_only=args.summary_only,
+        )
+        if problem:
+            if problem == "not_run":
+                not_run.append((d.stem, rc_run))
+            elif problem == "no_report":
+                missing.append(d.stem)
+            else:
+                stale.append(d.stem)
+            print(f"{d.stem:<18} {'—':>9} {'—':>9} {'—':>6} {'—':>7}  {note}")
             continue
+
         now = row_from_report(reports[0])
         hard = f"{now['hard_passed']}/{now['total']}"
         soft = f"{now['soft_passed']}/{now['soft_total']}" if now["soft_total"] else "—"
@@ -235,6 +313,23 @@ def main() -> int:
         print(f"прогон занял {time.monotonic() - t0:.0f} с")
 
     rc = 0
+    if not_run:
+        print("ПРОГОН НЕ СОСТОЯЛСЯ: "
+              + ", ".join(f"{s} (код {c})" for s, c in not_run))
+        # Причину печатает сам прогон — она выше по экрану, и гадать за
+        # него не надо: первая редакция этой подсказки уверенно называла
+        # выключенный Docker, а в первом же случае дело было в
+        # непересобранном образе раннера.
+        print("  Причина — в выводе прогона выше по экрану (частые: не "
+              "пересобран образ раннера после правки предикатов, "
+              "выключенный Docker Desktop, недоступный сервер).")
+        print("  Цифры прошлых прогонов в сводку НЕ идут: старое "
+              "показание, выданное за новое, хуже отсутствия показания "
+              "(FIX-25).")
+        rc = 1
+    if stale:
+        print(f"ПОКАЗАНИЯ НЕ ОТ ЭТОГО ПРОГОНА: {', '.join(sorted(set(stale)))}")
+        rc = 1
     if missing:
         print(f"⚠ без отчёта: {', '.join(missing)} — датасет не прогонялся ни разу")
         rc = 1
@@ -247,6 +342,8 @@ def main() -> int:
         rc = 1
     if rc == 0:
         print("OK: все датасеты дали 100% hard, регрессов нет")
+    else:
+        print("Сводке верить нельзя — сначала устраните перечисленное выше.")
     return rc
 
 

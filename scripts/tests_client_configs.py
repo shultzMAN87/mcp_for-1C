@@ -132,7 +132,15 @@ class TestNoDeadServerReferences(unittest.TestCase):
             "mcp-naparnik", "mcp-code-templates", "mcp-testing")
 
     # Файлы, где упоминание допустимо: история и планы описывают прошлое.
-    HISTORY = ("PLAN", "ИТОГИ", "README-", "docs/archive", "cleanup")
+    #
+    # Исключение "cleanup" убрано в Заходе 8 вместе с самими скриптами:
+    # `cleanup.ps1` и `cleanup.sh` чистили стек по имени ПРЕЖНЕГО проекта
+    # (`27_1c-mcp-suite-full-stack`) и соседнего `yaxunit-stack`, которых
+    # здесь нет. Запущенные в этом проекте они не делали ничего и об этом
+    # не сообщали — а скрипт очистки, молча не чистящий, хуже отсутствия
+    # скрипта. Каждое исключение в этом списке — место, куда мёртвые имена
+    # заползают обратно; чем их меньше, тем сторож честнее.
+    HISTORY = ("PLAN", "ИТОГИ", "README-", "docs/archive")
 
     def test_live_code_does_not_reference_deleted_servers(self):
         offenders = []

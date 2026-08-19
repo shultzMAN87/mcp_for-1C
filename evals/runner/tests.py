@@ -102,6 +102,88 @@ def test_field_at_least():
     print("[6/6] field_at_least: OK")
 
 
+def test_hit_field_in_top_k():
+    """
+    SEARCH-1. Диалект встроенного языка и языка запросов различается в
+    payload полем `hbk_file`, а предикатов, умеющих смотреть в поля хита
+    кроме имён, в наборе не было. Единственный пример про диалект мерил
+    имена, которые от диалекта зависят лишь косвенно.
+    """
+    r = {"results": [
+        {"name_ru": "Функция ПОДСТРОКА", "hbk_file": "shquery_ru.hbk", "chunk_type": "card"},
+        {"name_ru": "Сред",              "hbk_file": "shcntx_ru.hbk",  "chunk_type": "card"},
+    ]}
+    cases = [
+        ({"type": "hit_field_in_top_k", "field": "hbk_file", "k": 1,
+          "values": ["shquery_ru.hbk"]}, r, True),
+        ({"type": "hit_field_in_top_k", "field": "hbk_file", "k": 1,
+          "values": ["shcntx_ru.hbk"]}, r, False),
+        ({"type": "hit_field_in_top_k", "field": "hbk_file", "k": 5,
+          "values": ["shcntx_ru.hbk"]}, r, True),
+        # Регистр и пробелы не должны решать: имена контейнеров приходят
+        # из файловой системы, а она на Windows регистр не хранит.
+        ({"type": "hit_field_in_top_k", "field": "hbk_file", "k": 5,
+          "values": ["SHQUERY_RU.HBK"]}, r, True),
+        ({"type": "hit_field_in_top_k", "field": "chunk_type", "k": 5,
+          "values": ["card"]}, r, True),
+        ({"type": "hit_field_in_top_k", "field": "hbk_file", "k": 5,
+          "values": []}, r, False),
+        ({"type": "hit_field_in_top_k", "field": "", "k": 5,
+          "values": ["x"]}, r, False),
+        ({"type": "hit_field_in_top_k", "field": "нет_такого", "k": 5,
+          "values": ["x"]}, r, False),
+        ({"type": "hit_field_in_top_k", "field": "hbk_file", "k": 5,
+          "values": ["x"]}, {"results": []}, False),
+    ]
+    for pred, result, want in cases:
+        got = evaluate(pred, result)
+        assert got.passed == want, (pred, got.detail)
+        assert got.type == "hit_field_in_top_k"
+
+    got = evaluate({"type": "hit_field_in_top_k", "field": "hbk_file",
+                    "k": 5, "values": ["shcntx_ru.hbk"]}, r)
+    assert got.match_rank == 2, got.detail
+    # Когда пример красный, ответ на «почему» должен быть уже в отчёте.
+    assert got.detail["observed"] == ["shquery_ru.hbk", "shcntx_ru.hbk"]
+    print("[7/7] hit_field_in_top_k: OK")
+
+
+def test_path_contains():
+    """
+    EVAL-5. Проверять пришлось СОБРАННЫЙ ТЕКСТ: `query_build` не
+    возвращает списка соединений — они существуют только внутри `query`.
+    Первая редакция примера ждала поле `joins`, которого в ответе нет и
+    не было, то есть предикат не мог пройти ни при какой работе
+    инструмента.
+    """
+    r = {"query": "ВЫБРАТЬ\n\tТ.Ссылка\nИЗ\n\tДокумент.X КАК Т\n"
+                  "ЛЕВОЕ СОЕДИНЕНИЕ Справочник.Y КАК Т2\n"
+                  "\tПО Т.КонтрагентЭДО = Т2.Ссылка"}
+    cases = [
+        ({"type": "path_contains", "path": "query",
+          "substrings": ["СОЕДИНЕНИЕ", "КонтрагентЭДО"]}, True),
+        # Регистр не решает: ключевые слова пишут по-разному.
+        ({"type": "path_contains", "path": "query",
+          "substrings": ["соединение"]}, True),
+        ({"type": "path_contains", "path": "query",
+          "substrings": ["ВНУТРЕННЕЕ СОЕДИНЕНИЕ"]}, False),
+        ({"type": "path_contains", "path": "query", "substr": "ВЫБРАТЬ"}, True),
+        ({"type": "path_contains", "path": "нет_такого", "substr": "x"}, False),
+        ({"type": "path_contains", "path": "query"}, False),
+        ({"type": "path_contains", "substr": "x"}, False),
+    ]
+    for pred, want in cases:
+        got = evaluate(pred, r)
+        assert got.passed == want, (pred, got.detail)
+        assert got.type == "path_contains"
+
+    got = evaluate({"type": "path_contains", "path": "query",
+                    "substrings": ["ВНУТРЕННЕЕ", "ГДЕ"]}, r)
+    assert got.detail["missing"] == ["ВНУТРЕННЕЕ", "ГДЕ"], got.detail
+    assert got.detail["excerpt"].startswith("ВЫБРАТЬ")
+    print("[8/8] path_contains: OK")
+
+
 def test_metrics():
     ex = [
         {"id": "a", "tool": "t", "args": {}, "notes": "", "ok": True, "error": None,
@@ -360,6 +442,8 @@ def test_run_one_and_report():
 if __name__ == "__main__":
     test_predicates()
     test_field_at_least()
+    test_hit_field_in_top_k()
+    test_path_contains()
     test_metrics()
     test_load_dataset()
     test_mrr_info()

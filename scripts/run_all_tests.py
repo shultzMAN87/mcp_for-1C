@@ -76,6 +76,21 @@ SUITE_DIR = ROOT / "1c-mcp-suite"
 # как успех.
 NEEDS_NEO4J = {"tests_graph_writer.py"}
 
+# FIX-24. Сколько ждать один набор, прежде чем считать его зависшим.
+#
+# Здесь не было ничего: `subprocess.run` без `timeout` ждёт вечно. 17
+# августа прогон на Windows встал после первого же набора и молчал —
+# сколько именно, неизвестно, потому что ждать до конца никто не стал.
+#
+# Ждать вечно диагностический скрипт не имеет права. Набор, который не
+# уложился, — это результат («завис»), а не отсутствие результата, и
+# отличается он от провала только текстом.
+#
+# Триста секунд — с запасом на порядок: самый долгий набор проекта идёт
+# около трёх секунд, а один прогон из тридцати занимал 101 секунду, когда
+# tests_bsl_lsp упирался в боевые таймауты.
+SUITE_TIMEOUT_SEC = float(os.environ.get("RUN_TESTS_TIMEOUT_SEC", "300"))
+
 
 # Где искать наборы и по какой маске.
 #
@@ -153,11 +168,36 @@ def run_one(path: Path) -> tuple[bool, int, int, float, str, str | None]:
     # строку в логе, а не прогон.
     env = dict(os.environ)
     env.setdefault("PYTHONIOENCODING", "utf-8:replace")
-    proc = subprocess.run(
-        [sys.executable, path.name],
-        cwd=path.parent, capture_output=True, text=True,
-        env=env, encoding="utf-8", errors="replace",
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, path.name],
+            cwd=path.parent, capture_output=True, text=True,
+            env=env, encoding="utf-8", errors="replace",
+            timeout=SUITE_TIMEOUT_SEC,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # FIX-24. Зависший набор — это результат, а не его отсутствие.
+        elapsed = time.monotonic() - t0
+        # `TimeoutExpired` отдаёт то, что успело накопиться, и типы у
+        # потоков могут разойтись: один str, другой bytes — даже при
+        # text=True. Схлопывать их сложением нельзя, это стоило падения
+        # обработчика при первой же проверке.
+        def _text(chunk) -> str:
+            if chunk is None:
+                return ""
+            if isinstance(chunk, bytes):
+                return chunk.decode("utf-8", "replace")
+            return str(chunk)
+
+        partial = _text(exc.stdout) + _text(exc.stderr)
+        tail = "\n".join(partial.strip().split("\n")[-25:])
+        return (False, 0, 0, elapsed,
+                f"НЕ УЛОЖИЛСЯ в {SUITE_TIMEOUT_SEC:g} с и был снят.\n"
+                f"Запустить отдельно и посмотреть, на чём стоит:\n"
+                f"  python {path.relative_to(ROOT)} -v\n"
+                + (f"\nЧто успел напечатать:\n{tail}" if tail else ""),
+                None, "таймаут")
+
     elapsed = time.monotonic() - t0
     output = (proc.stdout or "") + (proc.stderr or "")
 
@@ -223,8 +263,22 @@ def main() -> int:
     uncounted = []   # запустились, но сколько тестов прошло — неизвестно
     t0 = time.monotonic()
 
+    # FIX-24, вторая половина. Имя набора печаталось ПОСЛЕ его окончания,
+    # поэтому зависший набор не назывался вовсе: последняя строка на
+    # экране принадлежала предыдущему, уже закончившемуся. Человек видит
+    # «OK tests_bsl_health» и тишину — и ищет виноватого не там.
+    #
+    # Строка прогресса идёт в живую консоль и стирается результатом. При
+    # перенаправлении в файл её нет: там от неё был бы мусор, а зависание
+    # закрывает таймаут.
+    live = sys.stdout.isatty() and not args.quiet
+
     for path in suites:
+        if live:
+            print(f"  ...  {path.name:<28} идёт…", end="\r", flush=True)
         ok, n, skipped, elapsed, tail, missing, counted_by = run_one(path)
+        if live:
+            print(" " * 60, end="\r")
         total_tests += n
         total_skipped += skipped
         if missing:
@@ -236,7 +290,8 @@ def main() -> int:
         if ok and not n:
             uncounted.append(path)
         if not args.quiet:
-            mark = "OK  " if ok else "ПАД."
+            mark = "OK" if ok else ("ЗАВИС" if counted_by == "таймаут" else "ПАД.")
+            mark = f"{mark:<5}"
             note = ""
             if skipped:
                 note = f" ({skipped} пропущено"

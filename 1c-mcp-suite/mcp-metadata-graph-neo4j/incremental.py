@@ -610,6 +610,65 @@ def _filter_xml_graph_to_object(graph: dict, meta_id: str) -> dict:
     return graph
 
 
+# ─── FIX-27: вернуть владение коду, который пережил снос слоя 1 ─────────
+#
+# Что происходит при точечном обновлении XML. `_clear_meta_object_slice`
+# сносит узел объекта и его потомков (`DETACH DELETE`), а `:Callable` —
+# слой 2 — остаётся жить: он висит на СВОЁМ модуле и хранит `module_id`.
+# Вместе с узлами уходят рёбра `HAS_METHOD`, и для двух видов модулей это
+# не восстанавливается само:
+#
+#   • общий модуль — узел `CommonModule.X` и есть модуль, его сносит и
+#     пересоздаёт эта же функция;
+#   • модуль формы — узел `:Form`, который пересоздаётся writer'ом БЕЗ
+#     метки `:Module` (её дописывает только фаза 2).
+#
+# `apply_changes` заливает следом .bsl тех же владельцев и тем самым чинит
+# это — но только он. Вызов инструмента `metadata_upsert_file` на одном
+# XML-файле такой пары не делает, и код объекта молча оставался без хозяина.
+#
+# Отсюда правило: кто снёс — тот и восстановил, в том же вызове. Заново
+# разбирать BSL не нужно, всё необходимое уже в графе: у `:Callable` есть
+# `module_id`, и связь достраивается по нему.
+RELINK_OWNERSHIP_META_CYPHER = """
+MATCH (c:Callable) WHERE c.module_id = $id OR c.module_id STARTS WITH $prefix
+MATCH (m:MetadataObject {id: c.module_id})
+MERGE (m)-[e:HAS_METHOD]->(c)
+SET e.kind = toLower(coalesce(c.kind, ''))
+RETURN count(*) AS n
+"""
+
+RELINK_OWNERSHIP_FORM_CYPHER = """
+MATCH (c:Callable) WHERE c.module_id STARTS WITH $prefix
+MATCH (m:Form {id: c.module_id})
+SET m:Module
+MERGE (m)-[e:HAS_METHOD]->(c)
+SET e.kind = toLower(coalesce(c.kind, ''))
+RETURN count(*) AS n
+"""
+
+
+def relink_code_ownership(neo: Neo4j, meta_id: str) -> dict:
+    """
+    Восстанавливает рёбра `HAS_METHOD` для кода, принадлежащего объекту.
+
+    Два запроса, а не один: у модулей РАЗНЫЕ метки (`:MetadataObject` у
+    общих модулей, модулей объекта и менеджера; `:Form` у модулей форм), а
+    матч без метки не использует индекс — та самая грабля `PERF-4`, которая
+    в этом проекте случалась трижды.
+
+    Возвращает `{'has_method': N}` — сколько связей восстановлено или
+    подтверждено. Работает по индексу `callable_module_id`, поэтому стоит
+    столько же, сколько сам объект, а не весь граф.
+    """
+    params = {"id": meta_id, "prefix": meta_id + "."}
+    total = 0
+    for cypher in (RELINK_OWNERSHIP_META_CYPHER, RELINK_OWNERSHIP_FORM_CYPHER):
+        rows = neo.rows(cypher, params)
+        total += (rows[0].get("n") or 0) if rows else 0
+    return {"has_method": total}
+
+
 def upsert_xml_file(neo: Neo4j, src_root: Path, filepath: str) -> dict:
     """
     Точечно переиндексирует один верхнеуровневый XML-файл в слой 1 графа.
@@ -691,12 +750,17 @@ def upsert_xml_file(neo: Neo4j, src_root: Path, filepath: str) -> dict:
     )
     n_resolves = resolves_written[0]["n"] if resolves_written else 0
 
+    # FIX-27: вернуть коду владельца. Делается ПОСЛЕ записи узлов — раньше
+    # привязывать не к чему.
+    relinked = relink_code_ownership(neo, meta_id)
+
     return {
         "status": "reindexed",
         "file": rel,
         "meta_id": meta_id,
         "kind_eng": kind_eng,
         "cleared": cleared,
+        "ownership_relinked": relinked["has_method"],
         "written": {
             "MetadataObject": n_meta, "Attribute": n_attr,
             "TabularSection": n_ts, "Form": n_form, "EnumValue": n_ev,

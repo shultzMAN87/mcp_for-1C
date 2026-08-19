@@ -55,18 +55,25 @@ from graph_writer import (
     FP_MODE_CONTENT, FP_MODE_STAT,
     Neo4j, clear_code_layer, clear_metadata_layer,
     fingerprint_get_meta, fingerprint_matches, fingerprint_workspace_multi,
-    fingerprint_write, write_code_graph, write_graph,
+    fingerprint_write, relations_snapshot_write, write_code_graph, write_graph,
 )
 from progress_log import human_bytes, human_sec
 from bsl_parser import walk_workspace_bsl
 from bsl_resolver import build_call_graph, build_index_from_neo4j
 
 # A-2: сверка «вход против выхода» по всем шагам, где вход известен.
+# FIX-27: проверка результата — сколько процедур осталось без владельца.
 try:
     from shortfall import TallyBook
+    from graph_integrity import (
+        HAS_METHOD_COUNT_CYPHER, STATE_OK, log_ownership, ownership_report,
+    )
 except ImportError:  # pragma: no cover — путь только для локального запуска
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from shortfall import TallyBook
+    from graph_integrity import (
+        HAS_METHOD_COUNT_CYPHER, STATE_OK, log_ownership, ownership_report,
+    )
 
 
 logging.basicConfig(
@@ -234,10 +241,29 @@ def run_bsl_phase(neo: Neo4j, src_dir: Path) -> int:
     # n_procs посчитаны выше, а наружу шли только узлы. Расхождение здесь
     # означает, что модуль разобрался, но в граф не попал, — раньше это
     # было видно только сверкой двух строк лога глазами.
+    #
+    # FIX-28. Сводка говорила «вход 14 679 → выход 14 048» и сама называла
+    # главное: «в шаге есть выход, который никто не считает». Выходов
+    # оказалось два, и оба законны — но законность надо объявить, иначе
+    # 631 модуль выглядит потерей и разбирается заново каждый раз.
     mod_tally = TALLIES.stage("модули → узлы :Module", unit="модуль", log=log_bsl)
     mod_tally.see(len(modules))
     mod_tally.keep(s["module_nodes"])
-    mod_tally.report()
+    if s.get("module_nodes_common"):
+        mod_tally.drop(
+            "общий модуль — узел слоя 1 уже есть, метка :Module ему не нужна "
+            "(с ней он выпал бы из metadata_search, см. фильтр NOT n:Module)",
+            n=s["module_nodes_common"])
+    if s.get("module_nodes_duplicate"):
+        # Дубль module_id — единственный по-настоящему тревожный выход:
+        # процедуры проигравшего модуля схлопываются MERGE'ем по callable_id,
+        # и в графе остаётся код одного файла под именем двух.
+        for example in s.get("module_duplicate_examples") or []:
+            mod_tally.drop("дубль module_id — два .bsl на один модуль",
+                           example=example, n=0, alarm=True)
+        mod_tally.drop("дубль module_id — два .bsl на один модуль",
+                       n=s["module_nodes_duplicate"], alarm=True)
+    mod_tally.report(hint="схема путей — classify_bsl_path() в bsl_parser.py")
 
     proc_tally = TALLIES.stage("процедуры → узлы :Callable", unit="процедура",
                                log=log_bsl)
@@ -268,6 +294,35 @@ def run_bsl_phase(neo: Neo4j, src_dir: Path) -> int:
     log_bsl.info("  узлы: %s", summary["nodes_written"])
     log_bsl.info("  рёбра: %s", summary["edges_written"])
     return 0
+
+
+# ─── FIX-27: проверка результата, а не шага ──────────────────────────────
+
+
+def check_ownership(neo: Neo4j) -> dict:
+    """
+    Сколько процедур в графе осталось без владельца — прямо сейчас.
+
+    Три счётчика, каждый O(1) из счётчиков хранилища Neo4j. Считается
+    ПОСЛЕ записи и независимо от неё: `FIX-15` сторожит запись («отправлено
+    столько, записано столько»), а здесь сторожится результат. Разница
+    ровно та, из-за которой FIX-27 прожил незамеченным несколько дней:
+    слой владения снесла фаза 1, а фаза 2, которая его пересоздаёт, не
+    запустилась — и оба шага отчитались честно.
+    """
+    rows = neo.rows(
+        "MATCH (n:Callable) RETURN count(n) AS callables "
+    )
+    callables = rows[0]["callables"] if rows else 0
+    rows = neo.rows("MATCH (n:Module) RETURN count(n) AS modules")
+    modules = rows[0]["modules"] if rows else 0
+    rows = neo.rows(HAS_METHOD_COUNT_CYPHER)
+    has_method = rows[0]["c"] if rows else 0
+    rows = neo.rows("MATCH (n:MetadataObject) RETURN count(n) AS objects")
+    objects = rows[0]["objects"] if rows else 0
+    # `objects` приезжает внутри отчёта: по нему решается, чем чинить —
+    # одной фазой 2 или полным прогоном.
+    return ownership_report(callables, modules, has_method, objects=objects)
 
 
 # ─── Main pipeline ────────────────────────────────────────────────────────
@@ -357,13 +412,51 @@ def main() -> int:
     xml_needs_reindex = (not xml_same) or force_xml
     bsl_needs_reindex = (not bsl_same) or force_bsl
 
+    # ─ FIX-27. Отпечаток говорит про ИСТОЧНИК, а не про граф ─────────
+    #
+    # «Оба fingerprint совпали» означает ровно одно: файлы выгрузки не
+    # менялись с прошлого прогона. Про то, чем этот прогон кончился, здесь
+    # не сказано ничего — и именно на этом месте разрушенный граф шесть
+    # дней подряд объявлялся актуальным.
+    #
+    # Сценарий, который это делал: фаза 1 переиндексировала XML (снеся
+    # :Module-узлы и все рёбра владения), а фаза 2 не отработала — упала,
+    # была снята по памяти или пропущена METADATA_SKIP_BSL. Отпечаток слоя
+    # BSL при этом остался от прошлого успешного прогона, файлы .bsl с тех
+    # пор не менялись, — значит, «совпал», значит «делать нечего».
+    #
+    # Поэтому перед выходом спрашиваем не отпечаток, а граф.
+    ownership = check_ownership(neo)
     if not xml_needs_reindex and not bsl_needs_reindex:
-        log.info("Оба fingerprint совпали — данные актуальны, выход.")
-        log.info("Для принудительной переиндексации: METADATA_FORCE_REINDEX=true "
-                 "(обе фазы), METADATA_FORCE_XML / METADATA_FORCE_BSL (по одной)")
-        return 0
+        if ownership["state"] == STATE_OK:
+            log.info("Оба fingerprint совпали — данные актуальны, выход.")
+            log_ownership(ownership, log)
+            log.info("Для принудительной переиндексации: METADATA_FORCE_REINDEX=true "
+                     "(обе фазы), METADATA_FORCE_XML / METADATA_FORCE_BSL (по одной)")
+            return 0
+        log.warning("Оба fingerprint совпали, но граф не в порядке:")
+        log_ownership(ownership, log)
+        if not ownership.get("objects"):
+            # Слоя 1 нет вовсе — базу очистили или она новая. Фазе 2 не на
+            # что опереться (она сама откажется, см. её pre-flight), значит
+            # нужен полный прогон.
+            log.warning("Слоя метаданных в графе тоже нет — прогоняем обе "
+                        "фазы, отпечатки при этом ни при чём.")
+            xml_needs_reindex = True
+        else:
+            log.warning("Отпечаток говорит про выгрузку, а не про граф. "
+                        "Запускаю фазу 2 — она пересоберёт слой кода и связи "
+                        "владения; выгрузка при этом не перечитывается.")
+        bsl_needs_reindex = True
+    elif ownership["state"] != STATE_OK:
+        # Прогон и так будет, но сказать о состоянии «до» стоит: по паре
+        # строк «до» и «после» видно, починил прогон что-нибудь или нет.
+        log.info("Состояние графа до прогона:")
+        log_ownership(ownership, log)
 
     # ─ Фаза 1 (XML) ─────────────────────────────────────────
+    # FIX-27: отпечаток слоя XML ждёт успешной фазы 2 — см. ниже.
+    xml_fp_pending = False
     if xml_needs_reindex:
         if xml_same:
             log.info("Фаза 1: %s, но форс включён — переиндексация", xml_why)
@@ -380,14 +473,38 @@ def main() -> int:
             log_bsl.info("Фаза 2 запускается принудительно: переиндексация XML "
                          "снесла :Module-узлы, без неё слой кода останется пустым")
         bsl_needs_reindex = True
-        fingerprint_write(neo, fp_xml_new, "metadata_xml", mode=fp_mode)
-        log.info("  xml fingerprint сохранён (режим %s)", fp_mode)
+        # FIX-27. Здесь стояло `fingerprint_write(...)` — отпечаток слоя XML
+        # сохранялся СРАЗУ, до фазы 2. Тем самым прогон объявлял слой
+        # актуальным в момент, когда граф заведомо неполон: :Module-узлы
+        # только что снесены, а пересоздать их должна следующая фаза.
+        #
+        # Пока фаза 2 отрабатывала, это сходило с рук. Стоило ей не
+        # отработать — и следующий старт видел два совпавших отпечатка и
+        # выходил, оставляя граф без слоя владения навсегда.
+        #
+        # Теперь отпечаток пишется ПОСЛЕ фазы 2, вместе с её собственным.
+        # Цена ошибки поменялась местами: сбой посреди прогона стоит
+        # повторной фазы 1 (минуты), а не молчаливой потери связи «объект →
+        # его методы» (дни).
+        xml_fp_pending = True
     else:
         log.info("Фаза 1 пропущена: %s", xml_why)
 
     # ─ Фаза 2 (BSL) ─────────────────────────────────────────
     if skip_bsl:
         log_bsl.warning("METADATA_SKIP_BSL=true — фаза 2 пропущена (R&D)")
+        if xml_fp_pending:
+            # Тот же FIX-27, вторая дверь. Пропуск фазы 2 после
+            # переиндексации XML оставляет граф без :Module-узлов и без
+            # единого ребра HAS_METHOD. Раньше отпечаток при этом уже был
+            # сохранён, и починить это обычным запуском было нельзя — он
+            # говорил «данные актуальны».
+            log_bsl.warning("Слой владения кодом снесён фазой 1 и не "
+                            "восстановлен: %s",
+                            check_ownership(neo)["message"])
+            log_bsl.warning("Отпечаток XML НЕ сохранён — обычный следующий "
+                            "запуск (без METADATA_SKIP_BSL) пересоберёт слой "
+                            "полностью. Это намеренно.")
         return 0
 
     if bsl_needs_reindex:
@@ -399,11 +516,40 @@ def main() -> int:
             log_bsl.info("Фаза 2: %s — переиндексация", bsl_why)
         rc = run_bsl_phase(neo, src_dir)
         if rc != 0:
+            if xml_fp_pending:
+                log.error("Фаза 2 не отработала (код %d) — отпечаток XML не "
+                          "сохранён, следующий запуск повторит обе фазы.", rc)
             return rc
         fingerprint_write(neo, fp_bsl_new, "bsl_source", mode=fp_mode)
         log_bsl.info("  bsl fingerprint сохранён (режим %s)", fp_mode)
+        if xml_fp_pending:
+            fingerprint_write(neo, fp_xml_new, "metadata_xml", mode=fp_mode)
+            log.info("  xml fingerprint сохранён (режим %s) — после фазы 2, "
+                     "когда слой владения уже восстановлен (FIX-27)", fp_mode)
+            xml_fp_pending = False
     else:
         log_bsl.info("Фаза 2 пропущена: %s", bsl_why)
+        if xml_fp_pending:  # pragma: no cover — сюда попасть нельзя
+            log.error("Внутренняя ошибка: фаза 1 отработала, фаза 2 — нет, "
+                      "а отпечаток XML остался несохранённым. Граф без слоя "
+                      "владения; запустите прогон заново.")
+            return 4
+
+    # PERF-12. Снимок счётчиков рёбер: обход всех рёбер платит индексация,
+    # раз за прогон, а не `metadata_stats` на каждом вызове.
+    try:
+        rel_counts = relations_snapshot_write(neo)
+        log.info("Снимок рёбер по типам обновлён: %d типов, %d рёбер",
+                 len(rel_counts), sum(rel_counts.values()))
+    except Exception as e:  # снимок — удобство, а не условие успеха
+        log.warning("Снимок рёбер не обновлён (%s) — metadata_stats посчитает "
+                    "их сам, дороже", e)
+
+    # FIX-27. Итоговая проверка результата. Печатается ВСЕГДА, в том числе
+    # когда всё сошлось: «владение на месте, без владельца 28 из 231 114» —
+    # это утверждение, которое можно сравнить со следующим прогоном.
+    log.info("Проверка целостности:")
+    log_ownership(check_ownership(neo), log)
 
     log.info("=" * 60)
     # A-1/A-2: сводка потерь. Печатается ВСЕГДА, в том числе когда всё

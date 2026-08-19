@@ -113,6 +113,130 @@ def collapse_pages(hits: list[Hit]) -> list[Hit]:
     return out
 
 
+# ─── SEARCH-1, шаг 3: вес диалекта ───────────────────────────────────────
+#
+# Что измерено 18 августа. Из семи примеров диалекта проходят четыре, и
+# промахи идут В РАЗНЫЕ СТОРОНЫ: на «заменить подстроку во встроенном
+# языке» побеждают страницы языка запросов, на «начало месяца в запросе» —
+# страницы встроенного. То есть слово, называющее диалект, на выдачу не
+# влияет вообще — побеждает похожесть имени.
+#
+# При этом все три оставшихся soft-промаха датасета справки (ph-005,
+# ph-031, ph-032) — диалектные. Потолок задачи мал (язык запросов это
+# 128 страниц из 26 000), но весь остаток промахов — здесь.
+#
+# Почему вес, а не фильтр. Фильтр отрезал бы правильный ответ там, где
+# маркера в запросе нет, — а таких запросов большинство. Вес трогает только
+# те запросы, где диалект назван словом.
+#
+# Почему это безопасно для соседей. Без маркера функция возвращает список
+# в неизменном виде — не «почти тот же порядок», а тот же объект, который
+# пришёл. Значит, ph-001…ph-023 не могут измениться в принципе, и это
+# проверяется тестом, а не рассуждением. Мера приёмки в PLAN-8 говорит
+# ровно это: улучшение, ломающее соседей, — не улучшение.
+
+# Контейнеры справки по диалектам. Признак уже лежит в payload
+# (`hbk_file`), переиндексация 41 062 чанков не нужна.
+QUERY_BOOKS = frozenset({"shquery_ru.hbk"})
+SCRIPT_BOOKS = frozenset({"shcntx_ru.hbk", "shlang_ru.hbk"})
+
+DIALECT_QUERY = "query"    # язык запросов
+DIALECT_SCRIPT = "script"  # встроенный язык
+
+# Маркеры. Слова, которыми разработчик 1С называет диалект, когда вообще
+# его называет. Список короткий намеренно: каждый лишний маркер — это
+# запрос, который начнёт вести себя иначе без всякого повода.
+DIALECT_MARKERS: tuple[tuple[str, str], ...] = (
+    ("в запросе",            DIALECT_QUERY),
+    ("в тексте запроса",     DIALECT_QUERY),
+    ("языком запросов",      DIALECT_QUERY),
+    ("языке запросов",       DIALECT_QUERY),
+    ("в скд",                DIALECT_QUERY),
+    ("в модуле",             DIALECT_SCRIPT),
+    ("в коде",               DIALECT_SCRIPT),
+    ("во встроенном языке",  DIALECT_SCRIPT),
+    ("встроенным языком",    DIALECT_SCRIPT),
+    ("в обработчике",        DIALECT_SCRIPT),
+)
+
+# Во сколько раз тяжелее результат «своего» диалекта. Число выбрано, а не
+# подобрано: полтора — это «маркер стоит примерно одного места в тесной
+# выдаче». Подбирать множитель по падающему примеру — прямой путь к
+# подгонке, тот же, что уже разбирался в шапке этого модуля.
+#
+# Чужой диалект получает обратную величину, а не отдельный коэффициент:
+# симметрия оставляет ровно одно число, которое можно осмысленно менять.
+DIALECT_WEIGHT = 1.5
+
+
+def detect_dialect(query: str) -> str:
+    """
+    Назван ли в запросе диалект. Пустая строка — не назван.
+
+    При совпадении нескольких маркеров побеждает самый длинный: «в тексте
+    запроса» содержит в себе «в запросе», и короткий не должен решать за
+    длинный.
+    """
+    low = (query or "").lower()
+    best = ("", 0)
+    for marker, dialect in DIALECT_MARKERS:
+        if marker in low and len(marker) > best[1]:
+            best = (dialect, len(marker))
+    return best[0]
+
+
+def _rank_score(hit: Hit) -> float:
+    """
+    Скор, по которому сортируем. `score` не трогаем: он приходит от
+    Qdrant и уезжает в ответ, а подменённое число в ответе — это
+    диагностика, которая врёт.
+    """
+    for key in ("rank_score", "score"):
+        if key in hit and hit[key] is not None:
+            try:
+                return float(hit[key])
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
+def apply_dialect_weight(hits: list[Hit], dialect: str,
+                         weight: float = DIALECT_WEIGHT) -> list[Hit]:
+    """
+    Домножает скор результатов по признаку контейнера справки.
+
+    Возвращает НОВЫЙ список поверхностных копий — исходные словари не
+    трогаются: тот же список приходит в ответ инструмента, и правка
+    ранжирования не должна менять то, что видит вызывающий.
+
+    Без диалекта возвращается ровно то, что пришло.
+    """
+    if not dialect or weight <= 0:
+        return hits
+    own = QUERY_BOOKS if dialect == DIALECT_QUERY else SCRIPT_BOOKS
+    other = SCRIPT_BOOKS if dialect == DIALECT_QUERY else QUERY_BOOKS
+
+    out: list[Hit] = []
+    for hit in hits:
+        book = hit.get("hbk_file") or ""
+        if book in own:
+            factor = weight
+        elif book in other:
+            factor = 1.0 / weight
+        else:
+            # Контейнер ни тот ни другой (их сорок) — не наше дело.
+            factor = 1.0
+        copy = dict(hit)
+        copy["rank_score"] = _rank_score(hit) * factor
+        if factor != 1.0:
+            # Видно, почему результат оказался выше соседа. Без этого
+            # разбираться с ранжированием пришлось бы по косвенным
+            # признакам — тем же способом, которым SEARCH-1 шёл до замера.
+            copy["dialect_weight"] = round(factor, 3)
+        out.append(copy)
+    return out
+
+
 # Во сколько раз слабее учитывается n-й результат одного объекта: второй —
 # вдвое, третий — втрое. Гармонический ряд, а не подобранный коэффициент:
 # подбирать множитель по одному падающему примеру — прямой путь к подгонке.
@@ -134,21 +258,30 @@ def demote_repeated_objects(hits: list[Hit]) -> list[Hit]:
         key = object_key(hit)
         occurrence = seen.get(key, 0) + 1
         seen[key] = occurrence
-        try:
-            score = float(hit.get("score") or 0.0)
-        except (TypeError, ValueError):
-            score = 0.0
+        # SEARCH-1: скор берётся через _rank_score — если вес диалекта уже
+        # применён, сортируем по нему, иначе по исходному score. Двух
+        # сортировок подряд быть не должно: вторая отменила бы первую.
+        score = _rank_score(hit)
         weighted.append((score * _repeat_penalty(occurrence), position, hit))
 
     weighted.sort(key=lambda row: (-row[0], row[1]))
     return [row[2] for row in weighted]
 
 
-def diversify_hits(hits: list[Hit], limit: int) -> list[Hit]:
+def diversify_hits(hits: list[Hit], limit: int, query: str = "",
+                   dialect_weight: float = DIALECT_WEIGHT) -> list[Hit]:
     """
-    Полная обработка выдачи: дубли страниц убрать, повторы объекта
-    понизить, обрезать до limit.
+    Полная обработка выдачи: дубли страниц убрать, вес диалекта применить,
+    повторы объекта понизить, обрезать до limit.
+
+    `query` необязателен намеренно. Без него шаг с диалектом не выполняется
+    вовсе, и функция ведёт себя ровно как до SEARCH-1 — так вызывающему, не
+    знающему про диалекты, ничего не ломается.
     """
     if not hits:
         return []
-    return demote_repeated_objects(collapse_pages(hits))[:max(1, limit)]
+    hits = collapse_pages(hits)
+    dialect = detect_dialect(query)
+    if dialect:
+        hits = apply_dialect_weight(hits, dialect, dialect_weight)
+    return demote_repeated_objects(hits)[:max(1, limit)]

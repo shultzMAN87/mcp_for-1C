@@ -48,6 +48,7 @@ sys.path.insert(0, "/app")
 
 from graph_writer import (                              # noqa: E402
     FP_MODE_CONTENT, FP_MODE_STAT, Neo4j, fingerprint_write,
+    relations_snapshot_write,
 )
 from incremental import (                               # noqa: E402
     _clear_meta_object_slice, _clear_module_code_slice, upsert_file,
@@ -57,6 +58,17 @@ from partial_fingerprint import (                       # noqa: E402
     stale_debt, write_stored,
 )
 from progress_log import ProgressLogger, human_sec      # noqa: E402
+
+# FIX-27: после точечного обновления проверяем не шаг, а результат.
+try:
+    from graph_integrity import (
+        HAS_METHOD_COUNT_CYPHER, log_ownership, ownership_report,
+    )
+except ImportError:  # pragma: no cover — путь только для локального запуска
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from graph_integrity import (
+        HAS_METHOD_COUNT_CYPHER, log_ownership, ownership_report,
+    )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("apply_changes")
@@ -80,6 +92,20 @@ OK_STATUSES = {"reindexed", "removed", "created", "updated", "ok"}
 # расширится со стороны incremental.
 EXPECTED_SKIPS = {"not_a_toplevel_object_xml", "not_an_xml_file",
                   "not_a_bsl_file", "unsupported_extension"}
+
+
+def _ownership(neo: Neo4j) -> dict:
+    """Три O(1)-счётчика: процедуры, модули, рёбра владения (FIX-27)."""
+    def one(cypher: str, key: str) -> int:
+        rows = neo.rows(cypher)
+        return (rows[0].get(key) or 0) if rows else 0
+
+    return ownership_report(
+        one("MATCH (n:Callable) RETURN count(n) AS c", "c"),
+        one("MATCH (n:Module) RETURN count(n) AS c", "c"),
+        one(HAS_METHOD_COUNT_CYPHER, "c"),
+        objects=one("MATCH (n:MetadataObject) RETURN count(n) AS c", "c"),
+    )
 
 
 def _ordered_files(owner: str, files: list[str]) -> list[str]:
@@ -260,6 +286,22 @@ def main() -> int:
                     "считается по содержимому, а частичный обход — по stat. "
                     "Обновить его отсюда нельзя, и следующий старт индексера "
                     "запустит полную переиндексацию.")
+
+    # PERF-12: снимок счётчиков рёбер устарел — граф только что менялся.
+    try:
+        relations_snapshot_write(neo)
+    except Exception as e:
+        log.warning("Снимок рёбер не обновлён (%s) — metadata_stats посчитает "
+                    "их сам, дороже", e)
+
+    # FIX-27. Точечное обновление XML сносит срез объекта вместе с рёбрами
+    # владения; `upsert_xml_file` привязывает код обратно, а здесь мы
+    # СМОТРИМ, получилось ли. Проверять результат, а не шаг: именно
+    # отсутствие такой проверки дало разрушенному графу прожить несколько
+    # дней в состоянии «всё хорошо».
+    log.info("")
+    log.info("Проверка целостности:")
+    log_ownership(_ownership(neo), log)
 
     debt = stale_debt(neo)
     limit = int(os.environ.get("METADATA_STALE_DEBT_LIMIT", DEFAULT_DEBT_LIMIT))

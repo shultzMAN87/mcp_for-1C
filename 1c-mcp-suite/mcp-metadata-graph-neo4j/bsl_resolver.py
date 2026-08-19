@@ -1325,11 +1325,37 @@ def build_call_graph(
     parameter_nodes: list[dict] = []
 
     # ─── 1. Module-узлы (НЕ для CommonModule) ────────────────────────
+    #
+    # FIX-28. Здесь стояли два `continue` без счётчика, и сводка потерь
+    # честно сказала: «модули → узлы :Module: вход 14 679 → выход 14 048»,
+    # то есть 631 модуль уходит по пути, которого никто не считает.
+    #
+    # Оба пути законны, но законность надо ОБЪЯВИТЬ — необъявленный отсев
+    # неотличим от дыры, и разбирать его пришлось с нуля.
+    #
+    #   • CommonModule — узел уже существует в слое 1 как
+    #     :MetadataObject:CommonModule, и метка :Module ему не нужна.
+    #     Больше того, она вредна: в поиске стоит фильтр `NOT n:Module`
+    #     (PERF-6), и общие модули исчезли бы из выдачи metadata_search.
+    #     Рёбра HAS_METHOD у них при этом есть — они пишутся по метке
+    #     :MetadataObject (см. src_label ниже).
+    #   • Дубль module_id — два .bsl претендуют на один модуль (например,
+    #     одноимённый общий модуль в основной конфигурации и в
+    #     tests-extension). Второй проигрывает молча, и его процедуры
+    #     схлопываются MERGE'ем по callable_id — это и есть источник
+    #     расхождения на единицу из FIX-29.
+    skipped_common = 0
+    skipped_duplicate = 0
+    duplicate_ids: list[str] = []
     seen_module_ids: set[str] = set()
     for m in modules:
         if m.module_kind == "CommonModule":
+            skipped_common += 1
             continue
         if m.module_id in seen_module_ids:
+            skipped_duplicate += 1
+            if len(duplicate_ids) < 5:
+                duplicate_ids.append(m.module_id)
             continue
         seen_module_ids.add(m.module_id)
 
@@ -1556,6 +1582,13 @@ def build_call_graph(
 
     stats = {
         "module_nodes":    len(module_nodes),
+        # FIX-28: объявленный отсев модулей. Сумма
+        # module_nodes + module_nodes_common + module_nodes_duplicate
+        # обязана сойтись с числом разобранных модулей — этой сверкой и
+        # занят mod_tally в indexer.py.
+        "module_nodes_common":    skipped_common,
+        "module_nodes_duplicate": skipped_duplicate,
+        "module_duplicate_examples": duplicate_ids,
         "callable_nodes":  len(callable_nodes),
         "parameter_nodes": len(parameter_nodes),
         "callsite_nodes":  len(pass_result["callsite_nodes"]),

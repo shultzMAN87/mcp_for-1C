@@ -11,13 +11,16 @@ ENV PATH="/app/venv/bin:$PATH"
 COPY requirements-bsl.txt requirements-bsl.lock.txt ./
 # TR-2: ставим из лок-файла, если он заполнен, иначе — по границам.
 # Пустой лок-файл не должен ломать сборку: он всего лишь означает, что
-# `make lock` ещё не прогоняли. Предупреждение в логе сборки видно сразу.
+# лок ещё не собирали (`make lock`, на Windows — `.\scripts\gen_lockfiles.ps1`).
+# Предупреждение в логе сборки видно сразу.
 RUN if grep -qE '^[a-zA-Z]' requirements-bsl.lock.txt; then \
         echo "TR-2: ставим из requirements-bsl.lock.txt"; \
         pip install --no-cache-dir -r requirements-bsl.lock.txt; \
     else \
         echo "TR-2: requirements-bsl.lock.txt пуст — ставим по границам из requirements-bsl.txt."; \
-        echo "      Пересборка может дать другие версии. Запустите: make lock"; \
+        echo "      Пересборка может дать другие версии. Запустите:"; \
+        echo "        Linux/WSL:   make lock"; \
+        echo "        PowerShell:  .\\scripts\\gen_lockfiles.ps1"; \
         pip install --no-cache-dir -r requirements-bsl.txt; \
     fi
 
@@ -43,6 +46,10 @@ COPY mcp_http.py /app/mcp_http.py
 # Без этой строки сервер падает на импорте при старте. Копируется в ТРИ
 # образа; расхождение между ними ловит tests_refusal.py.
 COPY refusal.py /app/refusal.py
+# TOOL-1: счётчик вызовов инструментов (поле usage в *_stats).
+# Импортируется серверами metadata-graph, platform-help и bsl-checker;
+# копируется в ТРИ образа — расхождение ловит tests_delivery.py.
+COPY tool_usage.py /app/tool_usage.py
 # B-4: единый словарь постраничности. Строку не пришлось вспоминать —
 # tests_delivery.py (B-6) назвал её сам, как только сервер начал
 # импортировать модуль.

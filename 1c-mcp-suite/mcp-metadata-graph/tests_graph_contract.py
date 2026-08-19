@@ -91,6 +91,26 @@ def relationship_types() -> set[str]:
     return set(re.findall(r'^\s{4}"(\w+)":', block, re.M))
 
 
+def any_writer_properties() -> set[str]:
+    """
+    Все свойства, которые graph_writer вообще кому-нибудь присваивает.
+
+    Зачем отдельно от `meta_node_properties`. Ниже есть список
+    `OTHER_LABEL_PROPS` — свойства узлов ДРУГИХ меток (:Callable, :Type,
+    служебные). Он ведётся руками, и это ровно тот жанр списка, который в
+    этом проекте расходился с действительностью шесть раз: `PERF-12` завёл
+    у служебного узла `:Fingerprint` свойство `data`, сервер начал его
+    читать, и тест сказал «такого свойства не пишет никто» — притом что
+    пишет, двумя файлами правее.
+
+    Извлечение закрывает этот класс ложных срабатываний, не ослабляя
+    проверку по существу: свойство, которого не присваивает НИ ОДИН
+    запрос writer'а, по-прежнему считается несуществующим.
+    """
+    src = _read(NEO4J_DIR / "graph_writer.py")
+    return set(re.findall(r"\b[nmec]\.(\w+)\s*=(?!=)", src))
+
+
 class TestMetaNodeProperties(unittest.TestCase):
     """
     Свойства узлов метаданных, к которым обращаются серверы, должны
@@ -138,7 +158,7 @@ class TestMetaNodeProperties(unittest.TestCase):
         Все `n.<свойство>` в запросах по метаданным — из схемы writer либо из
         явного списка свойств других меток.
         """
-        known = self.allowed | self.OTHER_LABEL_PROPS
+        known = self.allowed | self.OTHER_LABEL_PROPS | any_writer_properties()
         for fname in SERVER_FILES:
             for num, line in _code_lines(_read(HERE / fname)):
                 for m in re.finditer(r"\b[nm]\.(\w+)\b", line):

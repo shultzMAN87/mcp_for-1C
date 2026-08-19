@@ -11,13 +11,16 @@ WORKDIR /app
 COPY requirements.txt requirements.lock.txt ./
 # TR-2: ставим из лок-файла, если он заполнен, иначе — по границам.
 # Пустой лок-файл не должен ломать сборку: он всего лишь означает, что
-# `make lock` ещё не прогоняли. Предупреждение в логе сборки видно сразу.
+# лок ещё не собирали (`make lock`, на Windows — `.\scripts\gen_lockfiles.ps1`).
+# Предупреждение в логе сборки видно сразу.
 RUN if grep -qE '^[a-zA-Z]' requirements.lock.txt; then \
         echo "TR-2: ставим из requirements.lock.txt"; \
         pip install --no-cache-dir -r requirements.lock.txt; \
     else \
         echo "TR-2: requirements.lock.txt пуст — ставим по границам из requirements.txt."; \
-        echo "      Пересборка может дать другие версии. Запустите: make lock"; \
+        echo "      Пересборка может дать другие версии. Запустите:"; \
+        echo "        Linux/WSL:   make lock"; \
+        echo "        PowerShell:  .\\scripts\\gen_lockfiles.ps1"; \
         pip install --no-cache-dir -r requirements.txt; \
     fi
 
@@ -40,6 +43,14 @@ COPY shortfall.py                    /app/shortfall.py
 # Импортируется серверами metadata-graph, query-builder, platform-help и
 # bsl-checker. Копируется в ТРИ образа; расхождение ловит tests_refusal.py.
 COPY refusal.py                      /app/refusal.py
+# TOOL-1: счётчик вызовов инструментов (поле usage в *_stats).
+# Импортируется серверами metadata-graph, platform-help и bsl-checker;
+# копируется в ТРИ образа — расхождение ловит tests_delivery.py.
+COPY tool_usage.py                      /app/tool_usage.py
+# FIX-27: проверка целостности графа (у кода есть владелец или его нет).
+# Импортируется сервером metadata-graph, индексером и apply_changes —
+# без этой строки они падают на импорте при старте.
+COPY graph_integrity.py              /app/graph_integrity.py
 
 # Базовые серверы (metadata-graph: server.py + v3-расширения, индексер: v3)
 COPY mcp-metadata-graph/server.py             /app/mcp_metadata_graph.py

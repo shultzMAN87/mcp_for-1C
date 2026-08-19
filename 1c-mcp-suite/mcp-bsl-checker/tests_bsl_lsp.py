@@ -109,14 +109,75 @@ class FakeServer:
         self._die()
 
     def _die(self):
+        """
+        Смерть «процесса»: клиент видит конец потока.
+
+        FIX-26. Раньше здесь закрывался ещё и `_server_in` — прямо под
+        потоком, который висел на нём в блокирующем `read()`. Закрытие
+        дескриптора спящий поток НЕ будит: он остаётся на номере, а номер
+        тут же переиспользует следующий `os.pipe()`. Дальше поток-зомби
+        вычитывает `initialize` СЛЕДУЮЩЕГО сервера, настоящий обработчик
+        его не видит, и клиент падает с «нет ответа за 3 с».
+
+        Это ровно тот дефект, ради которого написан `TestShutdownOrder`, —
+        только в самом тесте, а не в клиенте. Он и делал набор плавающим:
+        3–4 провала на 40 прогонов, всегда в
+        `test_many_restarts_do_not_leak_readers`.
+
+        Поэтому `_die` закрывает только ПИШУЩИЕ концы сервера: клиент
+        получает конец потока, как от умершего процесса, а читающий конец
+        остаётся открытым — пока дескриптор занят, его номер никому не
+        достанется. Разбирает канал `close()`, и в правильном порядке.
+        """
         if self._dead:
             return
         self._dead = True
-        for stream in (self._server_out, self._err_out, self._server_in):
+        for stream in (self._server_out, self._err_out):
             try:
                 stream.close()
             except Exception:
                 pass
+
+    def close(self):
+        """
+        Закрыть ВСЕ шесть концов, включая клиентские.
+
+        `_die()` закрывает только серверную половину: так ведёт себя
+        умерший процесс, и для проверок этого достаточно. Но тест, не
+        дошедший до `_die()`, оставлял три открытых дескриптора — на
+        Windows это видно как `ResourceWarning: unclosed file` и,
+        предположительно, как повод потоку-читателю остаться на
+        блокирующем чтении.
+
+        Возможная причина зависания прогона 17 августа. Доказать её не
+        удалось: набор больше не воспроизвёл зависание ни разу. Но
+        закрывать за собой дескрипторы правильно независимо от того,
+        виноваты они были или нет.
+        """
+        self._die()
+        # Порядок тот же, что у `BslLspClient.stop`: сначала дать потоку
+        # увидеть конец потока — закрыть ПИШУЩИЙ конец его канала, —
+        # дождаться выхода и только потом закрывать сам дескриптор.
+        # Закрывать читающий конец под спящим потоком нельзя (FIX-26).
+        try:
+            self.stdin.close()
+        except Exception:
+            pass
+        if self._thread.is_alive() and threading.current_thread() is not self._thread:
+            self._thread.join(timeout=5)
+        for stream in (self._server_in, self.stdout, self.stderr):
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    def __del__(self):
+        # Страховка на случай теста, забывшего про addCleanup: CPython
+        # считает ссылки, поэтому вызов приходит сразу после теста.
+        try:
+            self.close()
+        except Exception:
+            pass
 
     # ─ поведение сервера ─
 
@@ -279,8 +340,12 @@ class TestDialogue(unittest.TestCase):
         self.addCleanup(self._stop_all)
 
     def _stop_all(self):
+        # `close()`, а не `_die()`: второй закрывает только серверные
+        # концы (так ведёт себя умерший процесс), а клиентские три
+        # оставались открытыми до сборки мусора. На Windows это видно
+        # как ResourceWarning; см. FakeServer.close.
         for s in self.servers:
-            s._die()
+            s.close()
 
     def _make(self, **kw):
         def factory():
@@ -548,7 +613,7 @@ class TestShutdownOrder(unittest.TestCase):
                          "поток чтения пережил остановку и висит на "
                          "дескрипторе, который вот-вот переиспользуют")
         for s in servers:
-            s._die()
+            s.close()
 
     def test_many_restarts_do_not_leak_readers(self):
         """
@@ -569,7 +634,7 @@ class TestShutdownOrder(unittest.TestCase):
             client.diagnostics(str(self.tmp))
             client.stop()
         for s in servers:
-            s._die()
+            s.close()
         time.sleep(0.2)
         # Потоки поддельных серверов свои, поэтому запас щедрый; важно, что
         # число не растёт линейно с числом перезапусков.
@@ -608,7 +673,7 @@ class TestFailureKinds(unittest.TestCase):
         self.assertTrue(client.state()["cooling_down"])
         self.assertEqual(client.state()["consecutive_failures"], 3)
         for s in servers:
-            s._die()
+            s.close()
 
     def test_success_resets_the_streak(self):
         """
@@ -635,7 +700,7 @@ class TestFailureKinds(unittest.TestCase):
         self.assertFalse(client.state()["cooling_down"])
         client.stop()
         for s in servers:
-            s._die()
+            s.close()
 
 
 class TestDelivery(unittest.TestCase):

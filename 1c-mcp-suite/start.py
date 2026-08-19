@@ -69,6 +69,32 @@ def _wrap_tools_with_metrics(mcp_obj, server_name: str) -> None:
         sys.stderr.write(f"[metrics] не удалось обернуть tools: {e}\n")
 
 
+def _wrap_tools_with_usage(mcp_obj, server_name: str) -> None:
+    """
+    TOOL-1: счётчик вызовов в памяти процесса.
+
+    Здесь же, где и метрики, и по той же причине: схема инструмента уже
+    построена, подменять `tool.fn` безопасно. Обёртка на РЕГИСТРАЦИИ
+    ломает разрешение аннотаций (`Optional` не виден из чужого модуля) —
+    проверено падением регистрации v3-инструментов.
+
+    В отличие от `mcp_metrics`, ничего не пишет на диск: ответ на вопрос
+    «звал ли этот инструмент хоть кто-нибудь» нужен на время жизни
+    контейнера, и отдаётся он полем `usage` в `*_stats`.
+    """
+    try:
+        from tool_usage import wrap_registered_tools
+    except Exception as e:
+        sys.stderr.write(f"[usage] tool_usage недоступен: {e}\n")
+        return
+    try:
+        n = wrap_registered_tools(mcp_obj)
+        print(f"[usage] {server_name}: под счётчиком инструментов: {n}",
+              flush=True)
+    except Exception as e:
+        sys.stderr.write(f"[usage] не удалось обернуть tools: {e}\n")
+
+
 def _start_metrics_dashboard_async() -> None:
     """Поднимает HTTP-дашборд метрик в отдельном потоке."""
     if os.environ.get("METRICS_DASHBOARD", "true").lower() not in ("true", "1", "yes"):
@@ -138,6 +164,7 @@ def main():
         raise SystemExit(78)  # EX_CONFIG, тот же код, что у SEC-3
 
     _wrap_tools_with_metrics(mcp_obj, name)
+    _wrap_tools_with_usage(mcp_obj, name)
     _start_metrics_dashboard_async()
 
     # TR-1: Streamable HTTP вместо SSE. Аутентификация (SEC-3/TR-3) и

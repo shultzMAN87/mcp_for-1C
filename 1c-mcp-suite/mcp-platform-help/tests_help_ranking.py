@@ -23,8 +23,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from help_ranking import (
+    DIALECT_QUERY,
+    DIALECT_SCRIPT,
     collapse_pages,
     demote_repeated_objects,
+    detect_dialect,
     diversify_hits,
     object_key,
     page_key,
@@ -297,6 +300,128 @@ class TestRelatedChunksAreFilteredByPair(unittest.TestCase):
         card_block = self.src[self.src.index('"lookup": name,') - 2000:
                               self.src.index('"lookup": name,')]
         self.assertIn('"hbk_file"', card_block)
+
+
+# ─── SEARCH-1, шаг 3: вес диалекта ───────────────────────────────────────
+
+
+class TestDialectDetection(unittest.TestCase):
+    """
+    Диалект считается названным только тогда, когда он назван словом.
+    Всё остальное — обычный запрос, и трогать его нельзя.
+    """
+
+    def test_query_dialect(self):
+        for q in ("начало месяца от даты в запросе",
+                  "заменить подстроку в тексте запроса",
+                  "как это сделать языком запросов"):
+            self.assertEqual(detect_dialect(q), DIALECT_QUERY, q)
+
+    def test_script_dialect(self):
+        for q in ("заменить подстроку во встроенном языке модуля",
+                  "начало месяца от даты в модуле объекта",
+                  "как получить дату в коде"):
+            self.assertEqual(detect_dialect(q), DIALECT_SCRIPT, q)
+
+    def test_no_marker_no_dialect(self):
+        for q in ("левое внешнее соединение таблиц", "СтрДлина", "",
+                  "разница между двумя датами в секундах"):
+            self.assertEqual(detect_dialect(q), "")
+
+    def test_longest_marker_wins(self):
+        """
+        «в тексте запроса» содержит в себе «в запросе»; короткий маркер не
+        должен решать за длинный — иначе списку маркеров нельзя было бы
+        доверять при пополнении.
+        """
+        self.assertEqual(detect_dialect("заменить в тексте запроса"),
+                         DIALECT_QUERY)
+
+
+class TestDialectWeight(unittest.TestCase):
+
+    def hits(self):
+        return [
+            {"full_name": "СтрЗаменить", "score": 0.50,
+             "hbk_file": "shcntx_ru.hbk", "file_path": "a", "parent_ru": "ГК"},
+            {"full_name": "ЗАМЕНИТЬ", "score": 0.55,
+             "hbk_file": "shquery_ru.hbk", "file_path": "b", "parent_ru": "ЯЗ"},
+            {"full_name": "Статья", "score": 0.40,
+             "hbk_file": "shprg_ru.hbk", "file_path": "c"},
+        ]
+
+    def test_named_dialect_wins_a_close_race(self):
+        out = diversify_hits(self.hits(), 3,
+                             "заменить подстроку во встроенном языке")
+        self.assertEqual(out[0]["full_name"], "СтрЗаменить")
+
+    def test_opposite_dialect_still_present(self):
+        """
+        Вес, а не фильтр: проигравший диалект остаётся в выдаче. Фильтр
+        отрезал бы правильный ответ там, где маркер поставлен неточно.
+        """
+        out = diversify_hits(self.hits(), 3, "заменить подстроку в запросе")
+        names = [h["full_name"] for h in out]
+        self.assertIn("СтрЗаменить", names)
+        self.assertEqual(names[0], "ЗАМЕНИТЬ")
+
+    def test_third_party_books_untouched(self):
+        out = diversify_hits(self.hits(), 3, "заменить подстроку в запросе")
+        article = next(h for h in out if h["full_name"] == "Статья")
+        self.assertNotIn("dialect_weight", article,
+                         "контейнеров сорок; те, что не про диалект, "
+                         "не наше дело")
+
+    def test_original_score_is_not_rewritten(self):
+        """
+        `score` уезжает в ответ инструмента. Подменять его весом значит
+        отдавать наружу число, которого Qdrant не выдавал.
+        """
+        out = diversify_hits(self.hits(), 3, "заменить в запросе")
+        winner = out[0]
+        self.assertEqual(winner["score"], 0.55)
+        self.assertGreater(winner["rank_score"], winner["score"])
+
+    def test_input_hits_are_not_mutated(self):
+        source = self.hits()
+        diversify_hits(source, 3, "заменить в запросе")
+        self.assertNotIn("rank_score", source[0])
+
+    def test_weight_one_changes_nothing(self):
+        """`HELP_DIALECT_WEIGHT=1` — способ проверить правку выключением."""
+        plain = [h["full_name"] for h in diversify_hits(self.hits(), 3)]
+        off = [h["full_name"] for h in
+               diversify_hits(self.hits(), 3, "заменить в запросе",
+                              dialect_weight=1.0)]
+        self.assertEqual(plain, off)
+
+
+class TestNeighboursAreSafe(unittest.TestCase):
+    """
+    Мера приёмки PLAN-8: `ph-001`…`ph-023` не теряют ни одного пройденного
+    предиката. Это проверяется не прогоном, а свойством: без маркера
+    функция обязана вести себя ровно как раньше.
+    """
+
+    def test_no_marker_means_untouched_pipeline(self):
+        hits = [
+            {"full_name": f"Ф{i}", "score": 1.0 - i / 10,
+             "hbk_file": "shquery_ru.hbk" if i % 2 else "shcntx_ru.hbk",
+             "file_path": f"p{i}", "parent_ru": f"о{i}"}
+            for i in range(8)
+        ]
+        before = demote_repeated_objects(collapse_pages(hits))[:5]
+        after = diversify_hits(hits, 5, "левое внешнее соединение таблиц")
+        self.assertEqual([h["full_name"] for h in before],
+                         [h["full_name"] for h in after])
+
+    def test_no_rank_score_leaks_without_marker(self):
+        hits = [{"full_name": "А", "score": 0.5, "hbk_file": "shquery_ru.hbk",
+                 "file_path": "p"}]
+        out = diversify_hits(hits, 5, "просто вопрос")
+        self.assertNotIn("rank_score", out[0],
+                         "лишнее поле в каждом ответе — это текст, который "
+                         "модель читает при каждом вызове")
 
 
 if __name__ == "__main__":

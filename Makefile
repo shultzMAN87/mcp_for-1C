@@ -1,8 +1,18 @@
 # Makefile для 1C MCP Suite.
 #
 # Основной способ запуска — docker compose, но часть повседневных операций
-# удобнее собрать в короткие команды. На Windows использовать через WSL или
-# напрямую запускать python3/py.
+# удобнее собрать в короткие команды.
+#
+# DOC-6. На основной рабочей машине проекта (Windows, PowerShell) команды
+# `make` нет вовсе. Каждая цель здесь — одна строка запуска чего-то ещё,
+# и эта строка работает и без make:
+#
+#   make test    →  python3 scripts/run_all_tests.py   (или .\scripts\run_all_tests.ps1)
+#   make lock    →  .\scripts\gen_lockfiles.ps1        (bash-вариант: scripts/gen_lockfiles.sh)
+#   make up      →  docker compose up -d --build
+#
+# Правило проекта: сообщение, советующее `make X`, обязано называть и
+# вариант без make. Сторож — scripts/tests_commands_cross_platform.py.
 
 .PHONY: help check-prereqs up down build restart logs clean lock v8std v8std-check \
         test test-full test-strict baseline-update eval-all eval-summary \
@@ -16,6 +26,7 @@ help:
 	@echo "  make down            Остановить стек"
 	@echo "  make build           Пересобрать образы"
 	@echo "  make lock            Сгенерировать лок-файлы зависимостей (нужна сеть)"
+	@echo "                       на Windows: .\\scripts\\gen_lockfiles.ps1"
 	@echo "  make v8std           Забрать/обновить корпус стандартов v8std (нужна сеть)"
 	@echo "  make v8std-check     Показать версию и возраст корпуса стандартов"
 	@echo "  make restart         Перезапустить (down + up)"

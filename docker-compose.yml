@@ -349,6 +349,11 @@ services:
       - QDRANT_COLLECTION=platform_help
       - EMBEDDING_MODEL=intfloat/multilingual-e5-base
       - BM25_MODEL=Qdrant/bm25
+      # SEARCH-1, шаг 3: во сколько раз тяжелее результат названного в
+      # запросе диалекта («в запросе» → язык запросов, «в модуле» —
+      # встроенный). Действует ТОЛЬКО когда диалект назван словом; на
+      # остальных запросах выдача не меняется вовсе. 1 — выключить.
+      - HELP_DIALECT_WEIGHT=${HELP_DIALECT_WEIGHT:-1.5}
     # CFG-2: /healthz добавляет mcp_http.py. Проверяем через python —
     # в образе нет ни curl, ни wget, ставить их ради healthcheck'а незачем.
     healthcheck:

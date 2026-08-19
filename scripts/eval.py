@@ -11,6 +11,7 @@
 Использование:
     python3 scripts/eval.py                        # дефолт — через docker
     python3 scripts/eval.py --dataset evals/datasets/my.jsonl
+    python3 scripts/eval.py --dataset metadata_graph   # короткое имя (FIX-23)
     python3 scripts/eval.py --limit 3              # первые 3 примера
     python3 scripts/eval.py --local                # запуск на хосте, не в docker
     python3 scripts/eval.py --no-deps              # не поднимать зависимости
@@ -64,13 +65,82 @@ SERVERS = {
     "query": ("http://mcp-query-builder:8009/mcp",  "http://localhost:8009/mcp"),
 }
 # Датасет → сервер по умолчанию, чтобы не указывать --server каждый раз.
+# Ключ — имя файла БЕЗ расширения: с ним же сравнивается короткое имя,
+# которое рука сама пишет вместо пути (`--dataset metadata_graph`).
 DATASET_SERVER = {
-    "platform_help.jsonl": "help",
-    "v8std.jsonl": "v8std",
-    "bsl_checker.jsonl": "bsl",
-    "metadata_graph.jsonl": "meta",
-    "query_builder.jsonl": "query",
+    "platform_help": "help",
+    "v8std": "v8std",
+    "bsl_checker": "bsl",
+    "metadata_graph": "meta",
+    "query_builder": "query",
+    # Служебный однопримерный набор: транспорт, а не качество. Сервер
+    # у него не предопределён — указывать --server явно.
 }
+
+DATASETS_DIR = "evals/datasets"
+
+
+class DatasetRoutingError(Exception):
+    """Датасет не найден или неизвестно, к какому серверу с ним идти."""
+
+
+def resolve_dataset(raw: str) -> str:
+    """
+    Приводит `--dataset` к пути относительно корня проекта.
+
+    Принимает три формы: полный путь (`evals/datasets/x.jsonl`), имя файла
+    (`x.jsonl`) и короткое имя (`x`). Последнее — то, что печатается само:
+    именно так и был запущен прогон, который дал `FIX-23`.
+    """
+    p = (raw or "").strip().replace("\\", "/")
+    if not p:
+        raise DatasetRoutingError("--dataset пуст")
+    if "/" not in p:
+        if not p.endswith(".jsonl"):
+            p += ".jsonl"
+        p = f"{DATASETS_DIR}/{p}"
+    return p
+
+
+def known_datasets() -> list[str]:
+    d = ROOT / DATASETS_DIR
+    if not d.is_dir():
+        return []
+    return sorted(f.stem for f in d.glob("*.jsonl"))
+
+
+def resolve_server(dataset_path: str, explicit: str | None) -> str:
+    """
+    Какому серверу задавать вопросы этого датасета.
+
+    FIX-23. Раньше здесь стоял `DATASET_SERVER.get(имя, "help")`, и
+    неизвестное имя означало ровно то же, что «сервер не указан»: прогон
+    шёл дальше и печатал `[eval] сервер: help`. Команда
+    `eval.py --dataset metadata_graph` (имя вместо пути) упала на пути к
+    файлу, и про подмену сервера не сказала ни слова.
+
+    Опасен не тот случай, а соседний: лежи датасет по угаданному пути —
+    прогон **прошёл бы**. Датасетом графа против сервера справки, и цифры
+    вышли бы правдоподобно плохими. Молчаливая подмена, дающая
+    правдоподобный неверный результат, — та же семья, что `API-1` и
+    `FIX-16`.
+
+    Поэтому умолчания больше нет: имя, которого нет в карте, требует
+    явного `--server` либо отказ.
+    """
+    if explicit:
+        return explicit
+    stem = Path(dataset_path).stem
+    server = DATASET_SERVER.get(stem)
+    if server:
+        return server
+    raise DatasetRoutingError(
+        f"не знаю, к какому серверу идти с датасетом «{stem}»: его нет в "
+        f"карте DATASET_SERVER ({', '.join(sorted(DATASET_SERVER))}).\n"
+        f"Укажите сервер явно: --server {'|'.join(sorted(SERVERS))}\n"
+        f"Молча взять сервер по умолчанию нельзя: прогон датасета против "
+        f"чужого сервера не падает, а выдаёт правдоподобно плохие цифры."
+    )
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -204,12 +274,15 @@ def main() -> int:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     ap.add_argument("--dataset", default=DEFAULT_DATASET,
-                    help="Путь к .jsonl датасету (относительно корня проекта).")
+                    help="Путь к .jsonl датасету (относительно корня проекта) "
+                         "или короткое имя: metadata_graph, platform_help…")
     ap.add_argument("--out", default=DEFAULT_OUT,
                     help="Папка для отчётов.")
     ap.add_argument("--server", choices=sorted(SERVERS), default=None,
                     help="К какому серверу идти. По умолчанию определяется "
-                         "по имени датасета (см. DATASET_SERVER).")
+                         "по имени датасета (см. DATASET_SERVER); если имя "
+                         "неизвестно — прогон не начинается, а требует "
+                         "указать сервер явно (FIX-23).")
     ap.add_argument("--endpoint", default=None,
                     help="Явный MCP-эндпоинт. Перебивает --server.")
     ap.add_argument("--limit", type=int, default=0,
@@ -226,10 +299,32 @@ def main() -> int:
                          "сервисе: без него compose заведёт его обратно.")
     args = ap.parse_args()
 
+    # FIX-23. Разбор аргументов идёт ДО запуска: и путь, и сервер должны
+    # быть названы здесь, а не выясниться внутри контейнера. Раньше про
+    # ненайденный датасет говорил runner, а про подменённый сервер не
+    # говорил никто.
+    try:
+        args.dataset = resolve_dataset(args.dataset)
+    except DatasetRoutingError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    if not (ROOT / args.dataset).exists():
+        names = known_datasets()
+        print(f"ERROR: датасет не найден: {args.dataset}\n"
+              f"Есть такие: {', '.join(names) if names else '(ни одного)'}",
+              file=sys.stderr)
+        return 2
+
     if args.endpoint is None:
-        server = args.server or DATASET_SERVER.get(Path(args.dataset).name, "help")
+        try:
+            server = resolve_server(args.dataset, args.server)
+        except DatasetRoutingError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
         in_docker, on_host = SERVERS[server]
         args.endpoint = on_host if args.local else in_docker
+        print(f"[eval] датасет: {args.dataset}", file=sys.stderr)
         print(f"[eval] сервер: {server} -> {args.endpoint}", file=sys.stderr)
 
     if args.local:

@@ -295,8 +295,8 @@ if ($allOk) {
 
 Write-Host ""
 Write-Host "Что делать дальше:" -ForegroundColor Cyan
-Write-Host "  1. Прочитайте SETUP.md — там пошаговая инструкция"
-Write-Host "  2. Фаза 0:  .\cleanup.ps1                                  (если стек уже был развёрнут)"
-Write-Host "  3. Фаза 1:  py scripts\check_prereqs.py                    (проверка готовности)"
-Write-Host "              docker compose up -d --build"
+Write-Host "  1. Прочитайте README.md — там пошаговая инструкция"
+Write-Host "  2. Проверка готовности:  py scripts\check_prereqs.py"
+Write-Host "  3. Подъём стека:         docker compose up -d --build"
+Write-Host "  4. Тесты:                py scripts\run_all_tests.py"
 Write-Host ""

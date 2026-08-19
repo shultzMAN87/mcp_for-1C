@@ -49,16 +49,18 @@ from mcp.server.fastmcp import FastMCP
 try:
     from refusal import install_answerable_field
     from mcp_pagination import no_pagination
+    from tool_usage import tool_names, usage_snapshot
 except ImportError:  # pragma: no cover — путь только для локального запуска
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from refusal import install_answerable_field
     from mcp_pagination import no_pagination
+    from tool_usage import tool_names, usage_snapshot
 
 # Прореживание и перемешивание выдачи (см. help_ranking.py).
 # Импорт намеренно без try/except: если файл забыли положить в образ,
 # сервер должен упасть на старте, а не тихо отдавать выдачу без обработки —
 # ровно этот класс отказов и разбирался в HBK-1.
-from help_ranking import diversify_hits
+from help_ranking import DIALECT_WEIGHT, diversify_hits
 
 # PERF-6: модели грузятся ровно один раз, кто бы ни попросил.
 # PERF-6.1: клиент Qdrant — третья запись того же реестра.
@@ -674,6 +676,22 @@ def _announce_degrade(kind: str, message: str) -> None:
     _say(f"  ⚠ platform_help: {message}", err=True)
 
 
+def _dialect_weight() -> float:
+    """
+    SEARCH-1, шаг 3: во сколько раз тяжелее результат названного диалекта.
+
+    Читается из окружения на каждый вызов намеренно: подбирать это число
+    придётся на живом стенде, и перечитывать его без пересборки образа
+    дешевле, чем с ней. `HELP_DIALECT_WEIGHT=1` полностью отключает
+    правку — это и есть способ проверить, что она вообще на что-то влияет.
+    """
+    try:
+        value = float(os.environ.get("HELP_DIALECT_WEIGHT", DIALECT_WEIGHT))
+    except (TypeError, ValueError):
+        return DIALECT_WEIGHT
+    return value if value > 0 else DIALECT_WEIGHT
+
+
 def _help_search(query: str, limit: int = 10, kind_filter: str = ""):
     """
     Главный диспетчер поиска по platform_help.
@@ -694,7 +712,7 @@ def _help_search(query: str, limit: int = 10, kind_filter: str = ""):
     if kind == "hybrid":
         hits = _help_search_hybrid(query, fetch, kind_filter)
         if hits is not None:
-            return diversify_hits(hits, limit), "hybrid"
+            return diversify_hits(hits, limit, query, _dialect_weight()), "hybrid"
         _announce_degrade(
             "hybrid_to_dense",
             "гибридный поиск не отработал, перехожу на dense-only — "
@@ -704,7 +722,7 @@ def _help_search(query: str, limit: int = 10, kind_filter: str = ""):
     if kind in ("hybrid", "legacy_dense"):
         hits = _help_search_legacy_dense(query, fetch, kind_filter)
         if hits is not None:
-            return diversify_hits(hits, limit), "dense_only"
+            return diversify_hits(hits, limit, query, _dialect_weight()), "dense_only"
     _announce_degrade(
         "empty",
         f"поиск не вернул ничего (режим коллекции: {kind}) — "
@@ -1345,6 +1363,9 @@ def platform_help_stats() -> str:
         # знал наблюдатель, а выбирать по такому числу, что чинить, нельзя.
         "warmup": _models.state(),
         "fallback_items": len(set(i["name"] for i in BUILTIN.values())),
+        # TOOL-1: кого из инструментов этого сервера звали за время жизни
+        # контейнера, а кого ни разу.
+        "usage": usage_snapshot(tool_names(mcp)),
     }, ensure_ascii=False, indent=2)
 
 

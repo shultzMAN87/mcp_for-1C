@@ -83,9 +83,15 @@ class FakeNeo4j:
     """
 
     def __init__(self, counts=None, callsites=None, relations=None,
-                 fingerprints=True):
+                 fingerprints=True, relations_snapshot=True, has_method=None):
         self.round_trips = 0
         self.statements_seen = []
+        # PERF-12: снимок счётчиков рёбер, который пишет индексер. Флаг
+        # выключает его, чтобы проверить и запасной путь — подсчёт на лету.
+        self.relations_snapshot = relations_snapshot
+        # FIX-27: рёбра владения. По умолчанию их столько же, сколько
+        # процедур, — то есть граф здоров.
+        self.has_method = has_method
         self.counts = counts or {}
         self.callsites = callsites or {
             "resolved": 900, "unresolved": 100, "object_method": 40}
@@ -102,6 +108,17 @@ class FakeNeo4j:
         return {"results": results, "errors": []}
 
     def _answer(self, cypher, params):
+        if "relation_counts" in cypher:
+            if not self.relations_snapshot:
+                return self._rows(["data", "updated_at"], [])
+            return self._rows(
+                ["data", "updated_at"],
+                [[json.dumps(self.relations, ensure_ascii=False),
+                  1755400000000]])
+        if ":HAS_METHOD]" in cypher:
+            value = (self.has_method if self.has_method is not None
+                     else self.counts.get("Callable", 0))
+            return self._rows(["c"], [[value]])
         if "sum(CASE" in cypher:
             return self._rows(["resolved", "unresolved", "object_method"],
                               [[self.callsites["resolved"],
@@ -174,7 +191,11 @@ class TestOneRoundTrip(StatsCase):
         for label in DEFAULT_COUNTS:
             self.assertIn(f":{label})", joined, f"перестали считать {label}")
         self.assertIn("Fingerprint", joined)
-        self.assertIn("type(r)", joined)
+        # PERF-12: рёбра больше не обходятся на каждый вызов, но и не
+        # перестали считаться — они приезжают снимком. «Перестали считать»
+        # и «считаем иначе» — разные вещи, и проверка обязана их различать.
+        self.assertIn("relation_counts", joined)
+        self.assertIn(":HAS_METHOD]", joined, "FIX-27: владение не проверяется")
 
     def test_callsites_scanned_once(self):
         """
@@ -271,6 +292,90 @@ class TestAnswerUnchanged(StatsCase):
     def test_relations_keep_their_names(self):
         rep = self.stats()
         self.assertEqual(rep["relations"]["CALLS"], 5000)
+
+
+class TestRelationsSnapshot(StatsCase):
+    """
+    PERF-12. Обход всех рёбер (`MATCH ()-[r]->()`) — единственный неO(1)
+    запрос этого ответа; на боевом графе это 2,3 млн рёбер ради таблички из
+    тринадцати строк, и он давал `neo4j_ms` = 1032.
+
+    Теперь за обход платит индексация: снимок пишется раз за прогон, а
+    `metadata_stats` читает готовое. Проверяется и то, и другое — правка
+    про скорость не имеет права менять содержание.
+    """
+
+    def test_snapshot_is_read_instead_of_scanning(self):
+        self.stats()
+        joined = " ".join(self.fake.statements_seen)
+        self.assertIn("relation_counts", joined)
+        self.assertNotIn("MATCH ()-[r]->()", joined,
+                         "обход всех рёбер вернулся — PERF-12 отменён")
+
+    def test_relations_values_are_the_same_as_before(self):
+        rep = self.stats()
+        self.assertEqual(rep["relations"], {"CALLS": 5000, "HAS_ATTRIBUTE": 3000})
+
+    def test_snapshot_age_is_reported(self):
+        """
+        Снимок стареет — и об этом надо сказать. Устаревшее число, возраст
+        которого известен, честнее свежего, за которое платит каждый вызов.
+        """
+        note = self.stats()["index"]["relations"]
+        self.assertEqual(note["source"], "снимок индексации")
+        self.assertIn("counted_at_iso", note)
+        self.assertIn("age_hours", note)
+
+    def test_without_snapshot_falls_back_to_scanning(self):
+        """
+        Граф мог быть собран прежним индексером. Тогда рёбра считаются как
+        раньше — медленный ответ лучше отсутствующего, — но об этом
+        сообщается, иначе «почему stats опять тормозит» останется без
+        ответа.
+        """
+        self.fake.relations_snapshot = False
+        rep = self.stats()
+        self.assertEqual(rep["relations"]["CALLS"], 5000)
+        note = rep["index"]["relations"]
+        self.assertEqual(note["source"], "подсчёт на лету")
+        self.assertIn("снимка счётчиков нет", note["note"])
+
+
+class TestOwnershipBlock(StatsCase):
+    """
+    FIX-27. Главный вопрос этого блока — не «сколько модулей», а «можно ли
+    опереться на ответ про состав методов». 18 августа ответ был «нельзя», и
+    сказать об этом было некому.
+    """
+
+    def test_healthy_graph_reports_ok(self):
+        own = self.stats()["code"]["ownership"]
+        self.assertEqual(own["state"], "ok")
+        self.assertTrue(own["answerable"])
+
+    def test_broken_ownership_is_not_answerable(self):
+        """Состояние 18 августа: процедуры есть, модулей и рёбер нет."""
+        self.fake.counts = dict(DEFAULT_COUNTS, Module=0)
+        self.fake.has_method = 0
+        own = self.stats()["code"]["ownership"]
+        self.assertEqual(own["state"], "broken")
+        self.assertFalse(own["answerable"])
+        self.assertIn("НЕ значит", own["meaning"])
+
+    def test_orphans_are_counted(self):
+        self.fake.has_method = 2400          # при 2500 :Callable
+        own = self.stats()["code"]["ownership"]
+        self.assertEqual(own["without_owner"], 100)
+        self.assertEqual(own["state"], "partial")
+
+    def test_ownership_costs_no_extra_round_trip(self):
+        """
+        Проверка держится на том, что она бесплатна: два числа уже
+        считаются, третье — счётчик по конкретному типу ребра, тоже O(1).
+        Сторож, за который надо платить, выключают.
+        """
+        self.stats()
+        self.assertEqual(self.fake.round_trips, 1)
 
 
 class TestBatchTransport(unittest.TestCase):

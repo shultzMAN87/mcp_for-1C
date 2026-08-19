@@ -293,10 +293,11 @@ def check_dead_weight(rep: Report) -> None:
     независимо от того, есть ли на машине GPU. На стенде GPU не проброшен —
     два с половиной гигабайта не выполняются ни разу.
 
-    Почему WARN, а не FAIL. Лечится это пересборкой лока (`make lock`), для
-    которой нужны сеть и docker. Отказ на этом означал бы, что проверка
-    краснеет по причине, которую сегодняшний коммит исправить не может, —
-    ровно то, из-за чего у истории гита появился `--worktree-only`.
+    Почему WARN, а не FAIL. Лечится это пересборкой лока (`make lock`, на
+    Windows — `./scripts/gen_lockfiles.ps1`), для которой нужны сеть и
+    docker. Отказ на этом означал бы, что проверка краснеет по причине,
+    которую сегодняшний коммит исправить не может, — ровно то, из-за чего
+    у истории гита появился `--worktree-only`.
     Публиковаться с толстым образом можно; не знать о нём — нельзя.
     """
     lock = ROOT / "1c-mcp-suite" / "requirements-embeddings.lock.txt"
@@ -319,8 +320,10 @@ def check_dead_weight(rep: Report) -> None:
         rep.warn(
             f"лок образа справки всё ещё тянет CUDA ({len(heavy)} пакетов, "
             f"~2,5 ГБ мёртвого груза). Индекс CPU-сборок в "
-            f"requirements-embeddings.txt уже объявлен — осталось пересобрать: "
-            f"make lock && docker compose build mcp-platform-help"
+            f"requirements-embeddings.txt уже объявлен — осталось пересобрать:\n"
+            f"    Linux/WSL:   make lock && docker compose build mcp-platform-help\n"
+            f"    PowerShell:  ./scripts/gen_lockfiles.ps1; "
+            f"docker compose build mcp-platform-help"
         )
     else:
         rep.warn(

@@ -27,8 +27,10 @@
 echo '{"id":"probe","tool":"platform_help_search","args":{"query":"разделить строку","limit":5},"expect":{"hard":[{"type":"non_empty"}],"soft":[]}}' \
   > evals/datasets/probe.jsonl
 
-# Запускаем только его
-python3 scripts/eval.py --dataset evals/datasets/probe.jsonl
+# Запускаем только его. --server обязателен: имени `probe` нет в карте
+# датасет→сервер, а угадывать сервер за вас скрипт больше не станет
+# (FIX-23) — иначе проба ушла бы к серверу справки молча.
+python3 scripts/eval.py --dataset probe --server help
 
 # В evals/reports/probe_*.json смотрим summary.examples[0].response_preview.results[]
 # Там увидишь реальные name_ru / name_en / full_name — скопируй в values своего настоящего примера.

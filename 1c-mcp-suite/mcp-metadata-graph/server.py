@@ -50,6 +50,14 @@ from graph_state import (            # noqa: E402
 from refusal import (               # noqa: E402
     install_answerable_field, note_degraded,
 )
+# FIX-27: приговор о владении кодом по трём O(1)-счётчикам.
+from graph_integrity import (       # noqa: E402
+    HAS_METHOD_COUNT_CYPHER, STATE_OK, ownership_report,
+)
+# TOOL-1: кого из инструментов не зовёт никто.
+from tool_usage import (            # noqa: E402
+    tool_names, usage_snapshot,
+)
 
 # B-4: единый словарь постраничности. Здесь была ВТОРАЯ РЕАЛИЗАЦИЯ модуля
 # — фолбэк на случай, если mcp_pagination не найден: свой PaginationParams,
@@ -414,12 +422,29 @@ def metadata_stats() -> str:
                    "RETURN n.value AS value, n.mode AS mode, "
                    "n.updated_at AS updated_at")
 
-    RELATIONS = ("MATCH ()-[r]->() RETURN type(r) AS rel, count(*) AS cnt "
-                 "ORDER BY cnt DESC")
+    # PERF-12. Здесь стоял `MATCH ()-[r]->() RETURN type(r), count(*)` —
+    # обход всех 2,3 млн рёбер ради таблички из тринадцати строк. Замер
+    # 18 августа: `neo4j_ms` = 1032 при том, что остальные восемь счётчиков
+    # берутся из счётчиков хранилища и стоят копейки.
+    #
+    # Обход никуда не делся, но платит за него индексация: снимок пишется
+    # раз за прогон (graph_writer.relations_snapshot_write), а здесь
+    # читается за O(1) вместе с остальными. Форма ответа прежняя —
+    # `relations` остаётся словарём «тип ребра → число».
+    #
+    # Если снимка нет (граф собран прежним индексером), считаем как раньше:
+    # медленный ответ лучше отсутствующего. Про это говорим в `index`.
+    RELATIONS_SNAPSHOT = ("MATCH (n:Fingerprint {kind: 'relation_counts'}) "
+                          "RETURN n.data AS data, n.updated_at AS updated_at")
 
+    # FIX-27. Счётчик по КОНКРЕТНОМУ типу ребра — тоже O(1) из хранилища,
+    # в отличие от бестипового обхода выше. Он и даёт проверку владения:
+    # у процедуры владелец ровно один, поэтому «без владельца» — это
+    # разность между числом процедур и числом рёбер HAS_METHOD.
     statements = (
         [(cypher, None) for _, cypher in COUNTS]
-        + [(CALLSITES, None), (BY_KIND, None), (RELATIONS, None)]
+        + [(CALLSITES, None), (BY_KIND, None), (RELATIONS_SNAPSHOT, None),
+           (HAS_METHOD_COUNT_CYPHER, None)]
         + [(FINGERPRINT, {"kind": "metadata_xml"}),
            (FINGERPRINT, {"kind": "bsl_source"})]
     )
@@ -432,8 +457,9 @@ def metadata_stats() -> str:
         return default if value is None else value
 
     counts = {name: first(blocks[i], "c") for i, (name, _) in enumerate(COUNTS)}
-    cs_rows, by_kind, rel_rows = blocks[8], blocks[9], blocks[10]
-    fp_rows = {"xml": blocks[11], "bsl": blocks[12]}
+    cs_rows, by_kind, snap_rows = blocks[8], blocks[9], blocks[10]
+    has_method = first(blocks[11], "c")
+    fp_rows = {"xml": blocks[12], "bsl": blocks[13]}
 
     cs_resolved     = first(cs_rows, "resolved")
     cs_unresolved   = first(cs_rows, "unresolved")
@@ -460,8 +486,54 @@ def metadata_stats() -> str:
         "callsites_object_method": cs_object_method,
         "resolve_coverage_pct": round(100.0 * cs_resolved / cs_denom, 2) if cs_denom else 0.0,
     }
+    # FIX-27: заполняется ниже, когда посчитано владение. Ключ объявлен
+    # здесь, чтобы порядок полей в ответе был устойчивым.
+    code_block["ownership"] = None
 
-    relations = {row["rel"]: row["cnt"] for row in rel_rows}
+    # ─ PERF-12: рёбра из снимка, иначе — как раньше, обходом ─
+    relations, relations_note = {}, {}
+    snapshot = snap_rows[0] if snap_rows else None
+    if snapshot and snapshot.get("data"):
+        try:
+            relations = json.loads(snapshot["data"])
+        except (TypeError, ValueError):
+            relations = {}
+    if relations:
+        relations_note = {"source": "снимок индексации"}
+        updated = snapshot.get("updated_at")
+        if isinstance(updated, (int, float)) and updated > 0:
+            secs = updated / 1000.0
+            relations_note["counted_at_iso"] = time.strftime(
+                "%Y-%m-%d %H:%M:%S", time.localtime(secs))
+            relations_note["age_hours"] = round((time.time() - secs) / 3600.0, 1)
+    else:
+        # Снимка нет — считаем сами. Это прежнее поведение и прежняя цена
+        # (около секунды на боевом графе); молчать о ней нельзя, иначе
+        # «почему stats опять тормозит» останется без ответа.
+        rel_rows = _neo4j_rows(
+            "MATCH ()-[r]->() RETURN type(r) AS rel, count(*) AS cnt "
+            "ORDER BY cnt DESC")
+        relations = {row["rel"]: row["cnt"] for row in rel_rows}
+        relations_note = {
+            "source": "подсчёт на лету",
+            "note": ("снимка счётчиков нет — граф собран прежним индексером. "
+                     "Обход всех рёбер стоит около секунды; снимок появится "
+                     "после следующей индексации (PERF-12)"),
+        }
+        note_degraded("счётчики рёбер посчитаны обходом: снимка нет")
+
+    # ─ FIX-27: есть ли у кода владелец ─
+    #
+    # Проверка стоит ноль: оба числа уже посчитаны выше, и оба O(1). Ровно
+    # эта дешевизна и делает вопрос уместным в каждом ответе — сторож,
+    # который надо звать отдельно, не зовут никогда.
+    ownership = ownership_report(
+        counts["callables"], counts["modules"], has_method,
+        objects=counts["objects"],
+    )
+    if ownership["state"] != STATE_OK:
+        note_degraded(f"владение кодом: {ownership['message']}")
+    code_block["ownership"] = ownership
 
     # OBS-2: чем и когда собран граф. Узлы :Fingerprint пишет индексер
     # (graph_writer.fingerprint_write) — значение, режим и время. Наружу
@@ -489,12 +561,22 @@ def metadata_stats() -> str:
                                                     time.localtime(secs))
             entry["age_hours"] = round((time.time() - secs) / 3600.0, 1)
         index_block[key] = entry
+    # PERF-12: откуда взялась табличка `relations` и насколько она свежая.
+    # Место здесь, а не рядом с самой табличкой: `relations` — словарь
+    # «тип ребра → число», и подмешивать в него служебные ключи значило бы
+    # сломать форму ответа ради примечания.
+    index_block["relations"] = relations_note
 
     return json.dumps({
         "metadata":    metadata_block,
         "code":        code_block,
         "relations":   relations,
         "index":       index_block,
+        # TOOL-1: кого из инструментов этого сервера звали за время жизни
+        # контейнера, а кого ни разу. Двадцать девять инструментов — это
+        # двадцать девять строк в списке у агента, и каждая незваная мешает
+        # остальным; убирать их наугад нельзя, поэтому сначала счётчик.
+        "usage":       usage_snapshot(tool_names(mcp)),
         "graph_empty": metadata_block["objects"] == 0 and code_block["callables"] == 0,
         # PERF-10: цифра, по которой правку можно проверить на своём стенде,
         # а не поверить на слово. Тот же приём, что `--breakdown` у справки
@@ -502,11 +584,12 @@ def metadata_stats() -> str:
         # (PERF-6.1), поэтому здесь мерится весь поход целиком.
         "timing": {
             "neo4j_ms": round((time.monotonic() - t_start) * 1000, 1),
-            "round_trips": 1,
-            "note": ("До PERF-10 походов в Neo4j было 15, а обходов метки "
-                     "CallSite — 3. Если neo4j_ms всё ещё в секундах, "
-                     "остаток приходится на обход всех рёбер графа "
-                     "(relations) — он единственный здесь не O(1)."),
+            "round_trips": 1 if relations_note.get("source") == "снимок индексации" else 2,
+            "note": ("PERF-10 свёл 15 походов в Neo4j к одному, PERF-12 убрал "
+                     "последний неO(1)-запрос — обход всех рёбер графа; "
+                     "теперь он читается снимком (index.relations). Если "
+                     "neo4j_ms всё ещё в секундах, снимка нет и рёбра "
+                     "считаются на лету."),
         },
     }, ensure_ascii=False, indent=2)
 

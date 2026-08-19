@@ -211,7 +211,8 @@ class TestGeneratorsUseTheSameFlags(unittest.TestCase):
 class TestCpuTorchIsDeclared(unittest.TestCase):
     """
     PERF-11, исходная сторона. Сам лок здесь не проверяется: пересобрать его
-    может только машина с сетью и docker (`make lock`), а до пересборки
+    может только машина с сетью и docker (`make lock`, на Windows —
+    `scripts/gen_lockfiles.ps1`), а до пересборки
     проверка была бы красной по причине, которую сегодняшний коммит не
     исправляет. Про непересобранный лок предупреждает `check_publish.py` —
     предупреждением, а не отказом.
@@ -232,9 +233,30 @@ class TestCpuTorchIsDeclared(unittest.TestCase):
         """
         text = self.SRC.read_text(encoding="utf-8")
         self.assertIn("PERF-11", text)
+        # Названы обе команды: `make lock` и gen_lockfiles.ps1 (DOC-6) —
+        # советовать make на машине, где его нет, значит советовать вполсилы.
         self.assertIn("make lock", text,
                       "не сказано главного: правка этого файла без "
                       "пересборки лока не меняет ничего")
+        self.assertIn("gen_lockfiles.ps1", text,
+                      "названа только команда make, которой на Windows нет")
+
+    def test_extra_index_scope_is_documented(self):
+        """
+        HYG-6. `--extra-index-url` — индекс ДОПОЛНИТЕЛЬНЫЙ, для всего
+        файла, а не «индекс только для torch»: такого понятия у pip нет.
+        В логе чистой сборки видно, что `jinja2` и `markupsafe` приехали с
+        `download.pytorch.org`. Версии те же и закреплены в локе, то есть
+        поведение не изменилось, — но решение молчаливое, а молчаливые
+        решения про цепочку поставки объясняют задним числом.
+
+        Проверяется не поведение, а то, что оно названо вслух: следующий,
+        кто будет чистить файл, должен прочитать это раньше, чем удивится.
+        """
+        text = self.SRC.read_text(encoding="utf-8")
+        self.assertIn("HYG-6", text)
+        self.assertIn("jinja2", text,
+                      "не названо, какие именно пакеты едут не с PyPI")
 
 
 if __name__ == "__main__":

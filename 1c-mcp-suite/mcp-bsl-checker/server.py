@@ -42,9 +42,11 @@ from mcp.server.fastmcp import FastMCP
 # локальном запуске тестов — уровнем выше, в 1c-mcp-suite/.
 try:
     from refusal import install_answerable_field, refusal
+    from tool_usage import tool_names, usage_snapshot
 except ImportError:  # pragma: no cover — путь только для локального запуска
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from refusal import install_answerable_field, refusal
+    from tool_usage import tool_names, usage_snapshot
 
 # B-7: состояние анализатора. Лежит рядом с server.py и в образе тоже
 # попадает в /app, поэтому импорт прямой.
@@ -336,19 +338,20 @@ def bsl_stats() -> str:
     B-7: инструмент состояния был у трёх серверов набора из пяти. Отсутствие
     четвёртого стоило двух минут ожидания, чтобы услышать «java не найдена».
     """
-    return json.dumps(
-        health_report(
-            jar_path=BSL_LS_JAR,
-            java_cmd=JAVA_CMD,
-            java_opts=JAVA_OPTS,
-            analysis_timeout_sec=ANALYSIS_TIMEOUT_SEC,
-            config_path=BSL_LS_CONFIG,
-            log=_analysis_log,
-            lsp_state=_lsp_client.state(),
-            warmup_state=_warmup.state(),
-        ),
-        ensure_ascii=False, indent=2,
+    report = health_report(
+        jar_path=BSL_LS_JAR,
+        java_cmd=JAVA_CMD,
+        java_opts=JAVA_OPTS,
+        analysis_timeout_sec=ANALYSIS_TIMEOUT_SEC,
+        config_path=BSL_LS_CONFIG,
+        log=_analysis_log,
+        lsp_state=_lsp_client.state(),
+        warmup_state=_warmup.state(),
     )
+    # TOOL-1: кого из инструментов этого сервера звали за время жизни
+    # контейнера, а кого ни разу.
+    report["usage"] = usage_snapshot(tool_names(mcp))
+    return json.dumps(report, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()

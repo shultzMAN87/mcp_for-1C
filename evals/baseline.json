@@ -3,28 +3,28 @@
   "_как_получено": "docker compose up -d --force-recreate metadata-indexer (METADATA_FORCE_XML=true), затем этот скрипт с --update",
   "tolerance_pct": 5.0,
   "counts": {
-    "MetadataObject": 10747,
+    "MetadataObject": 10748,
     "Attribute": 42763,
-    "Form": 8202,
-    "Module": 14041,
-    "Callable": 231113,
-    "CallSite": 722233,
-    "Parameter": 348746,
+    "Form": 8203,
+    "Module": 14042,
+    "Callable": 231129,
+    "CallSite": 722206,
+    "Parameter": 348762,
     "Subsystem": 93,
-    "rel_HAS_METHOD": 231085,
+    "rel_HAS_METHOD": 231101,
     "rel_HAS_ATTRIBUTE": 42763,
     "rel_CONTAINS": 3489,
-    "rel_CALLS": 351441,
-    "rel_CALL_SITE": 722233,
+    "rel_CALLS": 351629,
+    "rel_CALL_SITE": 722206,
     "orphan_Callable": 28
   },
   "fingerprints": {
     "metadata_xml": {
-      "value": "d205c809f044372d7f26e638d10989c1a60b1d3e9f4dfcf548159d9c4db34eb9",
+      "value": "966d0e516d3c7d97ea706eeef344d8da51aeee998f72f0ff031dc4e583d7889b",
       "mode": "stat"
     },
     "bsl_source": {
-      "value": "796fed02220c3fda40b986d271ca13499b11ca50df90be953b893f85f14ead10",
+      "value": "a2275b77a081eacad389899141147580773289180682e44512495796feb84d66",
       "mode": "stat"
     },
     "partial_owners_000": {

@@ -448,6 +448,56 @@ def fingerprint_write(neo: Neo4j, value: str, kind: str = "metadata_xml",
     )
 
 
+# ─── PERF-12: снимок счётчиков рёбер ─────────────────────────────────────
+#
+# Почему снимок, а не подсчёт по запросу. `metadata_stats` отдаёт табличку
+# «сколько рёбер каждого типа». Считалась она запросом `MATCH ()-[r]->()
+# RETURN type(r), count(*)` — без указания типа, то есть обходом всех
+# 2,3 млн рёбер ради тринадцати строк. Замер 18 августа: `neo4j_ms` = 1032
+# при том, что остальные восемь счётчиков берутся из счётчиков хранилища и
+# стоят копейки.
+#
+# Отвергнутая версия — перебор `db.relationshipTypes()` с поштучным счётом.
+# Дешевле, но меняет ответ: типы, у которых рёбер не осталось, начнут
+# приходить нулями. Менять форму ответа ради скорости — ровно то, за что
+# `PERF-6.1` поймал сам себя.
+#
+# Поэтому: обход остаётся, но платит за него индексация — один раз за
+# прогон, там, где рядом и так идут минуты. `metadata_stats` читает готовое
+# за O(1) и говорит, когда снимок снят: устаревший снимок, о возрасте
+# которого известно, честнее свежего числа, за которое платит каждый вызов.
+RELATIONS_SNAPSHOT_KIND = "relation_counts"
+
+RELATION_COUNTS_CYPHER = (
+    "MATCH ()-[r]->() RETURN type(r) AS rel, count(*) AS cnt ORDER BY cnt DESC"
+)
+
+RELATIONS_SNAPSHOT_WRITE_CYPHER = """
+MERGE (n:Fingerprint {kind: $kind})
+SET n.data = $data, n.updated_at = timestamp()
+"""
+
+
+def relations_snapshot_write(neo: Neo4j) -> dict[str, int]:
+    """
+    Пересчитывает рёбра по типам и кладёт результат в служебный узел.
+
+    Возвращает саму табличку — вызывающему она обычно нужна для лога.
+
+    Узел `:Fingerprint {kind: 'relation_counts'}`: метка уже имеет
+    констрейнт на `kind`, то есть индекс, и не удаляется ни одной из
+    очисток слоя. Заводить ради этого новую метку значило бы добавить в
+    схему сущность, которую потом надо помнить при каждой чистке.
+    """
+    rows = neo.rows(RELATION_COUNTS_CYPHER)
+    counts = {r["rel"]: r["cnt"] for r in rows if r.get("rel")}
+    neo.query(RELATIONS_SNAPSHOT_WRITE_CYPHER, {
+        "kind": RELATIONS_SNAPSHOT_KIND,
+        "data": json.dumps(counts, ensure_ascii=False, separators=(",", ":")),
+    })
+    return counts
+
+
 # ─── Очистка слоя ─────────────────────────────────────────────────────────
 
 
@@ -1023,8 +1073,45 @@ def write_edges(neo: Neo4j, edges: list[dict], batch: int = 500,
             if len(group) >= 5000 or prog.elapsed >= 5.0:
                 prog.done()
         _warn_shortfall(f"рёбра {name}", len(group), written)
+        _report_merge_dedup(name, group, written)
         counters[rel] = counters.get(rel, 0) + written
     return counters
+
+
+# FIX-29. Расхождение на единицу: писатель отчитался `HAS_METHOD: 231 102`,
+# в базе оказалось 231 101.
+#
+# Потерянной строки за этим нет. `_query_written` считает строки, ДОШЕДШИЕ
+# до записи, а `MERGE` по паре узлов схлопывает одинаковые пары: две строки
+# с одним и тем же (src, dst) дают одно ребро. Для `:CALLS` и `:OPERATES_ON`
+# это давно известно и объявлено (428 918 вызовов → 351 694 ребра), а вот
+# для `HAS_METHOD` дубль — событие: он означает, что в модуле дважды
+# объявлена процедура с одним именем, либо два файла претендуют на один
+# `module_id`.
+#
+# Правило поэтому такое: не «подогнать счётчик», а НАЗВАТЬ дубли. Счётчик,
+# который не сходится, — это почти всегда непонятое правило, и лечится оно
+# формулировкой правила, а не вычитанием.
+def _report_merge_dedup(name: str, group: list, written: int) -> None:
+    """Сколько строк схлопнется в базе из-за MERGE по паре — вслух."""
+    pairs = set()
+    dups: list[str] = []
+    for e in group:
+        key = (e.get("src"), e.get("dst"))
+        if key in pairs:
+            if len(dups) < 3:
+                dups.append(f"{key[0]} → {key[1]}")
+        else:
+            pairs.add(key)
+    duplicates = len(group) - len(pairs)
+    if not duplicates:
+        return
+    tail = f" (напр. {', '.join(dups)})" if dups else ""
+    log.info(
+        "  рёбра %s: строк %d, из них дублей по паре %d — MERGE схлопнет их, "
+        "в базе будет %d%s",
+        name, len(group), duplicates, written - duplicates, tail,
+    )
 
 
 # ─── Пишет конфигурационный узел ──────────────────────────────────────────

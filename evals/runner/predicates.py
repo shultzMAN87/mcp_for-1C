@@ -287,6 +287,42 @@ def _pred_path_non_empty(pred: dict, result: Any) -> PredicateOutcome:
     )
 
 
+def _pred_path_contains(pred: dict, result: Any) -> PredicateOutcome:
+    """
+    В тексте по пути встречаются все указанные подстроки.
+
+    `EVAL-5`. Понадобился там, где проверять надо СОБРАННЫЙ ТЕКСТ, а не
+    поле ответа. `query_build` не возвращает списка соединений вовсе —
+    соединения существуют только внутри `query`. Первая редакция примера
+    ждала поле `joins`, которого в ответе нет и не было: предикат не мог
+    пройти ни при какой работе инструмента.
+
+    Сравнение регистронезависимое: ключевые слова языка запросов пишут
+    и капсом, и как придётся, а мерить надо смысл, а не привычку.
+    """
+    path = str(pred.get("path", "")).strip()
+    subs = pred.get("substrings") or ([pred["substr"]] if pred.get("substr") else [])
+    if not path or not subs:
+        return PredicateOutcome(
+            type="path_contains", passed=False,
+            detail={"error": "path and substrings (or substr) are required"},
+        )
+
+    found, value = _dig(result, path)
+    text = value if isinstance(value, str) else ("" if not found else str(value))
+    low = text.lower()
+    missing = [s for s in subs if str(s).lower() not in low]
+
+    return PredicateOutcome(
+        type="path_contains",
+        passed=bool(found and not missing),
+        detail={"path": path, "found": found, "missing": missing,
+                # Кусок текста в отчёт: без него красный пример
+                # заставляет лезть в json руками.
+                "excerpt": text[:400]},
+    )
+
+
 def _pred_field_at_least(pred: dict, result: Any) -> PredicateOutcome:
     """
     Число по пути не меньше порога.
@@ -328,15 +364,75 @@ def _pred_field_at_least(pred: dict, result: Any) -> PredicateOutcome:
     return PredicateOutcome(type="field_at_least", passed=passed, detail=detail)
 
 
+def _pred_hit_field_in_top_k(pred: dict, result: Any) -> PredicateOutcome:
+    """
+    Поле хита в топ-k принимает одно из ожидаемых значений.
+
+    `SEARCH-1`. Все предикаты до этого смотрели в имена: `name_in_top_k`,
+    `full_name_contains`. Для диалекта этого мало — вопрос не «какое имя
+    в выдаче», а «из какой книги справки страница».
+
+    Признак диалекта в payload есть с самого начала и называется
+    `hbk_file`: язык запросов живёт в `shquery_ru.hbk` (128 страниц),
+    встроенный — в `shcntx_ru.hbk` (около 25 500) и `shlang_ru.hbk`.
+    Проверять его было нечем, поэтому единственный пример про диалект
+    (`ph-005`) мерил не диалект, а имена, которые от него зависят
+    косвенно.
+
+    Предикат намеренно общий: поле задаётся в датасете. Через него
+    проверяется и `chunk_type`, и любое другое поле хита, которое
+    когда-нибудь понадобится, — заводить по предикату на поле значило бы
+    повторить историю с тремя списками образов (`B-6`).
+    """
+    k = max(1, int(pred.get("k", 5)))
+    field = str(pred.get("field", "")).strip()
+    values = pred.get("values") or []
+    if not field or not isinstance(values, list) or not values:
+        return PredicateOutcome(
+            type="hit_field_in_top_k",
+            passed=False,
+            detail={"error": "field and non-empty values are required"},
+        )
+    wanted = {_norm(v) for v in values if isinstance(v, str)}
+
+    hits = _hits(result)[:k]
+    match_rank = None
+    observed = []
+    for idx, h in enumerate(hits, start=1):
+        actual = _norm(h.get(field))
+        observed.append(h.get(field))
+        if actual and actual in wanted and match_rank is None:
+            match_rank = idx
+
+    return PredicateOutcome(
+        type="hit_field_in_top_k",
+        passed=match_rank is not None,
+        detail={
+            "k": k,
+            "field": field,
+            "values": values,
+            "match_rank": match_rank,
+            # Наблюдаемые значения печатаются целиком: когда пример
+            # красный, ответ на «почему» обычно уже здесь.
+            "observed": observed,
+        },
+        match_rank=match_rank,
+    )
+
+
 _HANDLERS = {
     "non_empty": _pred_non_empty,
     "results_count_at_least": _pred_results_count_at_least,
     "name_in_top_k": _pred_name_in_top_k,
     "any_hit_kind": _pred_any_hit_kind,
     "full_name_contains": _pred_full_name_contains,
+    # SEARCH-1: любое поле хита, а не только имя (нужен для hbk_file).
+    "hit_field_in_top_k": _pred_hit_field_in_top_k,
     # STD-6: для ответов, у которых нет ключа `results` (сервер v8std).
     "field_equals": _pred_field_equals,
     "path_non_empty": _pred_path_non_empty,
+    # Текстовый предикат: см. комментарий у _pred_path_contains (EVAL-5).
+    "path_contains": _pred_path_contains,
     # Числовой предикат: см. комментарий у _pred_field_at_least.
     "field_at_least": _pred_field_at_least,
 }
