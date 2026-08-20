@@ -57,6 +57,10 @@ import time
 import zipfile
 from pathlib import Path
 
+# CFG-4.1: разбор файла настроек и проверка configurationRoot. Модуль
+# лежит рядом, в образе оба файла попадают в /app.
+import bsl_config
+
 __all__ = [
     "PROBE_TIMEOUT_SEC",
     "parse_java_version",
@@ -353,7 +357,9 @@ def health_report(jar_path: str, java_cmd: str = "java",
                   config_path: str = "", log: AnalysisLog | None = None,
                   java_probe=None, jar_probe=None, now: float | None = None,
                   lsp_state: dict | None = None,
-                  warmup_state: dict | None = None) -> dict:
+                  warmup_state: dict | None = None,
+                  config_report: dict | None = None,
+                  config_strict: bool = False) -> dict:
     """
     Полный ответ `bsl_stats`.
 
@@ -376,17 +382,48 @@ def health_report(jar_path: str, java_cmd: str = "java",
     if not jar.get("present"):
         reasons.append(f"jar анализатора недоступен: {jar.get('error') or 'причина неизвестна'}")
 
-    config = {"path": config_path, "present": None}
-    if config_path:
-        config["present"] = Path(config_path).exists()
-        if not config["present"]:
-            # Не отказ: без своего конфига BSL LS работает на наборе
-            # диагностик по умолчанию. Но молчать об этом нельзя — состав
-            # замечаний будет не тот, которого ждёт пользователь.
-            reasons.append(f"конфигурация диагностик не найдена: {config_path}")
+    # CFG-4. Раньше секция собиралась здесь и отвечала на вопрос «файл на
+    # месте?». Вопрос неверный: файл на месте и файл ПРИМЕНЁН — разные
+    # вещи, между ними лежит разбор JSON и решение не передавать битый
+    # конфиг анализатору. Разбор делает `bsl_config.describe`, и он же —
+    # источник для секции `config` в ответах проверок. Два разных ответа
+    # про один файл были бы хуже, чем никакого.
+    #
+    # Ветка со старой проверкой оставлена ради тестов и локальных вызовов,
+    # где разбор не передают.
+    if config_report is not None:
+        config = dict(config_report)
+        config["strict"] = config_strict
+        # CFG-4.1: `applied: true` не означает «работает». Параметр
+        # configurationRoot разрешается только при анализе, и если каталога
+        # в смонтированной выгрузке нет, BSL LS об этом не сообщает.
+        # Проверяем здесь, чтобы ответ был готов до первого отчёта, а не
+        # после того, как отчёту уже поверили.
+        root_check = bsl_config.check_mounted_workspace(config)
+        if root_check:
+            config["configuration_root_check"] = root_check
+            if root_check.get("warning"):
+                reasons.append(root_check["warning"])
+        if config.get("requested") and not config.get("applied"):
+            reasons.append(
+                config.get("error", "конфигурация диагностик недоступна")
+                + (" — при BSL_LS_CONFIG_STRICT=true проверки отвечают "
+                   "отказом, а не набором по умолчанию" if config_strict
+                   else " — проверки идут набором ПО УМОЛЧАНИЮ")
+            )
     else:
-        config["note"] = ("BSL_LS_CONFIG не задан — анализ идёт на наборе "
-                          "диагностик по умолчанию")
+        config = {"path": config_path, "present": None}
+        if config_path:
+            config["present"] = Path(config_path).exists()
+            if not config["present"]:
+                # Не отказ: без своего конфига BSL LS работает на наборе
+                # диагностик по умолчанию. Но молчать об этом нельзя —
+                # состав замечаний будет не тот, которого ждёт пользователь.
+                reasons.append(
+                    f"конфигурация диагностик не найдена: {config_path}")
+        else:
+            config["note"] = ("BSL_LS_CONFIG не задан — анализ идёт на наборе "
+                              "диагностик по умолчанию")
 
     report = {
         "linter_available": ready,

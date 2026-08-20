@@ -319,16 +319,33 @@ services:
       # ОтчетПоКонфигурации.txt — bsl_check_directory анализировал пустоту.
       # Настоящая XML-выгрузка лежит в ./workspace. Путь вынесен в .env (PORT-2).
       - ${WORKSPACE_DIR:-./workspace}:/data/1c-src:ro
+      # CFG-4: свой набор диагностик. Монтируется КАТАЛОГ, а не файл:
+      # docker при bind-mount несуществующего файла создаёт на его месте
+      # каталог, и опечатка в пути дала бы не «файла нет», а «файл есть, но
+      # это папка» — с невнятной ошибкой чтения вместо внятного отказа.
+      # Правка правил не требует пересборки образа, только restart.
+      - ${BSL_CONFIG_DIR:-./bsl-config}:/app/bsl-config:ro
     environment:
       - MCP_SHARED_SECRET=${MCP_SHARED_SECRET:?Задайте MCP_SHARED_SECRET в .env (openssl rand -hex 32)}
       - MCP_PORT=8002
       - BSL_LS_JAR=${BSL_LS_JAR:-/opt/bsl-language-server/bsl-ls.jar}
       - JAVA_OPTS=${JAVA_OPTS:--Xmx1g}
+      # CFG-4. Пустое значение = работать набором диагностик по умолчанию.
+      # Что применено на самом деле — видно в bsl_stats.config и в секции
+      # config каждого ответа проверки, вместе с отпечатком файла.
+      - BSL_LS_CONFIG=${BSL_LS_CONFIG:-/app/bsl-config/bsl-language-server.json}
+      # true — отвечать отказом, а не проверять не тем набором правил.
+      - BSL_LS_CONFIG_STRICT=${BSL_LS_CONFIG_STRICT:-false}
       # PERF-9: JVM поднимается фоном при старте контейнера, а не на первой
       # проверке агента. Раньше первый пришедший платил ~14 с тишины
       # (bsl-001 в отчёте), а второй — 224 мс. Выключается BSL_WARMUP=false;
       # тогда поведение возвращается к ленивому старту из PERF-7.
       - BSL_WARMUP=${BSL_WARMUP:-true}
+      # PERF-7: auto | on | off — быстрый путь через долгоживущий BSL LS.
+      # CFG-4.1: переменная документирована в README с самого начала, но в
+      # контейнер не пробрасывалась — выключить быстрый путь было нечем.
+      # Тот же жанр, что FIX-30: механизм описан, рычага нет.
+      - BSL_LSP_MODE=${BSL_LSP_MODE:-auto}
     restart: unless-stopped
 
   # ── 3. Справка по платформе 1С + ГИБРИДНЫЙ поиск по ИТС ───────────

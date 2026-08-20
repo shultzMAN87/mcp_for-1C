@@ -76,6 +76,10 @@ import threading
 import time
 from pathlib import Path
 
+# CFG-4: сборка командной строки для JVM — общая с путём `--analyze`.
+# Модуль лежит рядом, в образе оба файла попадают в /app.
+import bsl_config
+
 __all__ = [
     "LspUnavailable",
     "BslLspClient",
@@ -207,9 +211,11 @@ def to_report(path: str, diagnostics: list) -> dict:
 
 
 def _default_launcher(java_cmd: str, java_opts: str, jar: str, config: str):
-    cmd = [java_cmd, *java_opts.split(), "-jar", jar]
-    if config:
-        cmd.extend(["--configuration", config])
+    # CFG-4: argv собирает bsl_config — общий модуль с путём `--analyze`.
+    # Раньше команда собиралась здесь, а вторая, почти такая же, — в
+    # server.py; ключ `--configuration` был в обеих, но доезжал только
+    # отсюда (FIX-30).
+    cmd = bsl_config.lsp_argv(java_cmd, java_opts, jar, config)
     return subprocess.Popen(
         cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, bufsize=0,
@@ -679,11 +685,11 @@ def _compare(file_path: str, java_cmd: str, java_opts: str, jar: str,
     # ── путь 1: как было ──
     t0 = time.monotonic()
     with tempfile.TemporaryDirectory() as outdir:
-        cmd = [java_cmd, *java_opts.split(), "-jar", jar, "--analyze",
-               "--srcDir", str(path.parent), "--outputDir", outdir,
-               "--reporter", "json"]
-        if config:
-            cmd.extend(["--configuration", config])
+        # CFG-4: та же сборка argv, что в бою. Своя копия здесь означала
+        # бы, что сверка сравнивает не то, что работает: расхождение
+        # набором правил выглядело бы как расхождение между путями.
+        cmd = bsl_config.analyze_argv(
+            java_cmd, java_opts, jar, str(path.parent), outdir, config)
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         report_file = Path(outdir) / "bsl-json.json"
         analyze = []
@@ -754,7 +760,16 @@ def main() -> int:  # pragma: no cover — ручной инструмент
     jar = os.environ.get("BSL_LS_JAR", "/opt/bsl-language-server/bsl-ls.jar")
     java_cmd = os.environ.get("BSL_JAVA_CMD", "java")
     java_opts = os.environ.get("JAVA_OPTS", "-Xmx512m")
-    config = os.environ.get("BSL_LS_CONFIG", "")
+    # CFG-4: сверка обязана идти ТЕМ ЖЕ набором правил, что и сервер, —
+    # включая решение «битый конфиг анализатору не передаём». Иначе она
+    # сравнивала бы два пути на настройках, которых в бою нет.
+    _cfg = bsl_config.describe(os.environ.get("BSL_LS_CONFIG", ""))
+    config = bsl_config.config_arg(_cfg)
+    if _cfg.get("requested"):
+        print("Набор диагностик: "
+              + (f"{_cfg['path']} ({_cfg.get('fingerprint', '?')}, "
+                 f"mode={_cfg.get('mode', '?')})" if _cfg.get("applied")
+                 else f"НЕ ПРИМЕНЁН — {_cfg.get('error', '')}"))
 
     if args.compare is not None:
         return _compare(args.compare, java_cmd, java_opts, jar, config)

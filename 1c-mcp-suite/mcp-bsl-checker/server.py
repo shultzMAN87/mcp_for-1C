@@ -41,11 +41,11 @@ from mcp.server.fastmcp import FastMCP
 # OBS-1: единый словарь отказа. В образе всё лежит плоско в /app, при
 # локальном запуске тестов — уровнем выше, в 1c-mcp-suite/.
 try:
-    from refusal import install_answerable_field, refusal
+    from refusal import install_answerable_field, note_degraded, refusal
     from tool_usage import tool_names, usage_snapshot
 except ImportError:  # pragma: no cover — путь только для локального запуска
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from refusal import install_answerable_field, refusal
+    from refusal import install_answerable_field, note_degraded, refusal
     from tool_usage import tool_names, usage_snapshot
 
 # B-7: состояние анализатора. Лежит рядом с server.py и в образе тоже
@@ -59,6 +59,10 @@ from bsl_lsp import BslLspClient, LspUnavailable, to_report
 # PERF-9: прогрев JVM при старте контейнера. Лежит рядом с server.py и в
 # образе тоже попадает в /app.
 from bsl_warmup import Warmup, say as _warmup_say
+
+# CFG-4: файл настроек диагностик — один источник правды на оба пути
+# анализа. Лежит рядом с server.py и в образе тоже попадает в /app.
+import bsl_config
 
 # B-4: единый словарь постраничности — тот же модуль, что у остальных.
 try:
@@ -81,6 +85,20 @@ JAVA_OPTS = os.environ.get("JAVA_OPTS", "-Xmx512m")
 JAVA_CMD = os.environ.get("BSL_JAVA_CMD", "java")
 ANALYSIS_TIMEOUT_SEC = int(os.environ.get("BSL_ANALYSIS_TIMEOUT_SEC", "120"))
 
+# CFG-4. Файл настроек читается ОДИН раз при старте, а не на каждый вызов:
+# состав правил не должен меняться посреди сессии оттого, что кто-то
+# сохранил файл. Перечитывается перезапуском контейнера — как и всё
+# остальное в наборе.
+_CONFIG = bsl_config.describe(BSL_LS_CONFIG)
+_CONFIG_ARG = bsl_config.config_arg(_CONFIG)
+
+# CFG-4, строгий режим. Продолжение A-5 (`--strict` в скриптах): там же,
+# где мы отказались считать «набор не запускался» успехом, странно считать
+# успехом «проверил не тем набором правил». По умолчанию выключен —
+# деградация полезнее отказа, пока пользователь не решил иначе.
+BSL_LS_CONFIG_STRICT = os.environ.get(
+    "BSL_LS_CONFIG_STRICT", "false").strip().lower() in ("1", "true", "yes")
+
 # B-7: чем ответит bsl_stats на вопрос «как ты себя чувствуешь». Пополняется
 # в одном месте — в `_run_analysis`, ниже.
 _analysis_log = AnalysisLog()
@@ -93,9 +111,14 @@ _analysis_log = AnalysisLog()
 # контейнер простоем, а первый пришедший агент — четырнадцатью секундами
 # тишины в отчёте `bsl-001`. Теперь процесс поднимается фоновым потоком при
 # старте, а лениво — только если BSL_WARMUP=false.
+#
+# CFG-4 изменил здесь один аргумент: клиенту передаётся не сырое значение
+# переменной, а путь, ПРОВЕРЕННЫЙ на существование и разбор. Раньше битый
+# JSON ронял JVM на старте, `bsl_stats` показывал «LSP не поднялся», а
+# причину приходилось искать в stderr контейнера.
 _lsp_client = BslLspClient(
     java_cmd=JAVA_CMD, java_opts=JAVA_OPTS,
-    jar=BSL_LS_JAR, config=BSL_LS_CONFIG,
+    jar=BSL_LS_JAR, config=_CONFIG_ARG,
 )
 
 _warmup = Warmup(_lsp_client)
@@ -164,13 +187,22 @@ def _std_lookup(diagnostics: list) -> dict:
 REPORT_NAME = "bsl-json.json"
 
 
-def _analyze_dir(src_path: str, config_path: str = "") -> dict:
+def _analyze_dir(src_path: str, config_path: str | None = None) -> dict:
     """
     Прежний путь: запуск JVM с `--analyze` на каталог.
 
     Возвращает либо разобранный отчёт, либо dict с ключом `error` — второе
     вызывающий код обязан отличать от пустого списка диагностик.
+
+    FIX-30. Умолчание было пустой строкой, и это выглядело безобидно:
+    «конфиг не передали — значит, не нужен». На деле передать его было
+    некому — все три инструмента звали `_run_analysis` без этого
+    аргумента. Теперь умолчание — `None`, то есть «взять общий», а пустая
+    строка осталась осмысленной: «намеренно без конфигурации» (нужна
+    сверке `bsl_lsp.py --compare`).
     """
+    if config_path is None:
+        config_path = _CONFIG_ARG
     # B-7. Отсутствующий jar до этой правки приезжал как `report_missing`:
     # java стартовала, писала «Unable to access jarfile» в stderr и уходила
     # с ненулевым кодом, а отчёта не было. Технически честно (stderr и код
@@ -193,16 +225,12 @@ def _analyze_dir(src_path: str, config_path: str = "") -> dict:
         )
 
     with tempfile.TemporaryDirectory() as outdir:
-        cmd = [
-            JAVA_CMD, *JAVA_OPTS.split(),
-            "-jar", BSL_LS_JAR,
-            "--analyze",
-            "--srcDir", src_path,
-            "--outputDir", outdir,
-            "--reporter", "json",
-        ]
-        if config_path:
-            cmd.extend(["--configuration", config_path])
+        # CFG-4: команду собирает bsl_config — тот же модуль, что собирает
+        # её для долгоживущего процесса. Пока это делалось здесь и в
+        # bsl_lsp.py порознь, ключ `--configuration` был в обеих функциях,
+        # а доезжал только в одной (FIX-30).
+        cmd = bsl_config.analyze_argv(
+            JAVA_CMD, JAVA_OPTS, BSL_LS_JAR, src_path, outdir, config_path)
 
         try:
             result = subprocess.run(
@@ -273,7 +301,7 @@ def _analyze_dir(src_path: str, config_path: str = "") -> dict:
             )
 
 
-def _run_analysis(src_path: str, config_path: str = "",
+def _run_analysis(src_path: str, config_path: str | None = None,
                   file_path: str = "", text: str | None = None) -> dict:
     """
     Один вход для всех трёх инструментов: выбор пути и запись исхода.
@@ -286,6 +314,13 @@ def _run_analysis(src_path: str, config_path: str = "",
     PERF-7. Если проверяется ОДИН файл, сначала пробуем долгоживущий BSL LS
     (доли секунды вместо десяти). Не вышло — молча уходим на `--analyze`:
     ответ будет тот же, только медленный.
+
+    CFG-4/FIX-30. «Тот же» — это обещание, и до правки оно не
+    выполнялось: долгоживущий процесс поднимался с `--configuration`, а
+    `--analyze` запускался без него. Один и тот же файл давал разный
+    состав замечаний в зависимости от того, жив ли LSP, и признака в
+    ответе не было. Теперь оба пути берут `_CONFIG_ARG` — и берут его
+    из одного места, а не из аргумента, который можно забыть.
 
     «Молча» здесь важно и означает не «скрытно». Пользователю незачем
     видеть отказ там, где ответ получен, — но `bsl_stats` покажет и
@@ -324,6 +359,56 @@ def _run_analysis(src_path: str, config_path: str = "",
     return result
 
 
+def _config_section(src_path: str = "") -> dict:
+    """
+    CFG-4: чем помечается КАЖДЫЙ ответ проверки.
+
+    Два действия в одном месте, потому что забывать их порознь — ровно то,
+    что уже случилось с `config_path` (FIX-30):
+      - пометить ответ деградировавшим, если ваш набор правил не применён;
+      - вернуть секцию `config` для тела ответа.
+
+    Отпечаток здесь не украшение. «Замечаний не найдено» при `mode: ONLY`
+    означает «не найдено ИЗ ЭТОГО СПИСКА» — без отпечатка отчёт нельзя ни
+    воспроизвести, ни сравнить с предыдущим.
+    """
+    reason = bsl_config.degradation_reason(_CONFIG)
+    if reason:
+        note_degraded(reason)
+    section = bsl_config.brief(_CONFIG, src_path)
+    warning = section.get("warning")
+    if warning:
+        note_degraded(warning)
+    return section
+
+
+def _strict_refusal() -> dict | None:
+    """
+    Отказ вместо ответа, если включён BSL_LS_CONFIG_STRICT и конфига нет.
+
+    Смысл строгого режима — не «сломаться погромче», а не дать построить
+    вывод о качестве кода на не том наборе правил. Поэтому это именно
+    отказ (`answerable: false`), а не пустой результат.
+    """
+    if not BSL_LS_CONFIG_STRICT:
+        return None
+    reason = bsl_config.degradation_reason(_CONFIG)
+    if not reason:
+        return None
+    return refusal(
+        "config_invalid",
+        f"Набор диагностик не применён: {reason}",
+        meaning=(
+            "Это НЕ значит, что замечаний нет. Проверка не запускалась: "
+            "включён строгий режим, а анализ набором по умолчанию дал бы "
+            "другой состав замечаний и ввёл бы в заблуждение."
+        ),
+        hint=("Почините файл настроек или снимите BSL_LS_CONFIG_STRICT. "
+              "Подробности — bsl_stats, секция config."),
+        config=bsl_config.brief(_CONFIG),
+    )
+
+
 @mcp.tool()
 def bsl_stats() -> str:
     """
@@ -344,6 +429,11 @@ def bsl_stats() -> str:
         java_opts=JAVA_OPTS,
         analysis_timeout_sec=ANALYSIS_TIMEOUT_SEC,
         config_path=BSL_LS_CONFIG,
+        # CFG-4: полный разбор файла настроек, а не только «есть ли он».
+        # Раньше `bsl_stats` отвечал на вопрос «файл на месте?», а нужный
+        # вопрос — «каким набором правил получен отчёт».
+        config_report=_CONFIG,
+        config_strict=BSL_LS_CONFIG_STRICT,
         log=_analysis_log,
         lsp_state=_lsp_client.state(),
         warmup_state=_warmup.state(),
@@ -364,6 +454,10 @@ def bsl_check_code(code: str) -> str:
     форме `bslls:<Имя>`. Чтобы узнать, какой стандарт нарушен и почему,
     передай `std_lookup.codes` в `v8std_explain_diagnostics` (сервер v8std).
     """
+    strict = _strict_refusal()
+    if strict:
+        return json.dumps(strict, ensure_ascii=False, indent=2)
+
     with tempfile.TemporaryDirectory() as tmpdir:
         bsl_file = Path(tmpdir) / "Module.bsl"
         bsl_file.write_text(code, encoding="utf-8-sig")
@@ -371,6 +465,11 @@ def bsl_check_code(code: str) -> str:
         # быстрому передаём ещё и текст — LSP разбирает его из сообщения,
         # не читая диск.
         report = _run_analysis(tmpdir, file_path=str(bsl_file), text=code)
+
+    # CFG-4: src_path не передаём намеренно. Фрагмент кода всегда лежит во
+    # временном каталоге, `configurationRoot` в нём не разрешится никогда,
+    # и предупреждать об этом на каждом вызове — шум, а не сигнал.
+    config = _config_section()
 
     if "error" in report:
         return json.dumps(report, ensure_ascii=False)
@@ -400,13 +499,18 @@ def bsl_check_code(code: str) -> str:
                 })
 
     if not diagnostics:
-        return json.dumps({"status": "ok", "message": "Ошибок не найдено"}, ensure_ascii=False)
+        return json.dumps({
+            "status": "ok",
+            "message": "Ошибок не найдено",
+            "config": config,
+        }, ensure_ascii=False, indent=2)
 
     return json.dumps({
         "status": "issues_found",
         "count": len(diagnostics),
         "diagnostics": diagnostics,
         "std_lookup": _std_lookup(diagnostics),
+        "config": config,
     }, ensure_ascii=False, indent=2)
 
 
@@ -436,7 +540,12 @@ def bsl_check_file(file_path: str) -> str:
             ),
         }, ensure_ascii=False)
 
+    strict = _strict_refusal()
+    if strict:
+        return json.dumps(strict, ensure_ascii=False, indent=2)
+
     report = _run_analysis(str(p.parent), file_path=str(p))
+    config = _config_section(str(p.parent))
     if "error" in report:
         return json.dumps(report, ensure_ascii=False, indent=2)
 
@@ -456,7 +565,11 @@ def bsl_check_file(file_path: str) -> str:
                 })
 
     if not diagnostics:
-        return json.dumps({"status": "ok", "message": f"В файле {p.name} ошибок не найдено"}, ensure_ascii=False)
+        return json.dumps({
+            "status": "ok",
+            "message": f"В файле {p.name} ошибок не найдено",
+            "config": config,
+        }, ensure_ascii=False, indent=2)
 
     return json.dumps({
         "status": "issues_found",
@@ -464,6 +577,7 @@ def bsl_check_file(file_path: str) -> str:
         "count": len(diagnostics),
         "diagnostics": diagnostics,
         "std_lookup": _std_lookup(diagnostics),
+        "config": config,
     }, ensure_ascii=False, indent=2)
 
 
@@ -488,7 +602,14 @@ def bsl_check_directory(dir_path: str, limit: int = 50, offset: int = 0) -> str:
             ),
         }, ensure_ascii=False)
 
+    strict = _strict_refusal()
+    if strict:
+        return json.dumps(strict, ensure_ascii=False, indent=2)
+
     report = _run_analysis(str(p))
+    # CFG-4: здесь `configurationRoot` проверяется всерьёз — это
+    # единственный инструмент, который анализирует настоящую выгрузку.
+    config = _config_section(str(p))
     if "error" in report:
         return json.dumps(report, ensure_ascii=False)
 
@@ -533,6 +654,7 @@ def bsl_check_directory(dir_path: str, limit: int = 50, offset: int = 0) -> str:
         ),
         "summary": page,
         "std_lookup": _std_lookup(all_codes),
+        "config": config,
     }, ensure_ascii=False, indent=2)
 
 

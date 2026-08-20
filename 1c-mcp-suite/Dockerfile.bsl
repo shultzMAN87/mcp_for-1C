@@ -61,6 +61,10 @@ COPY mcp-bsl-checker/bsl_lsp.py /app/bsl_lsp.py
 # которую назвал tests_delivery.py. Без неё сервер падает на импорте — то
 # есть образ собирается, а контейнер не поднимается вовсе.
 COPY mcp-bsl-checker/bsl_warmup.py /app/bsl_warmup.py
+# CFG-4: разбор файла настроек диагностик. Пятая подряд строка COPY в этом
+# образе, и первая, которую назвали заранее, а не после падения контейнера:
+# tests_delivery.py читает импорты server.py и требует строку сам.
+COPY mcp-bsl-checker/bsl_config.py /app/bsl_config.py
 
 EXPOSE 8002
 
