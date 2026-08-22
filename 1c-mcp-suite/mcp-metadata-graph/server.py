@@ -434,8 +434,18 @@ def metadata_stats() -> str:
     #
     # Если снимка нет (граф собран прежним индексером), считаем как раньше:
     # медленный ответ лучше отсутствующего. Про это говорим в `index`.
+    # PERF-12, остаток. `n.callsites` — три числа про резолв вызовов,
+    # снятые той же индексацией. Прежде они считались запросом CALLSITES
+    # выше, и он обходил 722 206 узлов `:CallSite` на КАЖДЫЙ вызов: предикат
+    # по свойству (`resolved = true`) счётчиками хранилища не берётся, в
+    # отличие от `count(:CallSite)`.
+    #
+    # Довод тот же, что был для рёбер: числа меняются ровно при индексации,
+    # значит каждый вызов пересчитывал неизменившееся. Свойство читается
+    # тем же запросом, что и `data`, — лишнего похода в базу не появилось.
     RELATIONS_SNAPSHOT = ("MATCH (n:Fingerprint {kind: 'relation_counts'}) "
-                          "RETURN n.data AS data, n.updated_at AS updated_at")
+                          "RETURN n.data AS data, n.callsites AS callsites, "
+                          "n.updated_at AS updated_at")
 
     # FIX-27. Счётчик по КОНКРЕТНОМУ типу ребра — тоже O(1) из хранилища,
     # в отличие от бестипового обхода выше. Он и даёт проверку владения:
@@ -443,7 +453,7 @@ def metadata_stats() -> str:
     # разность между числом процедур и числом рёбер HAS_METHOD.
     statements = (
         [(cypher, None) for _, cypher in COUNTS]
-        + [(CALLSITES, None), (BY_KIND, None), (RELATIONS_SNAPSHOT, None),
+        + [(BY_KIND, None), (RELATIONS_SNAPSHOT, None),
            (HAS_METHOD_COUNT_CYPHER, None)]
         + [(FINGERPRINT, {"kind": "metadata_xml"}),
            (FINGERPRINT, {"kind": "bsl_source"})]
@@ -457,13 +467,42 @@ def metadata_stats() -> str:
         return default if value is None else value
 
     counts = {name: first(blocks[i], "c") for i, (name, _) in enumerate(COUNTS)}
-    cs_rows, by_kind, snap_rows = blocks[8], blocks[9], blocks[10]
-    has_method = first(blocks[11], "c")
-    fp_rows = {"xml": blocks[12], "bsl": blocks[13]}
+    by_kind, snap_rows = blocks[8], blocks[9]
+    has_method = first(blocks[10], "c")
+    fp_rows = {"xml": blocks[11], "bsl": blocks[12]}
+    snapshot = snap_rows[0] if snap_rows else None
 
-    cs_resolved     = first(cs_rows, "resolved")
-    cs_unresolved   = first(cs_rows, "unresolved")
-    cs_object_method = first(cs_rows, "object_method")
+    # ─ PERF-12 (остаток): числа резолва из снимка, иначе — обходом ─
+    callsites, callsites_note = {}, {}
+    if snapshot and snapshot.get("callsites"):
+        try:
+            callsites = json.loads(snapshot["callsites"]) or {}
+        except (TypeError, ValueError):
+            callsites = {}
+    if callsites:
+        callsites_note = {"source": "снимок индексации"}
+    else:
+        # Снимка нет (граф собран прежним индексером) — считаем как раньше.
+        # Медленный ответ лучше отсутствующего; про цену говорим вслух,
+        # иначе «почему stats опять полсекунды» останется без ответа.
+        cs_rows = _neo4j_rows(CALLSITES)
+        callsites = {
+            "resolved":      first(cs_rows, "resolved"),
+            "unresolved":    first(cs_rows, "unresolved"),
+            "object_method": first(cs_rows, "object_method"),
+        }
+        callsites_note = {
+            "source": "подсчёт на лету",
+            "note": ("снимка чисел резолва нет — граф собран прежним "
+                     "индексером. Обход узлов :CallSite стоит сотни "
+                     "миллисекунд; снимок появится после следующей "
+                     "индексации (PERF-12)"),
+        }
+        note_degraded("числа резолва посчитаны обходом :CallSite: снимка нет")
+
+    cs_resolved      = int(callsites.get("resolved") or 0)
+    cs_unresolved    = int(callsites.get("unresolved") or 0)
+    cs_object_method = int(callsites.get("object_method") or 0)
     cs_gaps  = cs_unresolved - cs_object_method
     cs_denom = cs_resolved + cs_gaps
 
@@ -492,7 +531,6 @@ def metadata_stats() -> str:
 
     # ─ PERF-12: рёбра из снимка, иначе — как раньше, обходом ─
     relations, relations_note = {}, {}
-    snapshot = snap_rows[0] if snap_rows else None
     if snapshot and snapshot.get("data"):
         try:
             relations = json.loads(snapshot["data"])
@@ -566,6 +604,9 @@ def metadata_stats() -> str:
     # «тип ребра → число», и подмешивать в него служебные ключи значило бы
     # сломать форму ответа ради примечания.
     index_block["relations"] = relations_note
+    # PERF-12 (остаток): откуда взялись числа резолва. Соседняя строка и
+    # соседний вопрос: снимок стареет одинаково для обоих.
+    index_block["callsites"] = callsites_note
 
     return json.dumps({
         "metadata":    metadata_block,
@@ -584,12 +625,16 @@ def metadata_stats() -> str:
         # (PERF-6.1), поэтому здесь мерится весь поход целиком.
         "timing": {
             "neo4j_ms": round((time.monotonic() - t_start) * 1000, 1),
-            "round_trips": 1 if relations_note.get("source") == "снимок индексации" else 2,
+            "round_trips": 1 + sum(
+                1 for note in (relations_note, callsites_note)
+                if note.get("source") != "снимок индексации"),
             "note": ("PERF-10 свёл 15 походов в Neo4j к одному, PERF-12 убрал "
-                     "последний неO(1)-запрос — обход всех рёбер графа; "
-                     "теперь он читается снимком (index.relations). Если "
-                     "neo4j_ms всё ещё в секундах, снимка нет и рёбра "
-                     "считаются на лету."),
+                     "оба неO(1)-запроса: обход всех рёбер графа и обход "
+                     "узлов :CallSite ради чисел резолва. Оба читаются "
+                     "снимком, который пишет индексация (index.relations, "
+                     "index.callsites). Если neo4j_ms всё ещё в сотнях "
+                     "миллисекунд — снимка нет, и что-то из этого считается "
+                     "на лету; смотрите source в обоих разделах."),
         },
     }, ensure_ascii=False, indent=2)
 

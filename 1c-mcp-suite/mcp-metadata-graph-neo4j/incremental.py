@@ -58,7 +58,7 @@ from pathlib import Path
 from typing import Optional
 
 from graph_writer import (
-    Neo4j, ensure_schema,
+    Neo4j, ensure_schema, edges_created,
     write_module_nodes, write_callable_nodes, write_parameter_nodes,
     write_callsite_nodes, write_type_nodes, write_edges,
     write_meta_nodes, write_attribute_nodes, write_tabular_section_nodes,
@@ -111,13 +111,14 @@ def _norm_rel(src_root: Path, filepath: str) -> Optional[str]:
         pass
 
     # Фолбэк: общий хвост по известным top-level директориям выгрузки.
-    # Хвост должен начинаться с одной из этих папок ИЛИ с tests-extension.
+    # Хвост должен начинаться с одной из этих папок (`tests-extension`
+    # входит в множество наравне с видами — см. _TAIL_TOP_DIRS ниже).
     # Если src_root реально существует на диске (и в нём есть нужный хвост) —
     # дополнительно проверяем существование, чтобы случайные строки типа
     # `/etc/Catalogs/foo.bsl` не маппились.
     parts = pp.parts  # ('/', 'workspace', 'Catalogs', ...) на POSIX
     for i, part in enumerate(parts):
-        if part in _TAIL_TOP_DIRS or part == "tests-extension":
+        if part in _TAIL_TOP_DIRS:
             tail = PurePosixPath(*parts[i:])
             tail_str = str(tail)
             # Доп.санити: если src_root существует — должен существовать
@@ -134,20 +135,25 @@ def _norm_rel(src_root: Path, filepath: str) -> Optional[str]:
     return None
 
 
-# Top-level папки выгрузки 1С (синхрон с metadata_xml.KINDS + bsl_parser.DIR_TO_KIND_ENG).
-# Используется только в `_norm_rel` для tail-suffix фолбэка.
-_TAIL_TOP_DIRS = frozenset({
-    "Catalogs", "Documents", "Enums", "DataProcessors", "Reports",
-    "InformationRegisters", "AccumulationRegisters", "AccountingRegisters",
-    "CalculationRegisters", "ChartsOfCharacteristicTypes", "ChartsOfAccounts",
-    "ChartsOfCalculationTypes", "DocumentJournals", "CommonModules",
-    "Constants", "ExchangePlans", "BusinessProcesses", "Tasks",
-    "Subsystems", "CommonCommands", "CommonForms", "HTTPServices",
-    "WebServices", "ScheduledJobs", "SettingsStorages", "FilterCriteria",
-    "SessionParameters", "CommonAttributes", "CommonPictures",
-    "CommonTemplates", "FunctionalOptions", "DefinedTypes", "Roles",
-    "Languages", "EventSubscriptions",
-})
+# Top-level папки выгрузки 1С. Используется только в `_norm_rel` для
+# tail-suffix фолбэка.
+#
+# FIX-32. Здесь стоял рукописный список из тридцати пяти папок — при том,
+# что `KINDS` импортируется строкой выше и содержит сорок три. Восьми видов
+# из `FIX-8` в нём не было, и путь `/workspace/Sequences/X.xml` от watcher'а
+# уходил в `path_outside_src_root`: частичное обновление молча пропускало
+# файл. Никакой ошибки при этом не возникало — пропуск и есть штатный ответ
+# `_norm_rel` на незнакомый путь.
+#
+# Это пятое расхождение производного списка с источником в проекте. Первые
+# четыре — три строки `COPY` в Dockerfile'ах и пара в генераторах лок-файлов
+# (`LOCK-1`) — чинились одинаково: список выводится из источника, а тест
+# сверяет множества. Рукописная копия расходится не потому, что кто-то
+# поленился, а потому, что источник меняют в другом файле.
+#
+# `tests-extension` добавляется явно: это не вид метаданных, а каталог
+# расширения, и в `KINDS` его быть не может.
+_TAIL_TOP_DIRS = frozenset(k[0] for k in KINDS) | {"tests-extension"}
 
 
 # ─── BSL: точечный апдейт одного модуля ──────────────────────────────────
@@ -657,16 +663,37 @@ def relink_code_ownership(neo: Neo4j, meta_id: str) -> dict:
     матч без метки не использует индекс — та самая грабля `PERF-4`, которая
     в этом проекте случалась трижды.
 
-    Возвращает `{'has_method': N}` — сколько связей восстановлено или
-    подтверждено. Работает по индексу `callable_module_id`, поэтому стоит
-    столько же, сколько сам объект, а не весь граф.
+    Возвращает `{'has_method': N, 'matched': N, 'created': N|None}`.
+
+    `FIX-31`. Раньше здесь было одно число — `count(*)`, — и 18 августа оно
+    показало 83 при 99 фактически созданных рёбрах. Причина не в запросе:
+    `MATCH (c) MATCH (m) MERGE …` порождает строку на пару, и счётчик строк
+    отвечает не на тот вопрос, который здесь задают. Восстановление
+    владения — единственное место, где `MERGE` идёт БЕЗ предварительного
+    сноса, поэтому «сколько создано» тут и есть искомое: на здоровом графе
+    оно ноль, а не восемьдесят три.
+
+    `has_method` = `created`, когда база его прислала, иначе прежнее
+    `matched`. Ноль в этом поле означает «чинить было нечего», и это
+    хороший ответ, а не пустой.
     """
     params = {"id": meta_id, "prefix": meta_id + "."}
-    total = 0
+    matched = 0
+    created: int | None = 0
+    with_stats = getattr(neo, "rows_with_stats", None)
     for cypher in (RELINK_OWNERSHIP_META_CYPHER, RELINK_OWNERSHIP_FORM_CYPHER):
-        rows = neo.rows(cypher, params)
-        total += (rows[0].get("n") or 0) if rows else 0
-    return {"has_method": total}
+        if callable(with_stats):
+            rows, stats = with_stats(cypher, params)
+        else:
+            rows, stats = neo.rows(cypher, params), {}
+        matched += (rows[0].get("n") or 0) if rows else 0
+        made = stats.get("relationships_created")
+        created = None if (created is None or made is None) else created + int(made)
+    return {
+        "has_method": matched if created is None else created,
+        "matched": matched,
+        "created": created,
+    }
 
 
 def upsert_xml_file(neo: Neo4j, src_root: Path, filepath: str) -> dict:
@@ -735,7 +762,8 @@ def upsert_xml_file(neo: Neo4j, src_root: Path, filepath: str) -> dict:
     # HAS_VALUE / OF_TYPE / CONTAINS / PARENT_OF / OWNED_BY / BASED_ON /
     # REGISTERS. RESOLVES_TO build_graph НЕ создал (видел только один
     # объект) — досоздаём ниже отдельно.
-    edge_counters = write_edges(neo, graph["edges"])
+    edge_report: dict = {}
+    edge_counters = write_edges(neo, graph["edges"], report=edge_report)
 
     # ── RESOLVES_TO: от всех :Type, что мы записали, к живым :MetadataObject ──
     # Type.target вида "Catalog.АукВидыАукционов" → ребро (:Type)-[:RESOLVES_TO]->(:MetadataObject {id: target}).
@@ -767,6 +795,9 @@ def upsert_xml_file(neo: Neo4j, src_root: Path, filepath: str) -> dict:
             "Type": len(graph["type_nodes"]),
         },
         "edges_written": edge_counters,
+        # FIX-31: сколько связей база создала на самом деле. `edges_written`
+        # считает дошедшие до записи строки — это разные числа, и оба нужны.
+        "edges_created": edges_created(edge_report),
         "resolves_to_rebuilt": n_resolves,
         "unresolved_refs": graph["stats"].get("unresolved_refs", 0),
     }

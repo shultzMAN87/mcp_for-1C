@@ -67,6 +67,8 @@ __all__ = [
     "probe_java",
     "jar_manifest",
     "jar_version",
+    "jar_diagnostics",
+    "diagnostics_inventory",
     "probe_jar",
     "AnalysisLog",
     "health_report",
@@ -243,6 +245,102 @@ def probe_jar(path) -> dict:
     return out
 
 
+# ─── CFG-5: какие диагностики вообще существуют в этом jar ───────────────
+#
+# Задача. Файл настроек объявляет 85 диагностик, `mode: ONLY` включает
+# ТОЛЬКО их. Опечатка в имени (`UsingModalWindws` вместо `UsingModalWindows`)
+# для BSL LS — просто неизвестный ключ: он его игнорирует. Мы же считаем
+# диагностику объявленной, `diagnostics_enabled` показывает на единицу
+# больше правды, а проверка, ради которой строку писали, молча выключена.
+#
+# PLAN-9 предлагал ловить предупреждения BSL LS в stderr при прогреве и
+# честно признавал, что тот может ничего не писать. Проверять это нечем
+# без стенда — и не нужно: состав диагностик лежит в самом jar.
+#
+# Как. BSL Language Server выводит код диагностики из имени класса: класс
+# `EmptyCodeBlockDiagnostic` даёт код `EmptyCodeBlock`. Правило не наше — оно
+# и есть механизм разрешения кодов внутри анализатора, поэтому список,
+# собранный по именам классов, не может разойтись с тем, что анализатор
+# признаёт.
+#
+# Почему это лучше JSON Schema. Схему пришлось бы тянуть в образ и держать
+# в соответствии с `BSL_LS_VERSION` руками — то есть завести шестой
+# рукописный список проекта. Здесь источник и есть тот файл, который
+# исполняется: обновили `BSL_LS_VERSION` — список обновился сам.
+#
+# Цена: чтение центрального каталога zip. Имена без распаковки, на jar в
+# 43 МБ это единицы миллисекунд, и делается один раз при старте.
+_DIAG_CLASS_RE = re.compile(
+    r"(?:^|/)diagnostics/([A-Za-z][A-Za-z0-9]*)Diagnostic\.class$")
+
+# Ниже этого числа считаем, что раскладка jar другая и мы её не поняли.
+# Тогда честный ответ — «не знаю», а не «все 85 ваших диагностик выдуманы»:
+# сторож, который при непонимании обвиняет пользователя, хуже отсутствующего.
+_DIAG_SANITY_MIN = 50
+
+
+def jar_diagnostics(path) -> set[str]:
+    """
+    Коды диагностик, которые знает этот jar. Пустое множество — «не смогли».
+
+    Вложенные классы (`XxxDiagnostic$1.class`) отсеиваются регулярным
+    выражением: код диагностики у них тот же, и они дали бы дубли.
+    """
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = zf.namelist()
+    except Exception:
+        return set()
+    found = {m.group(1) for m in
+             (_DIAG_CLASS_RE.search(n) for n in names) if m}
+    return found if len(found) >= _DIAG_SANITY_MIN else set()
+
+
+def diagnostics_inventory(jar_path, config_info: dict) -> dict:
+    """
+    Сверка «что объявлено» с «что существует».
+
+    Возвращает секцию для `bsl_stats.config`. Два числа отвечают на два
+    разных вопроса:
+
+      `unknown` (CFG-5) — объявлено, но такой диагностики в jar нет. Почти
+          всегда опечатка, и почти всегда она означает молча выключенную
+          проверку;
+      `not_declared` (CFG-6) — существует, но не объявлено. При `mode: ONLY`
+          это выключенные диагностики, в том числе НОВЫЕ, приехавшие с
+          обновлением `BSL_LS_VERSION`. Их не перечисляем поимённо —
+          их сотни; важно само число и то, что оно меняется при обновлении.
+    """
+    known = jar_diagnostics(jar_path)
+    out: dict = {"known_in_jar": len(known)}
+    if not known:
+        out["note"] = (
+            "состав диагностик из jar определить не удалось — раскладка "
+            "архива не та, которую мы умеем читать. Опечатка в имени "
+            "диагностики останется незамеченной; это ограничение, а не "
+            "поломка: анализ идёт как обычно"
+        )
+        return out
+
+    declared = set(config_info.get("diagnostics_names") or [])
+    if not declared:
+        return out
+
+    unknown = sorted(declared - known)
+    out["unknown"] = unknown
+    out["not_declared_count"] = len(known - declared)
+    if unknown:
+        out["warning"] = (
+            f"объявлено {len(unknown)} диагностик, которых нет в BSL LS "
+            f"{jar_version(jar_path) or 'этой версии'}: "
+            f"{', '.join(unknown[:5])}"
+            + (" …" if len(unknown) > 5 else "")
+            + ". BSL LS игнорирует неизвестные ключи молча; при mode: ONLY "
+              "это означает выключенную проверку, а не лишнюю строку."
+        )
+    return out
+
+
 # ─── журнал анализов ─────────────────────────────────────────────────────
 
 
@@ -411,6 +509,24 @@ def health_report(jar_path: str, java_cmd: str = "java",
                    "отказом, а не набором по умолчанию" if config_strict
                    else " — проверки идут набором ПО УМОЛЧАНИЮ")
             )
+        # CFG-5 / CFG-6. Применён — не значит «состоит из того, что вы
+        # думаете». Сверяем объявленные имена с теми, что действительно
+        # есть в этом jar; опечатка перестаёт быть невидимой.
+        #
+        # Только при `applied`: у непринятого конфига объявлять нечего, а
+        # секция про его состав читалась бы как «правила всё-таки в силе».
+        if config.get("applied") and jar.get("present"):
+            inventory = diagnostics_inventory(jar_path, config)
+            if inventory:
+                config["diagnostics_check"] = inventory
+                if inventory.get("warning"):
+                    reasons.append(inventory["warning"])
+        # Полные списки имён наружу не отдаём: восемьдесят пять строк в
+        # каждом ответе `bsl_stats` — это контекст агента, потраченный на
+        # то, что лежит в файле рядом. Числа и имена-подозреваемые есть
+        # выше, остальное — в самом bsl-language-server.json.
+        for noisy in ("diagnostics_names", "diagnostics_disabled_names"):
+            config.pop(noisy, None)
     else:
         config = {"path": config_path, "present": None}
         if config_path:

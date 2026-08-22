@@ -323,6 +323,47 @@ def _pred_path_contains(pred: dict, result: Any) -> PredicateOutcome:
     )
 
 
+def _pred_path_lacks(pred: dict, result: Any) -> PredicateOutcome:
+    """
+    В тексте по пути НЕТ ни одной из указанных подстрок.
+
+    `FIX-30`. Отрицание понадобилось там, где проверить надо отсутствие:
+    «конфигурация применена» и «конфигурация упомянута в ответе» отличаются
+    ровно тем, что во втором случае в отчёте есть диагностика, выключенная
+    в файле настроек. Все прежние предикаты умели только подтверждать
+    наличие, а подтвердить наличие правильного набора правил нечем: набор
+    задаётся отсутствием.
+
+    Отдельный предикат, а не флаг `negate` у `path_contains`: флаг
+    превращает красный отчёт в ребус («path_contains не прошёл» — потому
+    что нашлось или потому что не нашлось?), а имя говорит само.
+
+    Отсутствующий путь считается ПРОЙДЕННЫМ и говорит об этом в отчёте:
+    нет диагностик вовсе — значит, и выключенной среди них нет. Но если
+    ключ пропал из ответа целиком, это стоит увидеть, а не принять за
+    успех молча.
+    """
+    path = str(pred.get("path", "")).strip()
+    subs = pred.get("substrings") or ([pred["substr"]] if pred.get("substr") else [])
+    if not path or not subs:
+        return PredicateOutcome(
+            type="path_lacks", passed=False,
+            detail={"error": "path and substrings (or substr) are required"},
+        )
+
+    found, value = _dig(result, path)
+    text = value if isinstance(value, str) else ("" if not found else str(value))
+    low = text.lower()
+    present = [s for s in subs if str(s).lower() in low]
+
+    detail = {"path": path, "found": found, "present": present,
+              "excerpt": text[:400]}
+    if not found:
+        detail["note"] = ("пути в ответе нет — считаем пройденным, но "
+                          "проверьте, тот ли это ответ")
+    return PredicateOutcome(type="path_lacks", passed=not present, detail=detail)
+
+
 def _pred_field_at_least(pred: dict, result: Any) -> PredicateOutcome:
     """
     Число по пути не меньше порога.
@@ -433,6 +474,8 @@ _HANDLERS = {
     "path_non_empty": _pred_path_non_empty,
     # Текстовый предикат: см. комментарий у _pred_path_contains (EVAL-5).
     "path_contains": _pred_path_contains,
+    # Его отрицание: см. комментарий у _pred_path_lacks (FIX-30).
+    "path_lacks": _pred_path_lacks,
     # Числовой предикат: см. комментарий у _pred_field_at_least.
     "field_at_least": _pred_field_at_least,
 }

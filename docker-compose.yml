@@ -210,7 +210,8 @@ services:
       - ${WORKSPACE_DIR:-./workspace}:/workspace:ro
     environment:
       - MCP_SHARED_SECRET=${MCP_SHARED_SECRET:?Задайте MCP_SHARED_SECRET в .env (openssl rand -hex 32)}
-      - WATCHER_ENABLED=${WATCHER_ENABLED:-true}
+      # HYG-7: умолчание false — см. .env.example и README.
+      - WATCHER_ENABLED=${WATCHER_ENABLED:-false}
       - WATCHER_DEBOUNCE_SEC=${WATCHER_DEBOUNCE_SEC:-3}
       # 4.6.5: ставь true, чтобы .bsl-события фанаутили в metadata-graph
       # (Neo4j call graph), а .xml — триггерили metadata_upsert_file

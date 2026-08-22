@@ -83,12 +83,18 @@ class FakeNeo4j:
     """
 
     def __init__(self, counts=None, callsites=None, relations=None,
-                 fingerprints=True, relations_snapshot=True, has_method=None):
+                 fingerprints=True, relations_snapshot=True, has_method=None,
+                 callsites_snapshot=True):
         self.round_trips = 0
         self.statements_seen = []
         # PERF-12: снимок счётчиков рёбер, который пишет индексер. Флаг
         # выключает его, чтобы проверить и запасной путь — подсчёт на лету.
         self.relations_snapshot = relations_snapshot
+        # PERF-12 (остаток): числа резолва лежат В ТОМ ЖЕ узле снимка,
+        # свойством `callsites`. Флаг свой, потому что случаи разные: граф
+        # мог быть собран индексером, который писал рёбра, но ещё не писал
+        # резолв.
+        self.callsites_snapshot = callsites_snapshot
         # FIX-27: рёбра владения. По умолчанию их столько же, сколько
         # процедур, — то есть граф здоров.
         self.has_method = has_method
@@ -109,12 +115,16 @@ class FakeNeo4j:
 
     def _answer(self, cypher, params):
         if "relation_counts" in cypher:
-            if not self.relations_snapshot:
-                return self._rows(["data", "updated_at"], [])
-            return self._rows(
-                ["data", "updated_at"],
-                [[json.dumps(self.relations, ensure_ascii=False),
-                  1755400000000]])
+            cols = ["data", "callsites", "updated_at"]
+            if not self.relations_snapshot and not self.callsites_snapshot:
+                return self._rows(cols, [])
+            return self._rows(cols, [[
+                (json.dumps(self.relations, ensure_ascii=False)
+                 if self.relations_snapshot else None),
+                (json.dumps(self.callsites, ensure_ascii=False)
+                 if self.callsites_snapshot else None),
+                1755400000000,
+            ]])
         if ":HAS_METHOD]" in cypher:
             value = (self.has_method if self.has_method is not None
                      else self.counts.get("Callable", 0))
@@ -197,16 +207,18 @@ class TestOneRoundTrip(StatsCase):
         self.assertIn("relation_counts", joined)
         self.assertIn(":HAS_METHOD]", joined, "FIX-27: владение не проверяется")
 
-    def test_callsites_scanned_once(self):
+    def test_callsites_not_scanned_at_all(self):
         """
-        Три обхода метки `CallSite` сложены в один. Раньше каждый обходил
-        одни и те же узлы заново — счётчик хранилища на предикате по
-        свойству не работает.
+        PERF-12, остаток. Сначала три обхода метки `CallSite` сложили в
+        один (счётчик хранилища на предикате по свойству не работает, и
+        каждый обходил те же 722 206 узлов заново). Теперь за этот
+        единственный обход платит индексация — `metadata_stats` читает
+        готовое из того же снимка, что и рёбра.
         """
         self.stats()
         scans = [c for c in self.fake.statements_seen if "CallSite" in c]
-        self.assertEqual(len(scans), 1,
-                         f"обходов CallSite: {len(scans)}, ожидался один")
+        self.assertEqual(len(scans), 0,
+                         f"обходы CallSite вернулись: {scans}")
 
     def test_reports_its_own_timing(self):
         rep = self.stats()
@@ -422,6 +434,91 @@ class TestBatchTransport(unittest.TestCase):
                 server._neo4j_many([("BROKEN", None)])
         finally:
             server._neo4j_query_raw = saved
+
+
+class TestCallsiteSnapshot(StatsCase):
+    """
+    PERF-12, остаток. Обход узлов `:CallSite` — второй и последний неO(1)
+    запрос этого ответа. На боевом графе это 722 206 узлов ради трёх
+    чисел, и он оставлял `neo4j_ms` на 642 мс при цели в 200.
+
+    Предикат по свойству (`cs.resolved = true`) счётчиками хранилища не
+    берётся — в отличие от `count(:CallSite)`. Поэтому обход не ускоряли,
+    а перенесли: платит индексация, раз за прогон.
+
+    Проверяется и правка, и запасной путь: числа резолва — это `FIX-4`,
+    самая тонкая арифметика ответа, и менять её ради скорости нельзя.
+    """
+
+    def test_numbers_come_from_the_snapshot(self):
+        self.fake.callsites = {"resolved": 900, "unresolved": 100,
+                               "object_method": 40}
+        rep = self.stats()["code"]
+        self.assertEqual(rep["callsites_resolved"], 900)
+        self.assertEqual(rep["callsites_unresolved"], 60)
+        self.assertEqual(rep["callsites_object_method"], 40)
+        self.assertEqual(rep["resolve_coverage_pct"], 93.75)
+
+    def test_source_is_named(self):
+        note = self.stats()["index"]["callsites"]
+        self.assertEqual(note["source"], "снимок индексации")
+
+    def test_without_snapshot_falls_back_to_scanning(self):
+        """
+        Граф мог быть собран индексером, который писал рёбра, но ещё не
+        писал резолв. Тогда считаем как раньше: медленный ответ лучше
+        отсутствующего.
+        """
+        self.fake.callsites_snapshot = False
+        rep = self.stats()
+        scans = [c for c in self.fake.statements_seen if "CallSite" in c]
+        self.assertEqual(len(scans), 1, "запасной путь — ровно один обход")
+        self.assertEqual(rep["code"]["callsites_resolved"], 900,
+                         "числа обязаны совпасть с теми, что дал бы снимок")
+        self.assertEqual(rep["index"]["callsites"]["source"], "подсчёт на лету")
+
+    def test_fallback_costs_a_second_round_trip_and_says_so(self):
+        self.fake.callsites_snapshot = False
+        rep = self.stats()
+        self.assertEqual(self.fake.round_trips, 2)
+        self.assertEqual(rep["timing"]["round_trips"], 2)
+
+    def test_fallback_marks_the_answer_degraded(self):
+        """
+        `OBS-1`: ответ пригоден, но хуже штатного. Молчаливая просадка —
+        это то, из-за чего PERF-12 вообще понадобился: секунда на вызов
+        никого не разбудила.
+        """
+        self.fake.callsites_snapshot = False
+        self.assertTrue(self.stats().get("degraded"))
+
+    def test_both_snapshots_missing_costs_one_extra_trip_not_two(self):
+        """
+        Оба запасных пути идут в базу, но батчем `_neo4j_many` они не
+        собраны — важно, чтобы их было ДВА запроса, а не два похода.
+        """
+        self.fake.relations_snapshot = False
+        self.fake.callsites_snapshot = False
+        rep = self.stats()
+        self.assertEqual(rep["timing"]["round_trips"], 3)
+        self.assertEqual(rep["relations"], {"CALLS": 5000, "HAS_ATTRIBUTE": 3000})
+        self.assertEqual(rep["code"]["callsites_resolved"], 900)
+
+    def test_broken_snapshot_json_falls_back_instead_of_crashing(self):
+        """Битое свойство — не повод отказать: считаем обходом."""
+        class Broken(type(self.fake)):
+            def _answer(inner, cypher, params):
+                if "relation_counts" in cypher:
+                    return inner._rows(
+                        ["data", "callsites", "updated_at"],
+                        [[json.dumps(inner.relations), "{не json", 1755400000000]])
+                return super()._answer(cypher, params)
+
+        self.fake = Broken(counts=DEFAULT_COUNTS)
+        server._neo4j_query_raw = self.fake
+        rep = self.stats()
+        self.assertEqual(rep["code"]["callsites_resolved"], 900)
+        self.assertEqual(rep["index"]["callsites"]["source"], "подсчёт на лету")
 
 
 if __name__ == "__main__":

@@ -95,6 +95,36 @@ class TestRootIsClean(unittest.TestCase):
             f"нечем отличить действующий план от прошлого",
         )
 
+    def test_status_and_open_name_the_current_plan(self):
+        """
+        DOC-9. Сторож `test_exactly_one_plan_in_root` был зелёным, когда
+        `СТАТУС.md` и `ОТКРЫТОЕ.md` оба называли действующим планом
+        `PLAN-8.md`, — потому что файл существовал. В архиве.
+
+        Проверка «файл есть» отвечает не на тот вопрос. Читатель приходит в
+        статус за ответом «где мы сейчас», и ссылка на прошлый заход даёт
+        ему устаревший ответ, выглядящий действующим. Ровно тот жанр, из-за
+        которого `DOC-5` завёл предупреждение в шапке `PLAN.md`.
+        """
+        plans = sorted(n for n in self.root_md() if PLAN_RE.match(n))
+        if len(plans) != 1:
+            self.skipTest("планов в корне не один — про это отдельный тест")
+        current = plans[0]
+        for name in ("СТАТУС.md", "ОТКРЫТОЕ.md"):
+            doc = ROOT / name
+            if not doc.exists():
+                continue
+            head = doc.read_text(encoding="utf-8", errors="replace")[:600]
+            named = set(re.findall(r"`(PLAN(?:-\d+)?\.md)`", head))
+            with self.subTest(doc=name):
+                self.assertIn(
+                    current, named,
+                    f"{name} в шапке называет {sorted(named) or 'ничего'}, "
+                    f"а действующий план — {current}. Файл из архива "
+                    f"существует, поэтому проверка ссылок молчит: "
+                    f"устаревший указатель выглядит рабочим",
+                )
+
     def test_archive_exists_and_is_not_empty(self):
         self.assertTrue(ARCHIVE.is_dir(), "docs/archive/ нет")
         files = [p for p in ARCHIVE.glob("*.md") if p.name != "README.md"]

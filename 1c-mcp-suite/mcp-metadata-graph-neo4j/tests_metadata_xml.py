@@ -600,5 +600,76 @@ class TestStructuralFlags(unittest.TestCase):
         self.assertEqual(obj.properties.get("Server"), "true")
 
 
+# ─── FIX-33: формы перечислений ──────────────────────────────────────────
+
+
+ENUM_WITH_FORM_XML = f"""<?xml version="1.0" encoding="UTF-8"?>
+<MetaDataObject {NSDECL}>
+  <Enum uuid="uuid-enum-2">
+    <Properties>
+      <Name>СтатусыСФормой</Name>
+      <DefaultListForm>Enum.СтатусыСФормой.Form.ФормаСписка</DefaultListForm>
+    </Properties>
+    <ChildObjects>
+      <EnumValue>
+        <Properties><Name>Активен</Name></Properties>
+      </EnumValue>
+      <Form>ФормаСписка</Form>
+      <Form>ФормаВыбора</Form>
+    </ChildObjects>
+  </Enum>
+</MetaDataObject>
+"""
+
+
+class TestEnumFormsAreParsed(unittest.TestCase):
+    """
+    FIX-33. Ветка перечисления выходила из `_parse_object` РАНЬШЕ разбора
+    форм, и узлов `:Form` у перечислений не появлялось вовсе.
+
+    Цена на боевой конфигурации: шесть модулей `Enum.*.Form.*` жили в слое
+    2 без владельца — 28 процедур, последняя дыра во владении после
+    Захода 8. Она была видна в `metadata_stats` как `without_owner: 28` и
+    ровно поэтому не превратилась во вторую историю про 158 961.
+    """
+
+    def setUp(self):
+        self.obj = parse_string_as(ENUM_WITH_FORM_XML, "Enum")
+
+    def test_forms_are_collected(self):
+        self.assertEqual({f.name for f in self.obj.forms},
+                         {"ФормаСписка", "ФормаВыбора"})
+
+    def test_default_list_form_is_marked_main(self):
+        main = [f for f in self.obj.forms if f.is_main]
+        self.assertEqual(len(main), 1)
+        self.assertEqual(main[0].name, "ФормаСписка")
+        self.assertEqual(main[0].main_kind, "DefaultListForm")
+
+    def test_enum_values_still_parsed(self):
+        """Правка не имеет права отобрать у перечисления его значения."""
+        self.assertEqual([v["name"] for v in self.obj.enum_values], ["Активен"])
+
+    def test_form_nodes_reach_the_graph(self):
+        """
+        Узел в графе — то, чего не хватало: привязывать модуль формы было
+        не к чему. Проверяем id ровно в той форме, которую строит
+        bsl_parser для `module_id` модуля формы.
+        """
+        g = build_graph([self.obj])
+        ids = {n["id"] for n in g["form_nodes"]}
+        self.assertIn("Enum.СтатусыСФормой.Form.ФормаСписка", ids)
+        edges = {(e["src"], e["dst"]) for e in g["edges"]
+                 if e["rel"] == "HAS_FORM"}
+        self.assertIn(
+            ("Enum.СтатусыСФормой", "Enum.СтатусыСФормой.Form.ФормаСписка"),
+            edges)
+
+    def test_enum_without_forms_is_still_fine(self):
+        """Перечисление без форм не должно обзавестись пустышками."""
+        obj = parse_string_as(ENUM_XML, "Enum")
+        self.assertEqual(obj.forms, [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

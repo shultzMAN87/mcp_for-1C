@@ -34,7 +34,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, NamedTuple, Optional
 
 from progress_log import ProgressLogger, human_sec
 
@@ -61,13 +61,20 @@ class Neo4j:
         self.timeout = timeout
         self._auth = base64.b64encode(f"{user}:{password}".encode()).decode()
 
-    def query(self, cypher: str, parameters: Optional[dict] = None) -> dict:
-        payload = json.dumps({
-            "statements": [{
-                "statement": cypher,
-                "parameters": parameters or {},
-            }]
-        }).encode()
+    def query(self, cypher: str, parameters: Optional[dict] = None,
+              include_stats: bool = False) -> dict:
+        statement: dict[str, Any] = {
+            "statement": cypher,
+            "parameters": parameters or {},
+        }
+        # FIX-31. `includeStats` заставляет Neo4j вернуть, СКОЛЬКО он создал
+        # узлов и связей этим запросом. Считает это сама база, по факту
+        # записи; ни второго прохода, ни служебных свойств на рёбрах не
+        # нужно. Ключ добавляется только когда его просят: без него ответ
+        # короче, а запросов у нас тысячи.
+        if include_stats:
+            statement["includeStats"] = True
+        payload = json.dumps({"statements": [statement]}).encode()
         req = urllib.request.Request(
             f"{self.url}/db/neo4j/tx/commit",
             data=payload,
@@ -93,13 +100,31 @@ class Neo4j:
             raise RuntimeError(f"Neo4j: {errors}")
         return result
 
-    def rows(self, cypher: str, parameters: Optional[dict] = None) -> list[dict]:
-        r = self.query(cypher, parameters)
-        cols = r["results"][0].get("columns", [])
+    @staticmethod
+    def _rows_of(result: dict) -> list[dict]:
+        cols = result.get("columns", [])
         out = []
-        for data in r["results"][0].get("data", []):
+        for data in result.get("data", []):
             out.append({c: data["row"][i] for i, c in enumerate(cols)})
         return out
+
+    def rows(self, cypher: str, parameters: Optional[dict] = None) -> list[dict]:
+        r = self.query(cypher, parameters)
+        return self._rows_of(r["results"][0])
+
+    def rows_with_stats(self, cypher: str,
+                        parameters: Optional[dict] = None) -> tuple[list[dict], dict]:
+        """
+        То же, что `rows`, плюс статистика транзакции (`FIX-31`).
+
+        Возвращает `(строки, stats)`. В `stats` лежат ключи Neo4j
+        `relationships_created`, `nodes_created`, `properties_set` и т.п.
+        Если версия базы статистику не прислала, второй элемент — пустой
+        словарь; вызывающий обязан это пережить, а не считать нулём.
+        """
+        r = self.query(cypher, parameters, include_stats=True)
+        result = r["results"][0]
+        return self._rows_of(result), (result.get("stats") or {})
 
     def wait(self, timeout: float = 120.0) -> None:
         start = time.time()
@@ -466,6 +491,25 @@ def fingerprint_write(neo: Neo4j, value: str, kind: str = "metadata_xml",
 # прогон, там, где рядом и так идут минуты. `metadata_stats` читает готовое
 # за O(1) и говорит, когда снимок снят: устаревший снимок, о возрасте
 # которого известно, честнее свежего числа, за которое платит каждый вызов.
+#
+# ─── PERF-12, остаток ────────────────────────────────────────────────────
+#
+# После первой правки `neo4j_ms` упал с 4705 до 642 мс — цель в 200 мс не
+# была взята. Остаток локализован: `sum(CASE WHEN cs.resolved …)` обходит
+# 722 206 узлов `:CallSite`, потому что предикат ПО СВОЙСТВУ счётчиками
+# хранилища не берётся: `count(:CallSite)` бесплатен, а «сколько из них с
+# resolved = true» — нет.
+#
+# Довод тот же, что был для рёбер, и он не про скорость. Числа про резолв
+# меняются РОВНО ТОГДА, когда идёт индексация: между прогонами узлы
+# `:CallSite` никто не трогает. Значит, каждый вызов `metadata_stats`
+# пересчитывал то, что не менялось со вчера.
+#
+# Кладём их в тот же узел снимка, вторым свойством. Не в `data`: там
+# словарь «тип ребра → число», и подмешивать в него ключи чужой природы
+# значило бы сломать форму ответа ради экономии на одном свойстве.
+# Отдельный узел тоже не заводим — читатель у обоих один и тот же запрос,
+# и лишний узел стоил бы лишнего похода.
 RELATIONS_SNAPSHOT_KIND = "relation_counts"
 
 RELATION_COUNTS_CYPHER = (
@@ -474,8 +518,36 @@ RELATION_COUNTS_CYPHER = (
 
 RELATIONS_SNAPSHOT_WRITE_CYPHER = """
 MERGE (n:Fingerprint {kind: $kind})
-SET n.data = $data, n.updated_at = timestamp()
+SET n.data = $data, n.callsites = $callsites, n.updated_at = timestamp()
 """
+
+
+def _callsite_counts_cypher() -> str:
+    """
+    Запрос про резолв. Список причин берётся из `bsl_resolver` — там его
+    смысловой оригинал (`FIX-4`), и вторая копия в этом файле была бы
+    шестым рукописным списком проекта.
+
+    Импорт ленивый: `graph_writer` умышленно не тянет резолвер на импорте
+    — его зовут и из мест, где резолвера в образе может не быть.
+    """
+    from bsl_resolver import NON_CONFIG_CALL_REASONS
+    reasons = "[" + ", ".join(f"'{r}'" for r in sorted(NON_CONFIG_CALL_REASONS)) + "]"
+    return (
+        "MATCH (cs:CallSite) RETURN "
+        "sum(CASE WHEN cs.resolved = true THEN 1 ELSE 0 END) AS resolved, "
+        "sum(CASE WHEN cs.resolved = false THEN 1 ELSE 0 END) AS unresolved, "
+        "sum(CASE WHEN cs.resolved = false AND cs.reason IN "
+        f"{reasons} THEN 1 ELSE 0 END) AS object_method"
+    )
+
+
+def callsite_counts(neo: Neo4j) -> dict[str, int]:
+    """Три числа про резолв вызовов. Один обход `:CallSite`, не три."""
+    rows = neo.rows(_callsite_counts_cypher())
+    row = rows[0] if rows else {}
+    return {k: int(row.get(k) or 0)
+            for k in ("resolved", "unresolved", "object_method")}
 
 
 def relations_snapshot_write(neo: Neo4j) -> dict[str, int]:
@@ -488,12 +560,23 @@ def relations_snapshot_write(neo: Neo4j) -> dict[str, int]:
     констрейнт на `kind`, то есть индекс, и не удаляется ни одной из
     очисток слоя. Заводить ради этого новую метку значило бы добавить в
     схему сущность, которую потом надо помнить при каждой чистке.
+
+    Вместе с рёбрами снимаются числа про резолв вызовов (PERF-12,
+    остаток) — они меняются в тот же момент и по той же причине.
     """
     rows = neo.rows(RELATION_COUNTS_CYPHER)
     counts = {r["rel"]: r["cnt"] for r in rows if r.get("rel")}
+    try:
+        cs = callsite_counts(neo)
+    except Exception as e:  # снимок резолва — удобство, а не условие успеха
+        log.warning("Числа резолва в снимок не попали (%s) — metadata_stats "
+                    "посчитает их сам, обходом :CallSite", e)
+        cs = {}
     neo.query(RELATIONS_SNAPSHOT_WRITE_CYPHER, {
         "kind": RELATIONS_SNAPSHOT_KIND,
         "data": json.dumps(counts, ensure_ascii=False, separators=(",", ":")),
+        "callsites": (json.dumps(cs, ensure_ascii=False, separators=(",", ":"))
+                      if cs else None),
     })
     return counts
 
@@ -638,17 +721,76 @@ def _node_progress(label: str, total: int, enabled: bool = True):
 # рёбер с дедупликацией (:CALLS, :OPERATES_ON — MERGE по паре узлов) это
 # по-прежнему число обработанных строк, а не созданных связей: именно то,
 # что нужно, чтобы отличить «схлопнулось по замыслу» от «не нашло узел».
-def _query_written(neo: Neo4j, cypher: str, rows: list) -> int:
-    """Выполняет запись и возвращает число обработанных строк."""
-    try:
-        res = neo.rows(cypher + " RETURN count(*) AS written", {"rows": rows})
-    except Exception:
-        raise
+#
+# ─── FIX-31. Одного числа мало: их три ───────────────────────────────────
+#
+# 18 августа запрос перепривязки отчитался `relinked = 83` при 99
+# фактически созданных рёбрах. `FIX-29` — тот же дефект зеркально: отчёт
+# больше факта на единицу. Оба объясняются одним: `RETURN count(*)` НЕ
+# отвечает на вопрос «сколько связей создано». Он отвечает на вопрос
+# «сколько строк дошло до записи» — а это другое число, и расходятся они в
+# обе стороны:
+#
+#   меньше факта  — `MATCH (c) MATCH (m) MERGE …` порождает строку на
+#                   ПАРУ, и планировщик вправе схлопнуть повторы источника
+#                   раньше, чем дойдёт до счётчика;
+#   больше факта  — `MERGE` по паре узлов схлопывает одинаковые пары уже
+#                   в базе (428 918 вызовов → 351 694 ребра :CALLS).
+#
+# Отсюда правило: числа три, и каждое отвечает на свой вопрос.
+#
+#   sent     сколько строк отправлено         — знает вызывающий
+#   matched  сколько дошло до записи          — `RETURN count(*)`
+#   created  сколько связей реально создано   — статистика транзакции
+#
+# Сторож `FIX-15` меряет `sent − matched`: это строки, не нашедшие узлов,
+# ровно тот класс, которым потерялись 158 961 ребро `HAS_METHOD`. Подменить
+# ему число на `created` нельзя — повторная запись тех же рёбер честно даёт
+# `created = 0`, и сторож завопил бы на здоровом графе.
+#
+# Почему статистика транзакции, а не два способа из PLAN-9. `ON CREATE SET
+# r._new = true` точен, но требует второго прохода и оставляет служебное
+# свойство на миллионах рёбер. `count(r)` до и после дешевле, но верен лишь
+# при однопоточной записи — то есть работает, пока никто не забыл, почему
+# он работает. `includeStats` не требует ни того, ни другого: число даёт
+# сама база, по факту записи, в ответе того же запроса.
+#
+# Если версия базы (или стаб в тестах) статистику не прислала, `created`
+# равен None. Это не ноль: «не создано ничего» и «нечем измерить» —
+# разные ответы, и путать их значило бы завести третий способ соврать.
+
+
+class _Written(NamedTuple):
+    sent: int
+    matched: int
+    created: Optional[int]
+
+
+def _write_counted(neo: Neo4j, cypher: str, rows: list) -> _Written:
+    """Выполняет запись и возвращает три числа: отправлено / дошло / создано."""
+    counted = cypher + " RETURN count(*) AS written"
+    stats: dict = {}
+    with_stats = getattr(neo, "rows_with_stats", None)
+    if callable(with_stats):
+        res, stats = with_stats(counted, {"rows": rows})
+    else:
+        # Стаб или экзотический драйвер: работаем как до FIX-31.
+        res = neo.rows(counted, {"rows": rows})
+
     if res and res[0].get("written") is not None:
-        return int(res[0]["written"])
-    # Стаб или экзотический драйвер, не вернувший счётчик: не выдумываем
-    # недостачу там, где её нечем измерить.
-    return len(rows)
+        matched = int(res[0]["written"])
+    else:
+        # Счётчика нет — не выдумываем недостачу там, где её нечем измерить.
+        matched = len(rows)
+
+    created = stats.get("relationships_created")
+    return _Written(len(rows), matched,
+                    None if created is None else int(created))
+
+
+def _query_written(neo: Neo4j, cypher: str, rows: list) -> int:
+    """Число строк, дошедших до записи. Узловые писатели меряют только его."""
+    return _write_counted(neo, cypher, rows).matched
 
 
 # Тонкая обёртка над общим правилом: своя подсказка, свой логгер.
@@ -1011,7 +1153,8 @@ def _infer_src_label(rel: str, src_id: str, variants: dict) -> str:
 
 
 def write_edges(neo: Neo4j, edges: list[dict], batch: int = 500,
-                log_progress: bool = True) -> dict[str, int]:
+                log_progress: bool = True,
+                report: Optional[dict] = None) -> dict[str, int]:
     """
     Запись всех рёбер. Возвращает счётчик по типам рёбер.
 
@@ -1019,6 +1162,13 @@ def write_edges(neo: Neo4j, edges: list[dict], batch: int = 500,
     несколькими вариантами запроса — по одному UNWIND-запросу на метку,
     см. EDGE_QUERIES и PERF-4. Счётчик в ответе по-прежнему сводится к типу
     ребра, чтобы вызывающий код и тесты не заметили разницы.
+
+    `report` (FIX-31) — необязательный словарь, в который складывается вся
+    правда: `{тип ребра: {"sent": N, "matched": N, "created": N|None}}`.
+    Отдельным аргументом, а не возвращаемым значением, ровно по одной
+    причине: возвращаемое значение читают тринадцать мест, и менять его
+    форму ради числа, которое нужно двум, — это менять ответ ради
+    удобства писателя.
     """
     by_key: dict[tuple[str, str], list[dict]] = {}
     unknown: dict[str, int] = {}
@@ -1057,13 +1207,20 @@ def write_edges(neo: Neo4j, edges: list[dict], batch: int = 500,
         ) if log_progress else None
 
         written = 0
+        created: Optional[int] = 0
         for chunk in _chunks(group, batch):
             rows = []
             for e in chunk:
                 row = {"src": e["src"], "dst": e["dst"]}
                 row.update(e.get("props") or {})
                 rows.append(row)
-            written += _query_written(neo, cypher, rows)
+            w = _write_counted(neo, cypher, rows)
+            written += w.matched
+            # Одна неизмеренная порция делает неизмеренной всю группу:
+            # сумма из «созданных» и «неизвестно скольких» — это число,
+            # которое выглядит точным и им не является.
+            created = None if (created is None or w.created is None) \
+                else created + w.created
             if prog:
                 prog.step(len(rows))
 
@@ -1073,8 +1230,15 @@ def write_edges(neo: Neo4j, edges: list[dict], batch: int = 500,
             if len(group) >= 5000 or prog.elapsed >= 5.0:
                 prog.done()
         _warn_shortfall(f"рёбра {name}", len(group), written)
-        _report_merge_dedup(name, group, written)
+        _report_merge_dedup(name, group, written, created)
         counters[rel] = counters.get(rel, 0) + written
+        if report is not None:
+            slot = report.setdefault(
+                rel, {"sent": 0, "matched": 0, "created": 0})
+            slot["sent"] += len(group)
+            slot["matched"] += written
+            slot["created"] = None if (slot["created"] is None or created is None) \
+                else slot["created"] + created
     return counters
 
 
@@ -1092,8 +1256,16 @@ def write_edges(neo: Neo4j, edges: list[dict], batch: int = 500,
 # Правило поэтому такое: не «подогнать счётчик», а НАЗВАТЬ дубли. Счётчик,
 # который не сходится, — это почти всегда непонятое правило, и лечится оно
 # формулировкой правила, а не вычитанием.
-def _report_merge_dedup(name: str, group: list, written: int) -> None:
-    """Сколько строк схлопнется в базе из-за MERGE по паре — вслух."""
+def _report_merge_dedup(name: str, group: list, written: int,
+                        created: Optional[int] = None) -> None:
+    """Сколько строк схлопнется в базе из-за MERGE по паре — вслух.
+
+    `created` (FIX-31) — сколько связей база создала на самом деле. Пока
+    его не было, строка «в базе будет N» оставалась предсказанием, и
+    проверить её было нечем: ровно поэтому расхождение на 16 % прожило до
+    ручной сверки. Теперь предсказание печатается рядом с фактом, и если
+    они разошлись — это говорится, а не подгоняется.
+    """
     pairs = set()
     dups: list[str] = []
     for e in group:
@@ -1107,11 +1279,51 @@ def _report_merge_dedup(name: str, group: list, written: int) -> None:
     if not duplicates:
         return
     tail = f" (напр. {', '.join(dups)})" if dups else ""
+    predicted = written - duplicates
     log.info(
         "  рёбра %s: строк %d, из них дублей по паре %d — MERGE схлопнет их, "
         "в базе будет %d%s",
-        name, len(group), duplicates, written - duplicates, tail,
+        name, len(group), duplicates, predicted, tail,
     )
+    # Часть рёбер могла существовать до записи — тогда `created` меньше
+    # предсказания законно. Тревожно обратное: создано БОЛЬШЕ, чем строк
+    # после схлопывания. Это и есть `relinked = 83 при 99`.
+    if created is not None and created > predicted:
+        log.warning(
+            "  ⚠ рёбра %s: создано %d при предсказанных %d — счётчик строк "
+            "меньше факта. Опираться надо на created (FIX-31)",
+            name, created, predicted,
+        )
+
+
+# ─── FIX-31: как читать отчёт write_edges ────────────────────────────────
+
+
+def edges_created(report: dict) -> dict[str, Optional[int]]:
+    """`{тип ребра: сколько связей создано}` — или None там, где не измерено."""
+    return {rel: slot.get("created") for rel, slot in (report or {}).items()}
+
+
+def log_edge_report(report: dict, out: Optional[logging.Logger] = None) -> None:
+    """
+    Строка в лог там, где отправленное, дошедшее и созданное разошлись.
+
+    Молчит, когда все три числа совпали, — по тому же правилу, что и
+    `_report_merge_dedup`: отчёт, который печатается всегда, перестают
+    читать. Но молчание здесь означает именно «сошлось», а не «не
+    считали»: неизмеренная группа (`created is None`) о себе говорит.
+    """
+    log_ = out or log
+    for rel in sorted(report or {}):
+        slot = report[rel]
+        sent, matched, created = slot["sent"], slot["matched"], slot["created"]
+        if created is None:
+            log_.info("  рёбра %s: отправлено %d, дошло %d, создано — не "
+                      "измерено (база не прислала статистику транзакции)",
+                      rel, sent, matched)
+        elif not (sent == matched == created):
+            log_.info("  рёбра %s: отправлено %d, дошло %d, создано %d",
+                      rel, sent, matched, created)
 
 
 # ─── Пишет конфигурационный узел ──────────────────────────────────────────
@@ -1377,9 +1589,12 @@ def write_code_graph(neo: Neo4j, code_graph: dict) -> dict:
                          code_graph.get("type_nodes", []))
 
     t_edges = time.monotonic()
-    edge_counters = write_edges(neo, code_graph.get("edges", []))
+    edge_report: dict = {}
+    edge_counters = write_edges(neo, code_graph.get("edges", []),
+                                report=edge_report)
     log.info("  рёбра: %d за %s", len(code_graph.get("edges", [])),
              human_sec(time.monotonic() - t_edges))
+    log_edge_report(edge_report)
 
     return {
         "nodes_written": {
@@ -1390,6 +1605,11 @@ def write_code_graph(neo: Neo4j, code_graph: dict) -> dict:
             "Type":      n_type,
         },
         "edges_written": edge_counters,
+        # FIX-31: сколько связей база создала на самом деле. Отдельным
+        # ключом, а не подменой прежнего: `edges_written` отвечает на
+        # вопрос «сколько строк дошло», и он тоже нужен — по нему видно
+        # строки, не нашедшие узлов.
+        "edges_created": edges_created(edge_report),
         "stats": code_graph.get("stats", {}),
     }
 
@@ -1487,9 +1707,11 @@ def write_graph(neo: Neo4j, graph: dict, config_name: str = "Конфигура�
     _timed(":EnumValue",      write_enum_value_nodes,      graph["enum_value_nodes"])
 
     t_edges = time.monotonic()
-    edge_counters = write_edges(neo, graph["edges"])
+    edge_report: dict = {}
+    edge_counters = write_edges(neo, graph["edges"], report=edge_report)
     log.info("  рёбра: %d за %s", len(graph["edges"]),
              human_sec(time.monotonic() - t_edges))
+    log_edge_report(edge_report)
 
     write_configuration_node(neo, config_name, stats)
 
@@ -1503,5 +1725,6 @@ def write_graph(neo: Neo4j, graph: dict, config_name: str = "Конфигура�
             "Type":           stats["type_nodes"],
         },
         "edges_written":   edge_counters,
+        "edges_created":   edges_created(edge_report),
         "stats":           stats,
     }

@@ -5,23 +5,27 @@
   "counts": {
     "MetadataObject": 10748,
     "Attribute": 42763,
-    "Form": 8203,
-    "Module": 14042,
+    "Form": 8209,
+    "Module": 14048,
     "Callable": 231129,
     "CallSite": 722206,
     "Parameter": 348762,
     "Subsystem": 93,
-    "rel_HAS_METHOD": 231101,
+    "rel_HAS_METHOD": 231129,
     "rel_HAS_ATTRIBUTE": 42763,
-    "rel_CONTAINS": 3489,
-    "rel_CALLS": 351629,
+    "rel_CONTAINS": 3483,
+    "rel_CALLS": 351565,
     "rel_CALL_SITE": 722206,
-    "orphan_Callable": 28
+    "orphan_Callable": 0
   },
   "fingerprints": {
     "metadata_xml": {
       "value": "966d0e516d3c7d97ea706eeef344d8da51aeee998f72f0ff031dc4e583d7889b",
       "mode": "stat"
+    },
+    "relation_counts": {
+      "value": null,
+      "mode": null
     },
     "bsl_source": {
       "value": "a2275b77a081eacad389899141147580773289180682e44512495796feb84d66",

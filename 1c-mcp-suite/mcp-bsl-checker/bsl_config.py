@@ -160,6 +160,13 @@ def describe(path: str) -> dict:
             declared, enabled = _count_diagnostics(params)
             info["diagnostics_declared"] = declared
             info["diagnostics_enabled"] = enabled
+            # CFG-5. Сами имена — чтобы было с чем сверять состав jar.
+            # Модуль по-прежнему не валидирует схему BSL LS: он только
+            # называет, что объявлено; знает ли анализатор эти имена,
+            # выясняет bsl_health.diagnostics_inventory по своему jar.
+            info["diagnostics_names"] = sorted(params)
+            info["diagnostics_disabled_names"] = sorted(
+                k for k, v in params.items() if v is False)
 
     if data.get("language"):
         info["language"] = data["language"]

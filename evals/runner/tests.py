@@ -181,7 +181,53 @@ def test_path_contains():
                     "substrings": ["ВНУТРЕННЕЕ", "ГДЕ"]}, r)
     assert got.detail["missing"] == ["ВНУТРЕННЕЕ", "ГДЕ"], got.detail
     assert got.detail["excerpt"].startswith("ВЫБРАТЬ")
-    print("[8/8] path_contains: OK")
+    print("[8/9] path_contains: OK")
+
+
+def test_path_lacks():
+    """
+    FIX-30. Отрицание понадобилось, чтобы отличить «конфигурация
+    применена» от «конфигурация упомянута в ответе». Первое доказывается
+    только отсутствием: в отчёте не должно быть диагностики, выключенной в
+    файле настроек.
+    """
+    r = {"diagnostics": [{"code": "EmptyCodeBlock", "line": 2}],
+         "config": {"applied": True}}
+    cases = [
+        ({"type": "path_lacks", "path": "diagnostics",
+          "substrings": ["UnusedLocalMethod"]}, True),
+        ({"type": "path_lacks", "path": "diagnostics",
+          "substr": "EmptyCodeBlock"}, False),
+        # Регистр не решает — как и у path_contains.
+        ({"type": "path_lacks", "path": "diagnostics",
+          "substrings": ["emptycodeblock"]}, False),
+        # Хотя бы одна найденная подстрока — уже провал.
+        ({"type": "path_lacks", "path": "diagnostics",
+          "substrings": ["ЧегоНет", "EmptyCodeBlock"]}, False),
+        ({"type": "path_lacks", "path": "diagnostics"}, False),
+        ({"type": "path_lacks", "substr": "x"}, False),
+    ]
+    for pred, want in cases:
+        got = evaluate(pred, r)
+        assert got.passed == want, (pred, got.detail)
+        assert got.type == "path_lacks"
+
+    # Красный пример обязан сразу говорить, ЧТО нашлось.
+    got = evaluate({"type": "path_lacks", "path": "diagnostics",
+                    "substrings": ["EmptyCodeBlock"]}, r)
+    assert got.detail["present"] == ["EmptyCodeBlock"], got.detail
+
+    # Пустой список диагностик: выключенной среди них нет — пройдено.
+    got = evaluate({"type": "path_lacks", "path": "diagnostics",
+                    "substr": "UnusedLocalMethod"}, {"diagnostics": []})
+    assert got.passed
+
+    # Ключа нет вовсе: считаем пройденным, но говорим об этом.
+    got = evaluate({"type": "path_lacks", "path": "нет_такого",
+                    "substr": "x"}, r)
+    assert got.passed
+    assert "note" in got.detail, got.detail
+    print("[9/9] path_lacks: OK")
 
 
 def test_metrics():
@@ -444,6 +490,7 @@ if __name__ == "__main__":
     test_field_at_least()
     test_hit_field_in_top_k()
     test_path_contains()
+    test_path_lacks()
     test_metrics()
     test_load_dataset()
     test_mrr_info()
