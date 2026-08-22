@@ -64,6 +64,65 @@ CANON = {"README.md", "ARCHITECTURE.md", "PROMPTS.md", "СТАТУС.md",
 PLAN_RE = re.compile(r"^PLAN(-\d+)?\.md$")
 
 
+class TestCanonListsAgree(unittest.TestCase):
+    """
+    FIX-34. Канон корня описан ДВАЖДЫ: здесь и в `scripts/archive_docs.py`.
+    Списки разошлись — в скрипте не было `ОТКРЫТОЕ.md`, и он унёс бы его в
+    архив; сторож после этого упал бы на «канон неполон», то есть уборка
+    ломала бы проверку, которая её стережёт.
+
+    Седьмое расхождение производного списка с источником в проекте.
+    Слить в один список нельзя: скрипт хранит рядом с именем пояснение
+    «зачем файл нужен», а тест — только имена. Поэтому сверяем множества,
+    как в `FIX-32` и `LOCK-1`.
+    """
+
+    def script_canon(self) -> set:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import archive_docs
+        except Exception as e:  # noqa: BLE001
+            self.skipTest(f"archive_docs.py не импортируется: {e}")
+        # LICENSE каноничен для скрипта (он переносит .md, а лицензия —
+        # не .md), тесту он не интересен: тот смотрит только на *.md.
+        return {n for n in archive_docs.CANON if n.endswith(".md")}
+
+    def test_the_two_lists_match(self):
+        missing = sorted(CANON - self.script_canon())
+        self.assertFalse(
+            missing,
+            f"канон требует эти файлы в корне, а archive_docs.py считает их "
+            f"лишними и унесёт в архив: {missing}",
+        )
+
+    def test_script_does_not_keep_extra(self):
+        extra = sorted(self.script_canon() - CANON)
+        self.assertFalse(
+            extra,
+            f"archive_docs.py оставляет в корне то, чего канон не знает: "
+            f"{extra}",
+        )
+
+    def test_plan_is_not_hardcoded(self):
+        """
+        В скрипте стояло прошитое `PLAN-6.md`: встретив `PLAN-9.md`, он
+        счёл бы действующий план лишним. Теперь план выводится из корня —
+        проверяем, что выводится тот же, что видит сторож.
+        """
+        sys.path.insert(0, str(ROOT / "scripts"))
+        try:
+            import archive_docs
+        except Exception as e:  # noqa: BLE001
+            self.skipTest(f"archive_docs.py не импортируется: {e}")
+        in_root = {p.name for p in ROOT.glob("*.md")
+                   if p.is_file() and PLAN_RE.match(p.name)}
+        self.assertEqual(archive_docs.current_plans(), in_root)
+        self.assertFalse(
+            [p.name for p in archive_docs.to_move() if PLAN_RE.match(p.name)],
+            "действующий план в списке на перенос в архив",
+        )
+
+
 class TestRootIsClean(unittest.TestCase):
 
     def root_md(self) -> set[str]:
