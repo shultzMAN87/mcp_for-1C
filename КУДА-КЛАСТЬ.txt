@@ -1,12 +1,61 @@
-Патч Захода 10. Распаковать поверх D:\Docker\30_mcp_cursor
+Заход 10, закрывающий архив. 8 файлов.
 
-ВАЖНО, один шаг руками — переезд в архив:
-    del PLAN-9.md
-    del docs\README-ЗАХОД-9.md
-(их копии уже лежат в docs\archive\ внутри этого архива)
+Как класть
+==========
+Содержимое zahod-10-final\ поверх D:\Docker\30_mcp_cursor, сохраняя дерево:
 
-Иначе в корне окажется два плана, и tests_docs_canon.py покраснеет —
-именно на это он и поставлен.
+    Copy-Item -Path .\zahod-10-final\* -Destination D:\Docker\30_mcp_cursor -Recurse -Force
 
-Потом:
-    python scripts\run_all_tests.py
+Что внутри
+==========
+1c-mcp-suite\tool_journal.py         строка о старте сервера в журнале
+scripts\journal_report.py            различает «включён, вызовов нет» и «выключен»
+scripts\tests_journal_report.py      +2 теста на это различение (19 в наборе)
+docs\archive\ПРОГОН-AGENT-2026-08-23.md   бланк прогона с колонкой вызовов
+docs\archive\README-ЗАХОД-10.md      разбор захода целиком
+docs\archive\README.md               указатель архива (71 файл)
+СТАТУС.md, ОТКРЫТОЕ.md               приведены к итогу
+
+После раскладки
+===============
+1) Тесты — без стенда:
+
+       python scripts\run_all_tests.py --strict
+
+   Ожидание: 47 наборов, 1267 тестов, код возврата 0.
+
+2) Пересобрать ЧЕТЫРЕ образа — в них едет новый tool_journal.py.
+   ВАЖНО: пятый (v8std-mcp) пересобирать НЕ нужно, его обёртка не менялась.
+   В прошлый раз я забыл назвать его в строке сборки, и журнал чужого
+   сервера не работал — теперь наоборот, он уже собран верно.
+
+       docker compose build mcp-metadata-graph mcp-bsl-checker mcp-platform-help mcp-query-builder
+       docker compose up -d --force-recreate mcp-metadata-graph mcp-bsl-checker mcp-platform-help mcp-query-builder
+
+3) Проверить, что новое состояние журнала видно:
+
+       python scripts\journal_report.py
+
+   Сразу после перезапуска, до вопросов агенту, должно быть:
+       Журнал включён, вызовов пока нет.
+         ведут журнал: bsl-checker, metadata-graph, platform-help, query-builder
+
+   Прежняя редакция печатала здесь три шага починки, хотя чинить нечего.
+
+4) Закрыть заход:
+
+       python scripts\archive_docs.py
+       python scripts\gen_archive_index.py
+       python scripts\run_all_tests.py --strict
+       git add .
+       git commit -m "Заход 10: CFG-7 корень конфигурации, EVAL-7 журнал вызовов, CI-5 пустой набор"
+       git push
+
+   Сообщение коммита — не номер. Это HYG-8, третий заход подряд.
+
+Журнал после прогона
+====================
+Оставлять включённым не обязательно: он растёт на каждый вызов. Выключается
+очисткой двух переменных в .env (MCP_TOOL_JOURNAL, V8STD_USAGE_LOG) и
+перезапуском тех же пяти серверов. Сами файлы журнала в гит не попадают —
+.gitignore их исключает, в архиве прогона лежит нужный кусок.

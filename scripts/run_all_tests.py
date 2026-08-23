@@ -29,10 +29,28 @@ A-5. Пропущенный набор — не успех.
 `--strict` делает его провалом: в CI «не проверялось» и «проверено» — это
 разные исходы.
 
+CI-5. Скипнувший всё — тоже не успех.
+─────────────────────────────────────
+`A-5` закрыл два случая из трёх. Третий нашёлся на приёмке `PERF-12`:
+набор запускается, возвращает ноль и пропускает все свои тесты до
+единого —
+
+    OK    tests_stats_batch.py     28 тестов    0.1 с (28 пропущено)
+
+— и его 28 «тестов» входят в итоговую цифру прогона. Правка `PERF-12`
+сломала внутри него три теста, и это не заметил никто: проверено-то было
+ноль. Разница между «прошло» и «ничего не проверялось» снова оказалась в
+скобках, куда не смотрят.
+
+Такой набор теперь помечен `ПУСТО`, назван отдельным блоком, посчитан в
+итоговой строке и роняет `--strict`.
+
 Запуск:
     python3 scripts/run_all_tests.py
     python3 scripts/run_all_tests.py --quiet     # только итог
-    python3 scripts/run_all_tests.py --strict    # не запущенный набор = провал
+    python3 scripts/run_all_tests.py --strict    # не запущенный или
+                                                 # ничего не проверивший
+                                                 # набор = провал
     python3 scripts/run_all_tests.py --baseline  # ещё и сверка с базой
 """
 from __future__ import annotations
@@ -108,6 +126,18 @@ SUITE_ROOTS = [
 ]
 
 
+def _rel(path: Path) -> str:
+    """
+    Путь для человека: короткий, когда набор лежит в проекте, и полный,
+    когда нет. `Path.relative_to` на чужом пути бросает ValueError — то
+    есть диагностический скрипт падал бы там, где всего лишь печатает имя.
+    """
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
 def _container_hint(path: Path) -> str:
     """
     Как разбираться с набором, который не запустился.
@@ -126,7 +156,7 @@ def _container_hint(path: Path) -> str:
     if {"evals", "runner"} <= set(path.parts):
         return ("Запуск: docker compose run --rm --no-deps eval-runner "
                 f"python /app/evals/runner/{path.name}")
-    rel = path.relative_to(ROOT)
+    rel = _rel(path)
     return (f"Причина целиком: python {rel}  "
             f"(в образ набор не копируется — он рассчитан на хост)")
 
@@ -146,10 +176,14 @@ def find_suites() -> list[Path]:
     return out
 
 
-def run_one(path: Path) -> tuple[bool, int, int, float, str, str | None]:
+def run_one(path: Path) -> tuple:
     """
     Возвращает (успех, тестов, пропущено, секунд, хвост вывода, чего не
-    хватило, чем посчитано).
+    хватило, чем посчитано, сколько дошло до вердикта).
+
+    Последнее число появилось в `CI-5`: по паре «тестов / пропущено»
+    нельзя отличить «прошло три из семи» от «не проверено ничего» —
+    пропуски на уровне класса не попадают в «Ran N».
 
     unittest пишет результат в stderr — читаем оба потока.
     """
@@ -194,9 +228,9 @@ def run_one(path: Path) -> tuple[bool, int, int, float, str, str | None]:
         return (False, 0, 0, elapsed,
                 f"НЕ УЛОЖИЛСЯ в {SUITE_TIMEOUT_SEC:g} с и был снят.\n"
                 f"Запустить отдельно и посмотреть, на чём стоит:\n"
-                f"  python {path.relative_to(ROOT)} -v\n"
+                f"  python {_rel(path)} -v\n"
                 + (f"\nЧто успел напечатать:\n{tail}" if tail else ""),
-                None, "таймаут")
+                None, "таймаут", 0)
 
     elapsed = time.monotonic() - t0
     output = (proc.stdout or "") + (proc.stderr or "")
@@ -241,19 +275,79 @@ def run_one(path: Path) -> tuple[bool, int, int, float, str, str | None]:
 
     ok = proc.returncode == 0
     tail = "" if ok else "\n".join(output.strip().split("\n")[-25:])
-    return ok, total, skipped, elapsed, tail, missing, counted_by
+    proved = verdicts_in(output)
+    if not proved:
+        # Набор без подробного вывода: вердиктов в тексте нет, считаем по
+        # числам. Это хуже (см. `is_fully_skipped`), но лучше, чем объявить
+        # непроверенным любой краткий вывод.
+        proved = max(total - skipped, 0)
+    return ok, total, skipped, elapsed, tail, missing, counted_by, proved
 
 
-def main() -> int:
+def verdicts_in(output: str) -> int:
+    """
+    Сколько тестов дошли до вердикта — ok, FAIL или ERROR.
+
+    Считается по подробному выводу (`unittest.main(verbosity=2)`, как во
+    всех наборах проекта): у каждого теста своя строка, и пропущенный
+    оканчивается на `skipped`, а не на вердикт.
+
+    Зачем это вместо арифметики — см. `is_fully_skipped`.
+    """
+    return len(re.findall(r"\.\.\.\s+(?:ok|FAIL|ERROR)\b", output))
+
+
+def is_fully_skipped(total: int, skipped: int, proved: int) -> bool:
+    """
+    CI-5. Набор, пропустивший ВСЕ свои тесты, равен незапущенному.
+
+    Состояний у набора было три: прошёл, упал, не запустился. Четвёртое
+    нашлось на приёмке `PERF-12`: набор запускается, отрабатывает за
+    доли секунды, возвращает ноль — и пропускает все свои проверки до
+    единой. Выглядит это так:
+
+        OK    tests_stats_batch.py     28 тестов    0.1 с (28 пропущено)
+
+    Слово `OK` здесь неверно: не проверено ничего. Правка `PERF-12`
+    сломала в этом наборе три теста, и увидел это не прогон, а человек,
+    заметивший число 28 в скобках.
+
+    Почему нельзя сравнить два числа
+    ─────────────────────────────────
+    Первая версия правила звучала «пропущено >= всего» и покраснела на
+    `tests_graph_writer`, где всё в порядке:
+
+        Ran 3 tests ... OK (skipped=4)
+
+    Три теста прошли по-настоящему, а четыре пропущены на уровне класса
+    (`setUpClass` без Neo4j) — и такие в «Ran N» НЕ входят, в отличие от
+    пропущенных декоратором. То есть по паре чисел «3 и 4» отличить
+    «прошло три» от «не проверено ничего» невозможно в принципе.
+
+    Поэтому считается третье число — сколько тестов дошли до вердикта.
+    Ноль вердиктов при непустом наборе и есть тот случай, ради которого
+    задача заведена: набор отработал, проверок не выполнено.
+    """
+    return total > 0 and skipped > 0 and proved <= 0
+
+
+def main(argv: list[str] | None = None,
+         suites: list[Path] | None = None) -> int:
     ap = argparse.ArgumentParser(description="CI-1: прогон всех наборов тестов.")
     ap.add_argument("--quiet", action="store_true", help="только итоговая строка")
     ap.add_argument("--strict", action="store_true",
-                    help="считать провалом набор, который не удалось запустить")
+                    help="считать провалом набор, который не удалось запустить "
+                         "или который пропустил все свои тесты")
     ap.add_argument("--baseline", action="store_true",
                     help="дополнительно сверить граф с evals/baseline.json")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
-    suites = find_suites()
+    # `suites` — шов для проверки самого раннера (CI-5). Правило «скипнул
+    # всё = провал» живёт в `main`, а не в `run_one`, поэтому проверять
+    # его надо здесь же: тест на `is_fully_skipped` был бы тестом на
+    # арифметику, а не на исход прогона. В работе аргумент не передаётся.
+    if suites is None:
+        suites = find_suites()
     if not suites:
         print("Наборов не найдено — проверьте, что скрипт лежит в scripts/",
               file=sys.stderr)
@@ -261,6 +355,7 @@ def main() -> int:
 
     failures, not_run, total_tests, total_skipped = [], [], 0, 0
     uncounted = []   # запустились, но сколько тестов прошло — неизвестно
+    all_skipped = []  # CI-5: запустились и не проверили ничего
     t0 = time.monotonic()
 
     # FIX-24, вторая половина. Имя набора печаталось ПОСЛЕ его окончания,
@@ -276,7 +371,7 @@ def main() -> int:
     for path in suites:
         if live:
             print(f"  ...  {path.name:<28} идёт…", end="\r", flush=True)
-        ok, n, skipped, elapsed, tail, missing, counted_by = run_one(path)
+        ok, n, skipped, elapsed, tail, missing, counted_by, proved = run_one(path)
         if live:
             print(" " * 60, end="\r")
         total_tests += n
@@ -289,8 +384,17 @@ def main() -> int:
             continue
         if ok and not n:
             uncounted.append(path)
+        skipped_everything = ok and is_fully_skipped(n, skipped, proved)
+        if skipped_everything:
+            all_skipped.append(path)
         if not args.quiet:
             mark = "OK" if ok else ("ЗАВИС" if counted_by == "таймаут" else "ПАД.")
+            if skipped_everything:
+                # CI-5. Слово OK здесь врёт, поэтому его тут и нет: набор
+                # отработал, а проверено ноль. Отметка стоит в той же
+                # колонке, чтобы разница читалась глазом при беглом
+                # просмотре, а не вычислялась из числа в скобках.
+                mark = "ПУСТО"
             mark = f"{mark:<5}"
             note = ""
             if skipped:
@@ -299,6 +403,8 @@ def main() -> int:
             count = f"{n:>4} тестов" if n else "   ? тестов"
             if ok and not n:
                 note += "  ← счётчик не распознан, набор не на unittest"
+            if skipped_everything:
+                note += "  ← пропущены ВСЕ, набор ничего не проверил"
             print(f"  {mark} {path.name:<28} {count}  {elapsed:5.1f} с{note}")
         if not ok:
             failures.append((path, tail))
@@ -313,7 +419,7 @@ def main() -> int:
         # перестаёт быть сообщением — это `DOC-1` в миниатюре.
         print("Не проверялись (нет зависимостей вне контейнера):")
         for path, missing in not_run:
-            print(f"    {path.relative_to(ROOT)} — нужен '{missing}'")
+            print(f"    {_rel(path)} — нужен '{missing}'")
             print(f"      {_container_hint(path)}")
         print()
 
@@ -324,26 +430,52 @@ def main() -> int:
         print("Запустились, но число тестов не распознано "
               "(вывод не в формате unittest):")
         for path in uncounted:
-            print(f"    {path.relative_to(ROOT)} — код возврата 0, но сколько "
+            print(f"    {_rel(path)} — код возврата 0, но сколько "
                   "проверок отработало, из вывода не видно")
         print("    Такой набор засчитан пройденным. Если он сломается так, "
               "что выйдет с нулём проверок,")
         print("    выглядеть это будет точно так же — см. --strict.")
         print()
 
+    # CI-5. Отдельный блок, а не строчка в примечании: до правки такой
+    # набор был неотличим от прошедшего, и именно так `tests_stats_batch`
+    # прожил приёмку `PERF-12` с тремя сломанными тестами внутри.
+    if all_skipped:
+        print("Запустились и не проверили ничего (пропущены все тесты):")
+        for path in all_skipped:
+            print(f"    {_rel(path)} — набор отработал, "
+                  f"проверок выполнено ноль")
+        print("    Обычно причина — недостающий пакет или лежащий стенд: "
+              "тесты скипаются поштучно,")
+        print("    и набор целиком превращается в тишину, которая "
+              "выглядит согласием. См. --strict.")
+        print()
+
     ran = len(suites) - len(not_run)
     not_run_note = f", НЕ ЗАПУСКАЛИСЬ: {len(not_run)}" if not_run else ""
     uncounted_note = (f", БЕЗ СЧЁТЧИКА: {len(uncounted)}" if uncounted else "")
+    # CI-5: число видно и без --strict. Итоговую строку читают чаще, чем
+    # всё остальное, — а до правки «28 пропущено» жило только в скобках у
+    # своего набора и в общей сумме пропущенных, где терялось.
+    empty_note = (f", НИЧЕГО НЕ ПРОВЕРИЛИ: {len(all_skipped)}"
+                  if all_skipped else "")
     skip_note = f", {total_skipped} тестов пропущено внутри наборов" if total_skipped else ""
 
     if failures:
         for path, tail in failures:
-            print(f"─── {path.relative_to(ROOT)} ───")
+            print(f"─── {_rel(path)} ───")
             print(tail)
             print()
         print(f"ПРОВАЛ: {len(failures)} из {ran} запущенных наборов "
               f"(всего {len(suites)}){not_run_note}, "
               f"{total_tests} тестов за {elapsed:.1f} с")
+        return 1
+
+    if all_skipped and args.strict:
+        names = ", ".join(p.name for p in all_skipped)
+        print(f"ПРОВАЛ (--strict): {len(all_skipped)} наборов пропустили ВСЕ "
+              f"свои тесты и не проверили ничего ({names}) — такой набор "
+              f"равен незапущенному")
         return 1
 
     if uncounted and args.strict:
@@ -359,7 +491,8 @@ def main() -> int:
         return 1
 
     print(f"OK: проверено {ran} наборов из {len(suites)}{not_run_note}"
-          f"{uncounted_note}, {total_tests} тестов за {elapsed:.1f} с{skip_note}")
+          f"{uncounted_note}{empty_note}, {total_tests} тестов за "
+          f"{elapsed:.1f} с{skip_note}")
 
     if args.baseline:
         print()

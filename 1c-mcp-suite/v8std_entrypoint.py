@@ -45,6 +45,23 @@ MCP_PATH = os.environ.get("V8STD_MCP_PATH", "/mcp")
 CACHE_DIR = os.environ.get("V8STD_MCP_CACHE_DIR", "/var/lib/v8std-mcp")
 LOG_LEVEL = os.environ.get("V8STD_MCP_LOG_LEVEL", "WARNING")
 
+# EVAL-7. Журнал вызовов чужого сервера.
+#
+# Половина ручного чек-листа проверяет, ЧТО именно позвал агент, и самая
+# важная из этих отметок — про этот сервер: «один вызов
+# explain_diagnostics со всем списком кодов» против «пять вызовов
+# подряд». По тексту ответа они неразличимы, и прогон 22 августа зачёл её
+# косвенно.
+#
+# Форкать чужой код ради этого не понадобилось: у него есть готовый ключ
+# `--usage-log`, пишущий JSONL со временем и именем инструмента. Мы его
+# просто не передавали. Наши четыре сервера пишут в тот же каталог своим
+# модулем `tool_journal.py`, формат строки общий — читает обе половины
+# scripts/journal_report.py.
+#
+# Пусто — ключ не передаётся, поведение прежнее.
+USAGE_LOG = (os.environ.get("V8STD_USAGE_LOG") or "").strip()
+
 
 def _flag(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
@@ -91,6 +108,10 @@ def main() -> int:
         "--allowed-origin", "http://127.0.0.1:*",
         "--allowed-origin", "http://localhost:*",
     ]
+
+    if USAGE_LOG:
+        argv += ["--usage-log", USAGE_LOG]
+        print(f"[v8std-mcp] журнал вызовов: {USAGE_LOG} (EVAL-7)", flush=True)
 
     if PAGES.is_file() and PAGES.stat().st_size > 0:
         argv += ["--pages", str(PAGES)]

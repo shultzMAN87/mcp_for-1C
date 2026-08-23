@@ -42,11 +42,13 @@ from mcp.server.fastmcp import FastMCP
 # локальном запуске тестов — уровнем выше, в 1c-mcp-suite/.
 try:
     from refusal import install_answerable_field, note_degraded, refusal
-    from tool_usage import tool_names, usage_snapshot
+    from tool_usage import tool_names, usage_snapshot, wrap_registered_tools
+    from tool_journal import install as install_journal, journal_path
 except ImportError:  # pragma: no cover — путь только для локального запуска
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from refusal import install_answerable_field, note_degraded, refusal
-    from tool_usage import tool_names, usage_snapshot
+    from tool_usage import tool_names, usage_snapshot, wrap_registered_tools
+    from tool_journal import install as install_journal, journal_path
 
 # B-7: состояние анализатора. Лежит рядом с server.py и в образе тоже
 # попадает в /app, поэтому импорт прямой.
@@ -669,6 +671,24 @@ if __name__ == "__main__":
         # Запрос, пришедший в середине прогрева, встанет на замке внутри
         # клиента и получит готовый процесс — вторая JVM не появится.
         _warmup.start_background()
+
+    # TOOL-1, пропущенный рычаг. Счётчик вызовов ставится в `start.py`, а
+    # у этого сервера своя точка входа (Dockerfile.bsl, CMD server.py) —
+    # то есть обёртка не ставилась НИ РАЗУ, и `usage` в `bsl_stats` был
+    # пуст всегда. Читалось это как «инструменты никто не звал»: прибор,
+    # который показывает ноль независимо от происходящего.
+    _warmup_say(f"[usage] bsl-checker: под счётчиком инструментов: "
+                f"{wrap_registered_tools(mcp)}")
+
+    # EVAL-7: журнал вызовов, если он включён. Выключенный журнал тоже
+    # называется вслух — искать его молча по коду не должен никто.
+    if journal_path():
+        _warmup_say(f"[journal] bsl-checker: пишу вызовы в {journal_path()}, "
+                    f"инструментов под журналом: "
+                    f"{install_journal(mcp, 'bsl-checker')}")
+    else:
+        _warmup_say("[journal] bsl-checker: журнал вызовов выключен "
+                    "(MCP_TOOL_JOURNAL не задан)")
 
     # TR-1: Streamable HTTP (/mcp, stateless) вместо SSE.
     # SEC-3: без MCP_SHARED_SECRET сервер не стартует — mcp_http.run

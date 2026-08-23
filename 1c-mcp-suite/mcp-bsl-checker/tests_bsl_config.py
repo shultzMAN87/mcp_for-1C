@@ -146,6 +146,132 @@ class TestConfigurationRoot(unittest.TestCase):
         self.assertEqual(bsl_config.check_root(info, "/tmp"), "")
 
 
+class TestImplicitConfigurationRoot(unittest.TestCase):
+    """
+    CFG-7. Параметра нет — вопрос остаётся.
+
+    Что было. `bsl_stats` показывал `configuration_root: "УБД"`,
+    `resolves: false`: выгрузка лежит в корне тома, вложенного каталога
+    `УБД` там нет и не было. Диагностики, которым нужны метаданные, не
+    работали с Захода 8 — а отчёт всё это время выглядел чище кода.
+
+    Параметр убран. И вот тут важное: убрать его мало. Без него корнем
+    становится сам анализируемый каталог, метаданные точно так же могут
+    не найтись, и прежний код в этом случае молчал вовсе — секции
+    `configuration_root_check` просто не появлялось. То есть правка
+    «просто убрать» превратила бы видимый дефект в невидимый, что для
+    этого проекта хуже исходного состояния.
+    """
+
+    NO_ROOT = json.dumps({
+        "language": "ru",
+        "diagnostics": {"mode": "ONLY", "parameters": {"EmptyCodeBlock": True}},
+    }, ensure_ascii=False)
+
+    def _info(self, td: str) -> dict:
+        return bsl_config.describe(_write(td, "c.json", self.NO_ROOT))
+
+    def test_resolves_when_the_dump_root_is_mounted(self):
+        """Штатный случай стенда: выгрузка смонтирована целиком."""
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src"
+            src.mkdir()
+            (src / bsl_config.CONFIG_MARKER).write_text("<x/>", encoding="utf-8")
+            out = bsl_config.check_mounted_workspace(self._info(td),
+                                                     roots=(str(src),))
+        self.assertTrue(out["resolves"])
+        self.assertFalse(out["declared"])
+        self.assertEqual(out["found_in"], str(Path(td) / "src"))
+
+    def test_warns_when_a_dump_is_mounted_without_the_marker(self):
+        """
+        Смонтирован подкаталог выгрузки, а не её корень. Признак тот же,
+        что был у неверного `configurationRoot`, и молчать о нём нельзя:
+        BSL LS не скажет ничего, а половина диагностик не отработает.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src"
+            src.mkdir()
+            (src / "Catalog.Контрагенты.xml").write_text("<x/>", encoding="utf-8")
+            out = bsl_config.check_mounted_workspace(self._info(td),
+                                                     roots=(str(src),))
+        self.assertFalse(out["resolves"])
+        self.assertIn(bsl_config.CONFIG_MARKER, out["warning"])
+
+    def test_quiet_when_there_is_no_dump_at_all(self):
+        """
+        Каталог смонтирован, выгрузки в нём нет. Анализировать нечего, и
+        предупреждение увело бы от настоящей причины — ровно как в случае
+        «выгрузка не смонтирована».
+        """
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src"
+            src.mkdir()
+            (src / "AGENTS.md").write_text("нет выгрузки", encoding="utf-8")
+            out = bsl_config.check_mounted_workspace(self._info(td),
+                                                     roots=(str(src),))
+        self.assertIsNone(out["resolves"])
+        self.assertNotIn("warning", out)
+
+    def test_says_nothing_when_our_ruleset_is_not_applied(self):
+        """
+        Конфига нет вовсе — про его корень говорить нечего, а причина
+        деградации уже названа громче и точнее.
+        """
+        self.assertEqual(
+            bsl_config.check_mounted_workspace(bsl_config.describe("")), {})
+
+    def test_directory_analysis_warns_about_the_implicit_root(self):
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src"
+            src.mkdir()
+            (src / "Catalog.Контрагенты.xml").write_text("<x/>", encoding="utf-8")
+            warning = bsl_config.check_root(self._info(td), str(src))
+        self.assertIn("не задан", warning)
+        self.assertIn(bsl_config.CONFIG_MARKER, warning)
+
+    def test_directory_analysis_is_silent_on_a_proper_root(self):
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "src"
+            src.mkdir()
+            (src / bsl_config.CONFIG_MARKER).write_text("<x/>", encoding="utf-8")
+            self.assertEqual(bsl_config.check_root(self._info(td), str(src)), "")
+
+    def test_code_fragment_is_never_warned_about(self):
+        """
+        `bsl_check_code` работает во временном каталоге, где корня
+        конфигурации нет и быть не может. Предупреждение на каждом вызове
+        — шум, а не сигнал; ровно поэтому `src_path` туда не передаётся.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(bsl_config.check_root(self._info(td), ""), "")
+
+
+class TestShippedConfigMatchesTheMount(unittest.TestCase):
+    """
+    CFG-7, вторая половина: правка в файле настроек, а не в коде.
+
+    Сторож нужен потому, что параметр вернуть легко и незаметно — строка
+    в JSON выглядит безобидно, а последствие (молчащие диагностики по
+    метаданным) видно только в `bsl_stats`, куда смотрят раз в заход.
+    """
+
+    def test_repo_config_does_not_declare_a_missing_root(self):
+        cfg = (Path(__file__).resolve().parents[2] / "bsl-config"
+               / "bsl-language-server.json")
+        info = bsl_config.describe(str(cfg))
+        self.assertTrue(info["applied"], info.get("error"))
+        self.assertNotIn(
+            "configuration_root", info,
+            "в bsl-config/bsl-language-server.json снова объявлен "
+            "configurationRoot. Он ищется ОТНОСИТЕЛЬНО анализируемого "
+            "каталога (/data/1c-src). Выгрузка лежит в корне тома, "
+            "вложенного каталога там нет — значит метаданные не "
+            "подтянутся, а BSL LS об этом не скажет. Если каталог "
+            "появился, поменяйте и этот тест вместе с ним",
+        )
+
+
 class TestBrief(unittest.TestCase):
 
     def test_applied_config_names_its_ruleset(self):

@@ -95,6 +95,32 @@ def _wrap_tools_with_usage(mcp_obj, server_name: str) -> None:
         sys.stderr.write(f"[usage] не удалось обернуть tools: {e}\n")
 
 
+def _install_tool_journal(mcp_obj, server_name: str) -> None:
+    """
+    EVAL-7: трасса вызовов в файл — на время ручного прогона.
+
+    Выключен, пока не задан `MCP_TOOL_JOURNAL`. Строка в логе печатается
+    в обоих случаях: «журнал выключен» — тоже ответ, и искать его молча
+    по коду не должен никто.
+    """
+    try:
+        from tool_journal import install, journal_path
+    except Exception as e:
+        sys.stderr.write(f"[journal] tool_journal недоступен: {e}\n")
+        return
+    try:
+        path = journal_path()
+        if not path:
+            print(f"[journal] {server_name}: журнал вызовов выключен "
+                  f"(MCP_TOOL_JOURNAL не задан)", flush=True)
+            return
+        n = install(mcp_obj, server_name)
+        print(f"[journal] {server_name}: пишу вызовы в {path}, "
+              f"инструментов под журналом: {n}", flush=True)
+    except Exception as e:
+        sys.stderr.write(f"[journal] не удалось обернуть tools: {e}\n")
+
+
 def _start_metrics_dashboard_async() -> None:
     """Поднимает HTTP-дашборд метрик в отдельном потоке."""
     if os.environ.get("METRICS_DASHBOARD", "true").lower() not in ("true", "1", "yes"):
@@ -165,6 +191,7 @@ def main():
 
     _wrap_tools_with_metrics(mcp_obj, name)
     _wrap_tools_with_usage(mcp_obj, name)
+    _install_tool_journal(mcp_obj, name)
     _start_metrics_dashboard_async()
 
     # TR-1: Streamable HTTP вместо SSE. Аутентификация (SEC-3/TR-3) и

@@ -191,6 +191,34 @@ class TestRootIsClean(unittest.TestCase):
                            "в архиве подозрительно пусто — переезд не прошёл?")
 
 
+class TestClosingOrderHasAPlace(unittest.TestCase):
+    """
+    DOC-11. У сверки документов с фактом должно быть место, куда смотрят.
+
+    Проверить «текст соответствует факту» машине нельзя, и заводить такой
+    сторож было бы обманом. Проверяется другое и честно: описан ли
+    порядок закрытия захода вообще. Заход 9 оставил три документа,
+    отставших от собственных результатов, и все три нашла внешняя оценка
+    — то есть порядка не было ни в чьей голове, не только в файле.
+    """
+
+    def setUp(self):
+        self.text = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    def test_readme_says_how_a_zahod_is_closed(self):
+        self.assertIn(
+            "Закрытие захода", self.text,
+            "в README нет порядка закрытия захода (DOC-11): архивировать "
+            "план и разбор, перечитать ОТКРЫТОЕ.md против СТАТУС.md, и "
+            "только потом коммитить",
+        )
+
+    def test_the_order_names_both_living_documents(self):
+        head = self.text[self.text.find("Закрытие захода"):][:2000]
+        for name in ("ОТКРЫТОЕ.md", "СТАТУС.md", "docs/archive/"):
+            self.assertIn(name, head, f"в порядке закрытия не назван {name}")
+
+
 class TestArchiveIndexMatchesArchive(unittest.TestCase):
     """
     Указатель обязан совпадать с тем, на что указывает.

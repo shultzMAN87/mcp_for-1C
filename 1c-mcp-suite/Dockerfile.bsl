@@ -50,6 +50,10 @@ COPY refusal.py /app/refusal.py
 # Импортируется серверами metadata-graph, platform-help и bsl-checker;
 # копируется в ТРИ образа — расхождение ловит tests_delivery.py.
 COPY tool_usage.py /app/tool_usage.py
+# EVAL-7: журнал вызовов инструментов (трасса ручного прогона).
+# Выключен, пока не задан MCP_TOOL_JOURNAL; импортируется теми же
+# серверами, что и tool_usage.py, — расхождение ловит tests_delivery.py.
+COPY tool_journal.py /app/tool_journal.py
 # B-4: единый словарь постраничности. Строку не пришлось вспоминать —
 # tests_delivery.py (B-6) назвал её сам, как только сервер начал
 # импортировать модуль.

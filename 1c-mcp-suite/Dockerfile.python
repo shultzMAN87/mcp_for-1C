@@ -47,6 +47,10 @@ COPY refusal.py                      /app/refusal.py
 # Импортируется серверами metadata-graph, platform-help и bsl-checker;
 # копируется в ТРИ образа — расхождение ловит tests_delivery.py.
 COPY tool_usage.py                      /app/tool_usage.py
+# EVAL-7: журнал вызовов инструментов (трасса ручного прогона).
+# Выключен, пока не задан MCP_TOOL_JOURNAL; импортируется теми же
+# серверами, что и tool_usage.py, — расхождение ловит tests_delivery.py.
+COPY tool_journal.py                    /app/tool_journal.py
 # FIX-27: проверка целостности графа (у кода есть владелец или его нет).
 # Импортируется сервером metadata-graph, индексером и apply_changes —
 # без этой строки они падают на импорте при старте.

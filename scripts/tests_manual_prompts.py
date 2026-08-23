@@ -115,6 +115,48 @@ class TestChecklistShape(unittest.TestCase):
         self.assertFalse(offenders, "; ".join(offenders))
 
 
+class TestCallJournalIsPartOfTheRun(unittest.TestCase):
+    """
+    EVAL-7. Отметка «обязано быть вызвано» обязана опираться на журнал.
+
+    Прогон 22 августа шёл без него, и треть отметок вышла косвенной: судили
+    по тексту ответа. Ровно те два случая, ради которых отметка заводилась
+    («один вызов со всем списком» против «пяти подряд»), в тексте
+    неразличимы — значит проверялось не то, что записано.
+
+    Сторож нужен потому, что колонку легко забыть заполнить, а бланк без
+    неё выглядит точно так же полным.
+    """
+
+    def setUp(self):
+        self.text = DOC.read_text(encoding="utf-8")
+
+    def test_blank_has_a_column_for_calls(self):
+        self.assertIn(
+            "Вызовы (из журнала)", self.text,
+            "в бланке нет колонки под список вызовов — значит следующий "
+            "прогон снова будет наполовину косвенным (EVAL-7)",
+        )
+
+    def test_how_to_turn_the_journal_on_is_written_down(self):
+        """
+        Команда, которую держат в голове, живёт до второй недели. Здесь
+        она нужна раз в заход — то есть не живёт вовсе.
+        """
+        for token in ("MCP_TOOL_JOURNAL", "V8STD_USAGE_LOG",
+                      "journal_report.py"):
+            self.assertIn(token, self.text,
+                          f"не сказано про {token}: журнал включать нечем")
+
+    def test_recreate_not_restart(self):
+        """
+        `restart` не подхватывает новые переменные. На этом уже терялась
+        приёмка `SCALE-1`, и повторить это на журнале особенно обидно:
+        прогон пройдёт целиком и окажется неизмеренным.
+        """
+        self.assertIn("force-recreate", self.text)
+
+
 class TestAllServersAreCovered(unittest.TestCase):
     """
     Пять серверов — пять источников ошибок. Перекос проверялся руками и

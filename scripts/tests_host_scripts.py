@@ -158,7 +158,7 @@ class TestSuiteCounting(unittest.TestCase):
             return self.mod.run_one(path)
 
     def test_unittest_output_is_counted(self):
-        ok, n, _, _, _, _, how = self._run_fake(
+        ok, n, _, _, _, _, how, _proved = self._run_fake(
             "import unittest\n"
             "class T(unittest.TestCase):\n"
             "    def test_a(self): pass\n"
@@ -171,7 +171,7 @@ class TestSuiteCounting(unittest.TestCase):
 
     def test_progress_format_is_counted(self):
         """Формат `evals/runner/tests.py`: пять функций и печать прогресса."""
-        ok, n, _, _, _, _, how = self._run_fake(
+        ok, n, _, _, _, _, how, _proved = self._run_fake(
             'print("[1/5] predicates: OK")\n'
             'print("[5/5] run_one + report: OK")\n'
         )
@@ -185,10 +185,134 @@ class TestSuiteCounting(unittest.TestCase):
         придуманных проверок. Ноль здесь — честный ответ «неизвестно», и
         именно он выносится отдельным числом в итоговую строку.
         """
-        ok, n, _, _, _, _, how = self._run_fake('print("готово")\n')
+        ok, n, _, _, _, _, how, _proved = self._run_fake('print("готово")\n')
         self.assertTrue(ok)
         self.assertEqual(n, 0)
         self.assertEqual(how, "")
+
+
+class TestFullySkippedSuiteIsNotSuccess(unittest.TestCase):
+    """
+    CI-5. Четвёртое состояние набора: запустился и не проверил ничего.
+
+    `A-5` различил «прошло», «упало» и «не запускалось». Приёмка `PERF-12`
+    показала четвёртое: `tests_stats_batch.py` печатал
+
+        OK    tests_stats_batch.py     28 тестов    0.1 с (28 пропущено)
+
+    и читался как норма, пока внутри него три теста лежали сломанными.
+    Пропуск был поштучным (нет пакета `mcp`), а сумма получилась полной —
+    то есть набор превратился в тишину, а тишина выглядит согласием.
+
+    Проверяем ИСХОД ПРОГОНА, а не арифметику: правило живёт в `main`, и
+    тест на `is_fully_skipped` был бы зелёным при любом поведении ключа
+    `--strict`. Для этого у `main` есть шов — список наборов можно
+    передать аргументом.
+    """
+
+    def setUp(self):
+        sys.path.insert(0, str(SCRIPTS))
+        import run_all_tests
+        self.mod = run_all_tests
+
+    def _run_main(self, body: str, argv: list[str]) -> tuple[int, str]:
+        import io
+        import contextlib
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "tests_twin.py"
+            path.write_text(body, encoding="utf-8")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = self.mod.main(argv, suites=[path])
+            return rc, buf.getvalue()
+
+    ALL_SKIPPED = (
+        "import unittest\n"
+        "class T(unittest.TestCase):\n"
+        "    @unittest.skip('нет пакета/стенда')\n"
+        "    def test_a(self): pass\n"
+        "    @unittest.skip('нет пакета/стенда')\n"
+        "    def test_b(self): pass\n"
+        "unittest.main(verbosity=2)\n"
+    )
+
+    HALF_SKIPPED = (
+        "import unittest\n"
+        "class T(unittest.TestCase):\n"
+        "    @unittest.skip('нужен Neo4j')\n"
+        "    def test_a(self): pass\n"
+        "    def test_b(self): pass\n"
+        "unittest.main(verbosity=2)\n"
+    )
+
+    def test_strict_fails_on_a_suite_that_skipped_everything(self):
+        rc, out = self._run_main(self.ALL_SKIPPED, ["--strict"])
+        self.assertEqual(rc, 1, out)
+        self.assertIn("не проверили ничего", out)
+
+    def test_normal_run_still_passes(self):
+        """
+        Обычный прогон не роняем намеренно: пропуск по отсутствию стенда —
+        повседневность, и красный прогон на машине без Neo4j отучил бы
+        запускать тесты вовсе. Строгость — там, где её просят.
+        """
+        rc, out = self._run_main(self.ALL_SKIPPED, [])
+        self.assertEqual(rc, 0, out)
+        # Но молчать об этом нельзя даже в обычном прогоне.
+        self.assertIn("ПУСТО", out)
+        self.assertIn("НИЧЕГО НЕ ПРОВЕРИЛИ: 1", out)
+
+    def test_partially_skipped_suite_is_not_touched(self):
+        """
+        Граница проходит по 100 %. `tests_graph_writer` пропускает четыре
+        теста из семи без Neo4j — и три оставшихся проверяют настоящее.
+        """
+        rc, out = self._run_main(self.HALF_SKIPPED, ["--strict"])
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("ПУСТО", out)
+
+    def test_rule_itself(self):
+        # tests_stats_batch: 28 тестов, все пропущены декоратором.
+        self.assertTrue(self.mod.is_fully_skipped(28, 28, proved=0))
+        # tests_graph_writer без Neo4j: три теста дошли до вердикта, ещё
+        # четыре пропущены на уровне класса и в «Ran N» не вошли. Первая
+        # редакция правила краснела именно здесь.
+        self.assertFalse(self.mod.is_fully_skipped(3, 4, proved=3))
+        # Ноль тестов — другой диагноз («счётчик не распознан»), у него
+        # свой блок и своя ветка --strict.
+        self.assertFalse(self.mod.is_fully_skipped(0, 0, proved=0))
+
+    def test_verdicts_are_counted_from_verbose_output(self):
+        """
+        Третье число берётся из строк вердиктов, а не из арифметики: ровно
+        поэтому пропуск на уровне класса перестал выглядеть провалом.
+        """
+        text = ("test_a (T.test_a) ... ok\n"
+                "test_b (T.test_b) ... skipped 'нет Neo4j'\n"
+                "test_c (T.test_c) ... FAIL\n")
+        self.assertEqual(self.mod.verdicts_in(text), 2)
+        self.assertEqual(self.mod.verdicts_in("... skipped 'нет'\n"), 0)
+
+    def test_class_level_skips_do_not_look_like_an_empty_suite(self):
+        """
+        Живой двойник `tests_graph_writer`: класс целиком пропущен через
+        setUpClass, а рядом есть работающий тест. Такой набор проверяет
+        настоящее, и ронять на нём `--strict` нельзя.
+        """
+        rc, out = self._run_main(
+            "import unittest\n"
+            "class Skipped(unittest.TestCase):\n"
+            "    @classmethod\n"
+            "    def setUpClass(cls): raise unittest.SkipTest('нет Neo4j')\n"
+            "    def test_x(self): pass\n"
+            "    def test_y(self): pass\n"
+            "class Real(unittest.TestCase):\n"
+            "    def test_z(self): pass\n"
+            "unittest.main(verbosity=2)\n",
+            ["--strict"])
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("ПУСТО", out)
 
 
 class TestSubprocessOutputIsDecodedSafely(unittest.TestCase):

@@ -211,19 +211,71 @@ def degradation_reason(info: dict) -> str:
 # поэтому расхождение сторожит tests_bsl_config.py.
 SOURCE_ROOTS = ("/data/1c-src", "/workspace", "/data/1c-config")
 
+# CFG-7. По какому файлу видно, что каталог — корень конфигурации.
+#
+# BSL LS ищет метаданные там, куда показывает `configurationRoot`, а если
+# параметра нет — в самом анализируемом каталоге. И в том, и в другом
+# случае он рассчитывает найти там `Configuration.xml` выгрузки
+# конфигуратора. Не нашёл — просто работает без метаданных и молчит.
+CONFIG_MARKER = "Configuration.xml"
+
+
+def _looks_like_a_dump(base: Path) -> bool:
+    """
+    Похож ли каталог на выгрузку вообще — есть ли в нём хоть один XML.
+
+    Нужно, чтобы отличить два разных случая с одинаковым признаком
+    «маркера нет»: смонтирован не тот каталог выгрузки (это дефект, о нём
+    надо кричать) и смонтирован каталог, где выгрузки нет вовсе — тогда
+    `bsl_check_directory` и так ничего не найдёт, и пугать нечем.
+    """
+    try:
+        for entry in base.iterdir():
+            if entry.is_file() and entry.name.lower().endswith(".xml"):
+                return True
+    except OSError:
+        return False
+    return False
+
 
 def check_root(info: dict, src_path: str) -> str:
     """
-    Разрешится ли `configurationRoot` при анализе этого каталога.
+    Разрешится ли корень конфигурации при анализе этого каталога.
 
     BSL LS ищет корень конфигурации внутри анализируемых исходников. Если
     каталога там нет, часть диагностик (те, что смотрят на метаданные и на
     режим поддержки) молча не отработает — отчёт будет выглядеть чище, чем
     код на самом деле.
+
+    CFG-7. Проверяются оба случая, а не только объявленный путь. Когда
+    `configurationRoot` не задан, корнем служит сам анализируемый каталог
+    — и метаданные точно так же могут не подтянуться, только теперь без
+    единого подозрительного параметра в файле настроек. Молчать об этом
+    было бы хуже: прежняя редакция предупреждала ровно там, где путь
+    написан, то есть о неверной настройке — но не о её отсутствии.
     """
     root = info.get("configuration_root")
-    if not root or not src_path:
+    if not src_path:
         return ""
+    if not root:
+        # Своего конфига нет вовсе — про его корень говорить нечего, а
+        # причина деградации уже названа отдельно и громче.
+        if not info.get("applied"):
+            return ""
+        try:
+            base = Path(src_path)
+            if (base / CONFIG_MARKER).is_file():
+                return ""
+            if not _looks_like_a_dump(base):
+                return ""
+        except OSError:
+            return ""
+        return (
+            f"configurationRoot не задан, значит корнем конфигурации служит "
+            f"сам анализируемый каталог {src_path} — а {CONFIG_MARKER} в нём "
+            "нет. Диагностики, которым нужны метаданные конфигурации, не "
+            "отработают, и отчёт будет выглядеть чище, чем код."
+        )
     try:
         if (Path(src_path) / root).exists():
             return ""
@@ -250,10 +302,16 @@ def check_mounted_workspace(info: dict, roots=SOURCE_ROOTS) -> dict:
 
     Поэтому `bsl_stats` отвечает на вопрос сразу и без анализа. Разбор
     ответа тот же, что у всей секции: `applied` не равно «работает».
+
+    CFG-7. Раньше при незаданном `configurationRoot` секции не было
+    вовсе, и это читалось как «вопрос снят». Вопрос не снят: корнем
+    становится сам каталог выгрузки, и метаданные точно так же могут не
+    подтянуться. Отсутствие секции означало ровно то же, что и молчание
+    BSL LS, — то есть повторяло дефект, ради которого секция заводилась.
     """
     root = info.get("configuration_root")
     if not root:
-        return {}
+        return _check_implicit_root(info, roots)
     checked = []
     for candidate in roots:
         base = Path(candidate)
@@ -261,10 +319,12 @@ def check_mounted_workspace(info: dict, roots=SOURCE_ROOTS) -> dict:
             continue
         checked.append(candidate)
         if (base / root).is_dir():
-            return {"root": root, "found_in": candidate, "resolves": True}
+            return {"root": root, "declared": True,
+                    "found_in": candidate, "resolves": True}
     if not checked:
         return {
             "root": root,
+            "declared": True,
             "resolves": None,
             "note": ("выгрузка в контейнер не смонтирована — проверить "
                      "нечем; для bsl_check_directory это и так означает, "
@@ -272,6 +332,7 @@ def check_mounted_workspace(info: dict, roots=SOURCE_ROOTS) -> dict:
         }
     return {
         "root": root,
+        "declared": True,
         "resolves": False,
         "searched": checked,
         "warning": (
@@ -282,6 +343,65 @@ def check_mounted_workspace(info: dict, roots=SOURCE_ROOTS) -> dict:
             "тогда хотя бы не будет видимости, что они работают."
         ),
     }
+
+
+def _check_implicit_root(info: dict, roots) -> dict:
+    """
+    CFG-7. `configurationRoot` не задан — корнем служит сама выгрузка.
+
+    Это штатная и правильная настройка для нашего стенда: выгрузка
+    смонтирована в `/data/1c-src` целиком, без вложенного каталога.
+    Проверять всё равно есть что — найдёт ли BSL LS там метаданные. Если
+    `Configuration.xml` в корне нет, диагностики по метаданным не
+    отработают ровно так же, как при неверном пути, только молча и без
+    единого подозрительного параметра в файле настроек.
+    """
+    if not info.get("applied"):
+        # Свой набор правил не применён — про его корень говорить нечего,
+        # и вторая жалоба рядом с первой только размывает причину.
+        return {}
+
+    answer = {
+        "root": "",
+        "declared": False,
+        "means": ("параметр не задан — корнем конфигурации служит сам "
+                  "анализируемый каталог"),
+        "marker": CONFIG_MARKER,
+    }
+
+    checked, dumps = [], []
+    for candidate in roots:
+        base = Path(candidate)
+        if not base.is_dir():
+            continue
+        checked.append(candidate)
+        if (base / CONFIG_MARKER).is_file():
+            return dict(answer, found_in=candidate, resolves=True)
+        if _looks_like_a_dump(base):
+            dumps.append(candidate)
+
+    if not checked:
+        return dict(answer, resolves=None, note=(
+            "выгрузка в контейнер не смонтирована — проверить нечем; для "
+            "bsl_check_directory это и так означает, что анализировать "
+            "нечего"))
+
+    if not dumps:
+        # Смонтировано что-то, но выгрузки там нет вовсе. Это не дефект
+        # настройки: анализировать всё равно нечего, и предупреждение
+        # увело бы в сторону от настоящей причины.
+        return dict(answer, resolves=None, searched=checked, note=(
+            f"в смонтированных каталогах ({', '.join(checked)}) нет ни "
+            f"{CONFIG_MARKER}, ни других XML — выгрузки конфигурации там "
+            "нет, и bsl_check_directory анализировать нечего"))
+
+    return dict(answer, resolves=False, searched=checked, warning=(
+        f"{CONFIG_MARKER} не найден в корне выгрузки ({', '.join(dumps)}), "
+        "а configurationRoot не задан — значит BSL LS ищет метаданные там "
+        "же и не находит. Диагностики по метаданным не отработают, отчёт "
+        "будет выглядеть чище кода. Проверьте, что смонтирован корень "
+        "выгрузки, а не подкаталог: docker exec mcp-bsl-checker ls "
+        "/data/1c-src"))
 
 
 def should_refuse(info: dict, strict: bool) -> bool:
