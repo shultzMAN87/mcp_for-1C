@@ -177,12 +177,29 @@ class TestFingerprintModes(unittest.TestCase):
         Правка, не изменившая размер (заменили символ на символ). Ловится
         по mtime — ради этого в кортеже и лежит st_mtime_ns, а не только
         размер.
+
+        Отметка времени выставляется явно через os.utime, и это не
+        подгонка под ответ, а устранение чужой переменной. Тест
+        проверяет свойство отпечатка: «mtime изменился — дайджест
+        изменился». Успеет ли часы файловой системы тикнуть между двумя
+        записями подряд — свойство не отпечатка, а платформы: на NTFS
+        отметка последней записи обновляется примерно раз в 16 мс, и обе
+        записи попадают в один тик. Набор от этого падал через раз, и
+        падал не там, где сломано.
+
+        Само ограничение (одинаковый размер и одинаковый mtime не видны
+        режиму stat) уже описано в test_known_blind_spot_same_size_same_mtime
+        и здесь не дублируется.
         """
         p = self.root / "CommonModules/Общий/Ext/Module.bsl"
         before, _ = fingerprint_workspace_multi(self.root)
         text = p.read_text(encoding="utf-8")
         p.write_text(text.replace("1", "2"), encoding="utf-8")
         self.assertEqual(len(text), len(p.read_text(encoding="utf-8")))
+
+        stat = p.stat()
+        os.utime(p, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+
         after, _ = fingerprint_workspace_multi(self.root)
         self.assertNotEqual(before[".bsl"], after[".bsl"])
 

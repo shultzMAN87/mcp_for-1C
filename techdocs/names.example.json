@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "generated_at": "2026-09-01",
+    "objects": 3,
+    "aliases": 9,
+    "collisions": {},
+    "note": "Пример формата. Боевой файл names.json генерируется docs_names_dump.py, руками не правится и в git не коммитится."
+  },
+  "canonical": [
+    "Catalog.Контрагенты",
+    "CommonModule.ОбменМП",
+    "InformationRegister.СостоянияЗаказов"
+  ],
+  "aliases": {
+    "catalog.контрагенты": "Catalog.Контрагенты",
+    "справочник.контрагенты": "Catalog.Контрагенты",
+    "справочники.контрагенты": "Catalog.Контрагенты",
+    "commonmodule.обменмп": "CommonModule.ОбменМП",
+    "общиймодуль.обменмп": "CommonModule.ОбменМП",
+    "общиемодули.обменмп": "CommonModule.ОбменМП",
+    "informationregister.состояниязаказов": "InformationRegister.СостоянияЗаказов",
+    "регистрсведений.состояниязаказов": "InformationRegister.СостоянияЗаказов",
+    "регистрысведений.состояниязаказов": "InformationRegister.СостоянияЗаказов"
+  },
+  "procedures": {}
+}

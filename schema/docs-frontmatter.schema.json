@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:1c-mcp-suite:docs-frontmatter:1",
+  "title": "Фронтматтер технического документа (PLAN-DOCS 3.1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "type", "title", "targets", "source", "updated"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
+      "description": "Уникален по всему корпусу. Латиница, цифры, дефис."
+    },
+    "type": {
+      "enum": ["process", "http-service", "object"]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 240,
+      "description": "Уникален среди publish: true — заголовки страниц уникальны в пределах пространства (R10)."
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 3 },
+      "description": "КАНОН — full_name_eng из графа. Пустой targets = документ сгниёт молча, это ошибка."
+    },
+    "subsystem": { "type": "string", "minLength": 1 },
+    "source": {
+      "enum": ["generated", "reviewed"],
+      "description": "generated = гипотеза, reviewed = принято человеком."
+    },
+    "specs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "fp": {
+      "type": "object",
+      "description": "Отпечатки по targets. Ключи обязаны быть подмножеством targets.",
+      "additionalProperties": { "type": "string", "pattern": "^[0-9a-fA-F]{6,64}$" }
+    },
+    "confluence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "page_id": { "type": "string", "pattern": "^[0-9]+$" },
+        "space": { "type": "string", "minLength": 1 },
+        "body_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{6,64}$",
+          "description": "Хэш тела ПОСЛЕ конвертации в storage format (R3)."
+        }
+      }
+    },
+    "publish": {
+      "type": "boolean",
+      "description": "По умолчанию: false для type=object, true для остальных."
+    },
+    "updated": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "reviewed_by": { "type": "string", "minLength": 1 },
+    "stale": { "type": "boolean" },
+    "stale_reason": { "type": "string", "minLength": 1 },
+    "imported_from": {
+      "type": "object",
+      "description": "Заполняется блоком H при миграции. Односторонне: после импорта источник правды — git.",
+      "additionalProperties": false,
+      "properties": {
+        "page_id": { "type": "string", "pattern": "^[0-9]+$" },
+        "space": { "type": "string" },
+        "original_author": { "type": "string" },
+        "imported_at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "source": { "const": "reviewed" } }, "required": ["source"] },
+      "then": { "required": ["reviewed_by"] }
+    },
+    {
+      "if": { "required": ["stale"], "properties": { "stale": { "const": true } } },
+      "then": { "required": ["stale_reason"] }
+    }
+  ]
+}

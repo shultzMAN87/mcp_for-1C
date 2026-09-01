@@ -1,0 +1,85 @@
+# Тестовый Confluence для пилота (Р-1: развёртывание внутреннее, Data Center).
+#
+# Отдельный файл, а не секция в docker-compose.yml набора. Причины две:
+#   • Confluence не нужен ни одному из пяти серверов и не должен подниматься
+#     обычным `docker compose up -d` — он съедает 2–3 ГБ и стартует минуты;
+#   • контур временный. Пилот прошёл, боевой Confluence подключён по адресу —
+#     файл удаляется одним движением, и в основном compose следов не остаётся.
+#
+# Запуск:
+#     docker compose -f docker-compose.confluence.yml up -d
+#     docker compose -f docker-compose.confluence.yml logs -f confluence
+#
+# Первый старт идёт 3–7 минут и заканчивается мастером настройки на
+# http://localhost:8090. В мастере: «Production installation», база —
+# PostgreSQL, JDBC URL jdbc:postgresql://confluence-db:5432/confluence,
+# пользователь confluence, пароль из .env.
+#
+# ⚠️ Нужен пробный лицензионный ключ Atlassian (запрашивается в мастере,
+# бесплатно, срок ограничен). Без него Confluence не стартует дальше мастера.
+# Если корпоративная политика не позволяет ходить за ключом с этой машины —
+# пробник придётся гонять против тестового пространства боевого Confluence,
+# и тогда весь этот файл не нужен.
+#
+# Версию образа зафиксируйте под ту, что стоит у вас в компании: поведение
+# REST-API и формат storage между мажорными версиями отличаются, а пробник
+# затевается ровно ради того, чтобы выяснить поведение ВАШЕЙ установки.
+# Тег ниже — заглушка, замените на свой.
+
+services:
+  confluence-db:
+    image: postgres:15
+    container_name: confluence-db
+    environment:
+      - POSTGRES_DB=confluence
+      - POSTGRES_USER=confluence
+      - POSTGRES_PASSWORD=${CONFLUENCE_DB_PASSWORD:?Задайте CONFLUENCE_DB_PASSWORD в .env}
+      # Confluence требует именно эту сортировку, иначе мастер настройки
+      # отказывается принимать базу.
+      - POSTGRES_INITDB_ARGS=--encoding=UTF8 --lc-collate=C --lc-ctype=C
+    volumes:
+      - confluence-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U confluence -d confluence"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  confluence:
+    image: atlassian/confluence:${CONFLUENCE_IMAGE_TAG:-latest}
+    container_name: confluence
+    depends_on:
+      confluence-db:
+        condition: service_healthy
+    ports:
+      # Только на петлю, как и все остальные порты набора.
+      - "127.0.0.1:8090:8090"
+    environment:
+      - ATL_JDBC_URL=jdbc:postgresql://confluence-db:5432/confluence
+      - ATL_JDBC_USER=confluence
+      - ATL_JDBC_PASSWORD=${CONFLUENCE_DB_PASSWORD:?Задайте CONFLUENCE_DB_PASSWORD в .env}
+      - ATL_DB_TYPE=postgresql
+      # Память. Меньше 2 ГБ Confluence не выдерживает даже пустым.
+      - JVM_MINIMUM_MEMORY=1024m
+      - JVM_MAXIMUM_MEMORY=2048m
+      # Кириллица в заголовках и телах страниц — это R9, и проверять её
+      # надо на контуре, где кодировка задана явно, а не «как получилось».
+      - JAVA_OPTS=-Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8
+    volumes:
+      - confluence-data:/var/atlassian/application-data/confluence
+    healthcheck:
+      # В образе есть curl. Мастер настройки отвечает 200 на /status уже
+      # тогда, когда сама установка ещё не завершена — это нормально:
+      # healthcheck отвечает на вопрос «процесс жив», а не «настроен».
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8090/status || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+    restart: unless-stopped
+
+volumes:
+  confluence-db-data:
+  confluence-data:
