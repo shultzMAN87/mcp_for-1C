@@ -2,8 +2,8 @@
 """
 Точка входа контейнера `v8std-mcp` (STD-4).
 
-Сервер здесь чужой — это `scripts/v8std_mcp_server.py` из репозитория
-zeegin/v8std, положенный в образ монтированием `./v8std-data:/opt/v8std:ro`
+Сервер здесь чужой — это пакет `runtime/` (`python -m
+runtime.v8std_mcp_server`) из репозитория zeegin/v8std, положенный в образ монтированием `./v8std-data:/opt/v8std:ro`
 (забирает `scripts/fetch_v8std.py`). Мы его не форкаем и не правим: своё —
 только запуск с нужными флагами и внятная диагностика, когда корпуса нет.
 
@@ -34,7 +34,12 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(os.environ.get("V8STD_REPO_ROOT", "/opt/v8std"))
-SERVER = REPO_ROOT / "scripts" / "v8std_mcp_server.py"
+# V8STD-2. С 17.09.2026 сервер — пакет runtime/, запускается как модуль.
+# Прежняя раскладка (один файл в scripts/) оставлена: каталог, забранный
+# до переезда, должен подниматься так же, как поднимался.
+SERVER = REPO_ROOT / "runtime" / "v8std_mcp_server.py"
+SERVER_MODULE = "runtime.v8std_mcp_server"
+LEGACY_SERVER = REPO_ROOT / "scripts" / "v8std_mcp_server.py"
 PAGES = REPO_ROOT / "docs" / "ai" / "pages.jsonl"
 VECTORS = REPO_ROOT / "docs" / "ai" / "search-vectors.jsonl"
 RULES = REPO_ROOT / "retrieval-rules.yml"
@@ -86,15 +91,25 @@ FETCH_HINT = (
 
 
 def main() -> int:
-    if not SERVER.is_file():
+    if SERVER.is_file():
+        launch = ["-m", SERVER_MODULE]
+        print(f"[v8std-mcp] сервер: {SERVER_MODULE}", flush=True)
+    elif LEGACY_SERVER.is_file():
+        launch = [str(LEGACY_SERVER)]
+        sys.stderr.write(
+            f"[v8std-mcp] сервер в старой раскладке ({LEGACY_SERVER}) — "
+            "корпус забран до V8STD-2. Работать будет, но обновите:\n"
+            "    python scripts/fetch_v8std.py\n"
+        )
+    else:
         _die(
-            f"не найден сервер {SERVER}",
+            f"не найден сервер: ни {SERVER}, ни {LEGACY_SERVER}",
             FETCH_HINT,
         )
 
     argv = [
         sys.executable,
-        str(SERVER),
+        *launch,
         "--cache-dir", CACHE_DIR,
         "--host", HOST,
         "--port", str(PORT),
@@ -149,7 +164,10 @@ def main() -> int:
         flush=True,
     )
     # exec, а не subprocess: сигналы от docker должны доходить до сервера.
+    # chdir обязателен: `-m runtime...` ищет пакеты runtime/ и scripts/ от
+    # текущего каталога. Байткод не пишем — /opt/v8std смонтирован :ro.
     os.chdir(REPO_ROOT)
+    os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     os.execv(sys.executable, argv)
 
 

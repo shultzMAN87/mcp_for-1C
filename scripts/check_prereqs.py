@@ -609,8 +609,15 @@ def check_v8std_data() -> CheckResult:
             "Перезабрать корпус: python3 scripts/fetch_v8std.py --force",
         )
 
-    required = ("scripts/v8std_mcp_server.py", "docs/ai/pages.jsonl")
-    missing = [rel for rel in required if not (path / rel).is_file()]
+    # V8STD-2: сервер переехал в пакет runtime/. Старая раскладка
+    # (scripts/v8std_mcp_server.py) ещё поднимается, но просит обновиться.
+    new_server = path / "runtime" / "v8std_mcp_server.py"
+    old_server = path / "scripts" / "v8std_mcp_server.py"
+    missing = []
+    if not new_server.is_file() and not old_server.is_file():
+        missing.append("runtime/v8std_mcp_server.py")
+    if not (path / "docs" / "ai" / "pages.jsonl").is_file():
+        missing.append("docs/ai/pages.jsonl")
     if missing:
         return warn(
             f"v8std-data/: не хватает файлов ({', '.join(missing)})",
@@ -631,6 +638,15 @@ def check_v8std_data() -> CheckResult:
         return warn(
             f"v8std-data/: корпусу {age_days} дн. (commit {commit})",
             "Стандарты обновляются. Обновить: python3 scripts/fetch_v8std.py",
+        )
+
+    if not new_server.is_file():
+        return warn(
+            f"v8std-data/: сервер в старой раскладке scripts/ (commit {commit})",
+            "Автор v8std перенёс сервер в пакет runtime/ (V8STD-2). Обновить:\n"
+            "      python scripts/fetch_v8std.py\n"
+            "      docker compose build v8std-mcp\n"
+            "      docker compose up -d --force-recreate v8std-mcp",
         )
 
     age = f", возраст {age_days} дн." if age_days is not None else ""

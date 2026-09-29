@@ -796,6 +796,29 @@ pip install -r .\evals\runner\requirements.txt
 `docker compose up -d v8std-mcp`. Если сеть идёт через системный прокси,
 экспортируйте `HTTPS_PROXY` перед запуском скрипта.
 
+### `fetch_v8std.py` падает с `HTTP 404` на модулях сервера
+
+Автор `zeegin/v8std` переложил файлы в репозитории. Так было 17 сентября
+2026 (`V8STD-2`): сервер уехал из `scripts/` в пакет `runtime/`. Скрипт в
+этом случае **ничего не пишет на диск** — рабочий `v8std-data/` остаётся
+как был, и уже поднятый контейнер продолжает работать.
+
+Лечение — сверить список `REPO_FILES` в `scripts/fetch_v8std.py` с их
+`delivery/mcp/Dockerfile` (там перечислено ровно то, что нужно серверу).
+Временный обход — закрепить последнюю рабочую ревизию:
+
+```powershell
+python scripts/fetch_v8std.py --ref <commit>
+```
+
+После обновления кода сервера образ пересобирается (у него могли
+появиться зависимости — с `V8STD-2` это `markdown-it-py`):
+
+```powershell
+docker compose build v8std-mcp
+docker compose up -d --force-recreate v8std-mcp
+```
+
 ### `v8std-mcp` в статусе `unhealthy`, но контейнер жив
 
 `/healthz` у этого сервера отдаёт 503, пока индекс не загружен, — то есть

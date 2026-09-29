@@ -14,7 +14,8 @@ STD-1: забор корпуса стандартов v8std для локаль�
 
 Поэтому забираем ровно то, что нужно для запуска:
   - два артефакта индекса с v8std.ru;
-  - пять python-модулей сервера + правила разбора сниппетов из репозитория.
+  - python-модули сервера (пакет runtime/ и три модуля scripts/) + правила
+    разбора сниппетов из репозитория.
 
 Git на хосте не нужен, сеть нужна только здесь — контейнер потом работает
 офлайн. Системный прокси подхватывается автоматически: urllib читает
@@ -25,7 +26,8 @@ HTTP_PROXY / HTTPS_PROXY из окружения.
     v8std-data/
       zensical.toml            ← маркер корня: по нему их код находит правила
       retrieval-rules.yml      ← алиасы и сигнатуры вызовов для explain_snippet
-      scripts/*.py             ← сам MCP-сервер (5 модулей)
+      runtime/*.py             ← сам MCP-сервер (пакет, 8 файлов, V8STD-2)
+      scripts/*.py             ← общие модули поиска и чанкинга (3 файла)
       docs/ai/pages.jsonl      ← индекс страниц
       docs/ai/search-vectors.jsonl
       FETCH.json               ← ref, коммит, дата, sha256 и размер каждого файла
@@ -83,27 +85,46 @@ SITE_FILES = {
     "docs/ai/search-vectors.jsonl": "https://v8std.ru/ai/search-vectors.jsonl",
 }
 
-# Модули сервера. Список получен чтением импортов, а не догадкой:
-# v8std_mcp_server → v8std_mcp_index → {v8std_retrieval_rules,
-# v8std_search_features}, плюс atomic_files. Если автор переложит файл,
-# скрипт упадёт с явным 404 и именем файла — молча деградировать нельзя.
+# Модули сервера. Список получен чтением импортов, а не догадкой.
+#
+# V8STD-2. 17 сентября 2026 автор разложил репозиторий заново (коммит
+# 738e261 «separate delivery and development»): сервер уехал из scripts/ в
+# пакет runtime/ и распался на семь модулей, запускается теперь как
+# `python -m runtime.v8std_mcp_server`. Прежний список давал 404 на
+# scripts/v8std_mcp_server.py и scripts/v8std_mcp_index.py.
+#
+# Граф импортов (runtime/v8std_mcp_server.py):
+#   runtime.v8std_mcp_server → runtime.{index, runtime, snapshot_format}
+#   runtime.v8std_mcp_runtime → runtime.{index, presentation,
+#                                snapshot_format, snapshots, hold}
+#   runtime.v8std_mcp_index → scripts.{v8std_retrieval_rules,
+#                                      v8std_search_features}
+#   runtime.v8std_mcp_snapshot_format → scripts.v8std_mcp_chunks
+# Тот же набор копирует их собственный delivery/mcp/Dockerfile — сверять
+# при следующем переезде с ним. atomic_files.py серверу больше не нужен.
+#
+# Если автор переложит файлы снова, скрипт упадёт с явным 404 и ничего не
+# запишет на диск (см. fetch) — работающий каталог не превратится в смесь
+# двух версий.
 REPO_FILES = [
-    "scripts/v8std_mcp_server.py",
-    "scripts/v8std_mcp_index.py",
+    "runtime/__init__.py",
+    "runtime/v8std_mcp_server.py",
+    "runtime/v8std_mcp_runtime.py",
+    "runtime/v8std_mcp_index.py",
+    "runtime/v8std_mcp_snapshots.py",
+    "runtime/v8std_mcp_snapshot_format.py",
+    "runtime/v8std_mcp_hold.py",
+    "runtime/v8std_mcp_presentation.py",
+    "scripts/v8std_mcp_chunks.py",
     "scripts/v8std_retrieval_rules.py",
     "scripts/v8std_search_features.py",
-    "scripts/atomic_files.py",
     "retrieval-rules.yml",
     "zensical.toml",
 ]
 
-# Файлы, без которых сервер вообще не поднимется.
-REQUIRED = [
-    "scripts/v8std_mcp_server.py",
-    "scripts/v8std_mcp_index.py",
-    "scripts/v8std_retrieval_rules.py",
-    "scripts/v8std_search_features.py",
-    "scripts/atomic_files.py",
+# Файлы, без которых сервер вообще не поднимется: весь код (импорты
+# жёсткие) и индекс страниц.
+REQUIRED = [rel for rel in REPO_FILES if rel.endswith(".py")] + [
     "docs/ai/pages.jsonl",
 ]
 
@@ -193,11 +214,15 @@ def fetch(ref: str, force: bool) -> int:
         jobs.append((rel, url))
 
     files: dict[str, dict] = {}
-    changed: list[str] = []
+    payload: dict[str, bytes] = {}
     errors: list[str] = []
 
+    # V8STD-2. Сначала всё скачиваем в память, и только когда на руках все
+    # обязательные файлы — пишем. Раньше запись шла по мере скачивания:
+    # при 404 на сервере вспомогательные модули уже были перезаписаны
+    # новой версией, а сервер оставался старым — каталог превращался в
+    # смесь двух ревизий, которую не описывает ни один FETCH.json.
     for rel, url in jobs:
-        dest = TARGET / rel
         try:
             data = _get(url)
         except urllib.error.HTTPError as exc:
@@ -206,17 +231,8 @@ def fetch(ref: str, force: bool) -> int:
         except Exception as exc:
             errors.append(f"{rel}: {type(exc).__name__}: {exc} ({url})")
             continue
-
-        digest = _sha256(data)
-        was = old_files.get(rel, {}).get("sha256")
-        if was != digest or force or not dest.is_file():
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(data)
-            changed.append(rel)
-
-        files[rel] = {"sha256": digest, "size": len(data), "url": url}
-        print(f"  {'обновлён' if rel in changed else 'без изменений'}: "
-              f"{rel} ({_fmt_size(len(data))})")
+        payload[rel] = data
+        files[rel] = {"sha256": _sha256(data), "size": len(data), "url": url}
 
     hard_missing = [rel for rel in REQUIRED if rel not in files]
     if hard_missing:
@@ -225,9 +241,40 @@ def fetch(ref: str, force: bool) -> int:
             print(f"  - {rel}", file=sys.stderr)
         for err in errors:
             print(f"  {err}", file=sys.stderr)
-        print("\nЕсли у вас включён системный прокси (v2rayN и подобные), "
+        print("\nНа диск ничего не записано — v8std-data/ остался как был.",
+              file=sys.stderr)
+        if any("HTTP 404" in e for e in errors):
+            print("404 обычно значит, что автор переложил файлы в репозитории "
+                  f"{REPO}.\nСверьте список REPO_FILES с их delivery/mcp/Dockerfile "
+                  "или закрепите рабочую ревизию: --ref <commit>.", file=sys.stderr)
+        print("Если у вас включён системный прокси (v2rayN и подобные), "
               "экспортируйте HTTP_PROXY/HTTPS_PROXY перед запуском.", file=sys.stderr)
         return 1
+
+    changed: list[str] = []
+    for rel, data in payload.items():
+        dest = TARGET / rel
+        was = old_files.get(rel, {}).get("sha256")
+        if was != files[rel]["sha256"] or force or not dest.is_file():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+            changed.append(rel)
+        print(f"  {'обновлён' if rel in changed else 'без изменений'}: "
+              f"{rel} ({_fmt_size(len(data))})")
+
+    # Файлы, которые прежний манифест числил за собой, а новый — нет
+    # (после V8STD-2 это старые scripts/v8std_mcp_server.py и компания).
+    # Трогаем только их: чужое в каталоге не удаляем.
+    removed: list[str] = []
+    for rel in sorted(set(old_files) - set(files)):
+        stale = TARGET / rel
+        if stale.is_file():
+            try:
+                stale.unlink()
+                removed.append(rel)
+                print(f"  удалён (больше не нужен): {rel}")
+            except OSError as exc:
+                print(f"  не удалось удалить {rel}: {exc}")
 
     manifest = {
         "repo": REPO,
@@ -248,12 +295,17 @@ def fetch(ref: str, force: bool) -> int:
     print(f"Каталог:   {TARGET}")
     print(f"ref:       {ref}  commit: {manifest['commit'] or '—'}")
     print(f"Страниц в индексе: {page_count}")
-    print(f"Изменилось файлов: {len(changed)} из {len(files)}")
+    print(f"Изменилось файлов: {len(changed)} из {len(files)}"
+          + (f", удалено устаревших: {len(removed)}" if removed else ""))
     if errors:
         print("\nНеобязательные файлы не скачались (это не мешает запуску):")
         for err in errors:
             print(f"  {err}")
-    print("\nДальше:  docker compose up -d v8std-mcp")
+    if any(rel.startswith("runtime/") for rel in changed):
+        print("\nКод сервера обновился. Если образ собран до V8STD-2 (нет "
+              "markdown-it-py) — пересоберите:")
+        print("  docker compose build v8std-mcp")
+    print("\nДальше:  docker compose up -d --force-recreate v8std-mcp")
     return 0
 
 
