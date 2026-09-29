@@ -50,7 +50,9 @@ SSE удалён полностью. Все порты публикуются т
   ~2 ГБ только под модель, при 4 ГБ он падает по OOM)
 - Python 3.10+ на хосте — только для проверочных скриптов
 - XML-выгрузка конфигурации в `workspace/`
-- Файлы справки платформы `.hbk` в `platform-help-data/`
+- Установленная платформа 1С на хосте — из неё скрипт
+  `scripts\fetch_platform_help.py` копирует справку (`*_ru.hbk`) в
+  `platform-help-data/`
 - Корпус стандартов в `v8std-data/` — забирается командой
   `python3 scripts/fetch_v8std.py` (нужна сеть один раз)
 
@@ -97,7 +99,9 @@ python scripts\check_prereqs.py
 ```
 
 Проверяет Docker, `.env`, пароль Neo4j, `MCP_SHARED_SECRET`, `.cursor/mcp.json`,
-наличие выгрузки в `workspace/` и справки в `platform-help-data/`.
+наличие выгрузки (`WORKSPACE_DIR` из `.env`, по умолчанию `workspace/`) и
+справки в `platform-help-data/`. Если справки нет, подскажет команду
+шага 2.6.
 
 ### 2.5. Корпус стандартов (STD-1)
 
@@ -121,6 +125,52 @@ v8std.ru сам при старте. Тогда ему нужна сеть пр�
 (кеш живёт в томе `v8std-cache`), а при системном прокси — ещё и
 переменные `HTTPS_PROXY`, закомментированные в сервисе `v8std-mcp`.
 Запретить этот режим: `V8STD_ALLOW_REMOTE_INDEX=0` в `.env`.
+
+### 2.6. Справка платформы (HELP-COPY)
+
+```powershell
+python scripts\fetch_platform_help.py
+```
+
+Копирует **только русскую** справку — файлы `*_ru.hbk` — из каталога `bin`
+установленной платформы в `./platform-help-data`. Английские `*_root.hbk`
+не берутся: индексатор (`HBK_INDEX_LANG=ru`) их всё равно пропускает, а
+места они занимают столько же.
+
+Откуда брать, скрипт решает так:
+
+1. ключ `--src`;
+2. переменная `ONEC_BIN_DIR` — из окружения или из `.env`;
+3. иначе — самая новая версия в `C:\Program Files\1cv8` (и в `Program Files (x86)`).
+
+Чтобы версия платформы не зависела от того, что установилось последним,
+закрепите её в `.env`:
+
+```dotenv
+ONEC_BIN_DIR=C:\Program Files\1cv8\8.3.27.1606\bin
+```
+
+Можно указать и каталог версии, и корень `1cv8` — тогда берётся самая
+новая. Полезные ключи:
+
+```powershell
+python scripts\fetch_platform_help.py --list      # какие версии найдены
+python scripts\fetch_platform_help.py --dry-run   # что будет скопировано
+python scripts\fetch_platform_help.py --clean     # заодно убрать лишние .hbk
+```
+
+Время изменения файлов сохраняется, поэтому повторный запуск на той же
+версии ничего не меняет и переиндексацию не вызывает. Откуда и из какой
+версии взята справка — в `platform-help-data/SOURCE.json`; её же
+показывает `check_prereqs.py`.
+
+**Обновили справку, когда индекс уже собран** (новая версия платформы) —
+индексатор по умолчанию (`skip_if_nonempty`) непустую коллекцию не
+трогает, пересборку нужно запустить явно (1,5–2 часа):
+
+```powershell
+docker compose run --rm -e REINDEX_MODE=if_files_changed help-indexer
+```
 
 ---
 

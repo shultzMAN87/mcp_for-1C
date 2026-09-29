@@ -367,27 +367,46 @@ def check_cursor_config() -> CheckResult:
     return ok(".cursor/mcp.json заполнен")
 
 
-def check_workspace() -> CheckResult:
+def check_workspace(env_vars: dict[str, str]) -> CheckResult:
     """
     FIX-1. Каталог с XML-выгрузкой конфигурации.
 
     На него смотрят metadata-indexer, bsl-checker и workspace-watcher.
     Пустой каталог — это молчаливо пустой граф и bsl_check_directory,
     который «не нашёл замечаний», потому что нечего проверять.
+
+    Проверяется тот же каталог, что монтирует docker-compose.yml:
+    ${WORKSPACE_DIR:-./workspace}. Раньше путь был зашит как ROOT/workspace,
+    и при выгрузке вне репозитория (WORKSPACE_DIR=D:/...) проверка давала
+    ложный FAIL, хотя контейнеры видели выгрузку. Приоритет как у compose:
+    переменная окружения оболочки, затем .env, затем ./workspace.
+    Относительный путь считается от корня проекта (каталог docker-compose.yml).
     """
-    path = ROOT / "workspace"
+    raw = (os.environ.get("WORKSPACE_DIR") or env_vars.get("WORKSPACE_DIR") or "").strip()
+    if raw:
+        path = Path(os.path.expandvars(os.path.expanduser(raw)))
+        if not path.is_absolute():
+            path = ROOT / path
+        label = f"WORKSPACE_DIR={raw}"
+    else:
+        path = ROOT / "workspace"
+        label = "workspace/"
+
     if not path.is_dir():
         return fail(
-            "workspace/ не найден — индексировать нечего",
-            "Выгрузите конфигурацию в XML (Конфигуратор → Конфигурация → "
-            "Выгрузить конфигурацию в файлы) в каталог workspace/.",
+            f"{label}: каталог не найден — индексировать нечего",
+            f"Проверьте путь ({path}). Либо выгрузите конфигурацию в XML "
+            "(Конфигуратор → Конфигурация → Выгрузить конфигурацию в файлы) "
+            "в этот каталог, либо поправьте WORKSPACE_DIR в .env.",
         )
     if not _dir_has_files(path, (".xml", ".bsl")):
         return fail(
-            "workspace/ пуст — ни .xml, ни .bsl",
-            "Граф метаданных будет пустым, bsl-checker не найдёт файлов.",
+            f"{label}: в корне каталога нет ни .xml, ни .bsl",
+            "Граф метаданных будет пустым, bsl-checker не найдёт файлов. "
+            "WORKSPACE_DIR должен указывать на корень выгрузки — туда, где "
+            "лежит Configuration.xml, а не на каталог уровнем выше.",
         )
-    return ok("workspace/ содержит выгрузку конфигурации")
+    return ok(f"{label}: выгрузка найдена ({path})")
 
 
 def check_compose_file_separator(env_vars: dict[str, str]) -> CheckResult:
@@ -452,6 +471,26 @@ def _dir_has_files(path: Path, extensions: tuple[str, ...] | None = None) -> boo
     return False
 
 
+# HELP-COPY. Справка копируется скриптом, а не руками: руками брали весь
+# bin (с английскими *_root.hbk) или не ту версию платформы.
+_HELP_COPY_HINT = (
+    "      python scripts\\fetch_platform_help.py\n"
+    "    Каталог bin платформы берётся из ONEC_BIN_DIR в .env, например\n"
+    "      ONEC_BIN_DIR=C:\\Program Files\\1cv8\\8.3.27.1606\\bin\n"
+    "    без неё — самая новая версия в C:\\Program Files\\1cv8.\n"
+    "    Найденные версии: python scripts\\fetch_platform_help.py --list"
+)
+
+
+def _help_source_note(path: Path) -> str:
+    """Версия платформы из SOURCE.json, если справку клал fetch_platform_help."""
+    try:
+        info = json.loads((path / "SOURCE.json").read_text(encoding="utf-8"))
+        return f", платформа {info.get('platform_version', '?')}"
+    except Exception:
+        return ""
+
+
 def check_platform_help() -> CheckResult:
     """
     `.hbk`-файлы справки платформы (опционально).
@@ -473,8 +512,8 @@ def check_platform_help() -> CheckResult:
     if not _dir_has_files(path, (".hbk",)):
         return warn(
             "platform-help-data/ не содержит .hbk — справка платформы будет пустой",
-            "Скопируйте .hbk-файлы из установки 1С (обычно:\n"
-            "  C:\\Program Files\\1cv8\\8.3.x.x\\bin\\conf\\) в platform-help-data/.",
+            "Скопируйте русскую справку (*_ru.hbk) из установленной платформы:\n"
+            f"{_HELP_COPY_HINT}",
         )
 
     STUB_LIMIT = 1024 * 1024
@@ -504,7 +543,8 @@ def check_platform_help() -> CheckResult:
             f"platform-help-data/: {len(files)} .hbk, все меньше 1 МБ "
             f"(всего {total_mb:.1f} МБ) — индекс справки будет пустым",
             "Похоже, скопированы заглушки, а не сами файлы справки. "
-            "Возьмите их из каталога bin\\conf установленной платформы.",
+            "Перезалейте их из установленной платформы:\n"
+            f"{_HELP_COPY_HINT}",
         )
 
     # Перечисляем не «какие пустые» (их бывает три десятка и это шум), а
@@ -524,19 +564,22 @@ def check_platform_help() -> CheckResult:
             f"файлов ({total_mb:.1f} МБ), нет {len(missing_key)} ключевых",
             f"Есть: {have}\n"
             f"    Пустые или отсутствуют ключевые разделы:\n{lost}\n"
-            "    Возьмите полные файлы из bin\\conf установленной платформы: "
-            "без них поиск по справке будет отвечать только по одному разделу.",
+            "    Без них поиск по справке будет отвечать только по одному разделу.\n"
+            "    Перезалейте справку из установленной платформы:\n"
+            f"{_HELP_COPY_HINT}",
         )
 
     if stubs:
         return warn(
             f"platform-help-data/: с содержимым {len(real)} из {len(files)} "
-            f"файлов ({total_mb:.1f} МБ), ключевые разделы на месте",
+            f"файлов ({total_mb:.1f} МБ), ключевые разделы на месте"
+            f"{_help_source_note(path)}",
             f"{len(stubs)} файлов меньше 1 МБ — это дополнительные разделы "
             "(интерфейсы, отчёты). На основные сценарии не влияет.",
         )
 
-    return ok(f"platform-help-data/: {len(real)} .hbk, {total_mb:.1f} МБ")
+    return ok(f"platform-help-data/: {len(real)} .hbk, {total_mb:.1f} МБ"
+              f"{_help_source_note(path)}")
 
 
 def check_v8std_data() -> CheckResult:
@@ -620,7 +663,7 @@ def run_all_checks() -> list[tuple[str, CheckResult]]:
     checks.append(("Neo4j пароль",     check_neo4j_password(env_vars)))
     checks.append(("MCP секрет",       check_mcp_shared_secret(env_vars)))
     checks.append((".cursor/mcp.json", check_cursor_config()))
-    checks.append(("workspace/",       check_workspace()))
+    checks.append(("workspace/",       check_workspace(env_vars)))
     checks.append(("platform-help-data/", check_platform_help()))
     checks.append(("v8std-data/",       check_v8std_data()))
 
