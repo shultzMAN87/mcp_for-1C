@@ -328,14 +328,15 @@ def check_ownership(neo: Neo4j) -> dict:
 # ─── Main pipeline ────────────────────────────────────────────────────────
 
 
-def main() -> int:
+def _main() -> int:
     src_dir   = Path(os.environ.get("METADATA_SRC_DIR", "/data/1c-src"))
     neo4j_url = os.environ.get("NEO4J_URL",  "http://neo4j:7474")
     neo4j_usr = os.environ.get("NEO4J_USER", "neo4j")
     # SEC-2: без дефолта, единое имя NEO4J_PASSWORD (как в docker-compose.yml)
     neo4j_pwd = os.environ.get("NEO4J_PASSWORD") or os.environ.get("NEO4J_PASS")
     if not neo4j_pwd:
-        raise SystemExit("NEO4J_PASSWORD не задан — индексация не запускается (SEC-2)")
+        _outcome("NEO4J_PASSWORD не задан — индексация не запускается (SEC-2)")
+        raise SystemExit(1)
     # CFG-3: METADATA_FORCE_REINDEX сохранён как «обе фазы» для совместимости
     # с уже написанными скриптами и с docker-compose; поверх него — два
     # отдельных флага.
@@ -366,6 +367,7 @@ def main() -> int:
 
     if not src_dir.is_dir():
         log.error("Каталог %s не существует или недоступен", src_dir)
+        _outcome(f"каталог выгрузки {src_dir} недоступен — проверьте WORKSPACE_DIR в .env")
         return 1
 
     if not (src_dir / "Configuration.xml").exists():
@@ -433,6 +435,7 @@ def main() -> int:
             log_ownership(ownership, log)
             log.info("Для принудительной переиндексации: METADATA_FORCE_REINDEX=true "
                      "(обе фазы), METADATA_FORCE_XML / METADATA_FORCE_BSL (по одной)")
+            _outcome("выгрузка не менялась, граф в порядке — переиндексация не понадобилась")
             return 0
         log.warning("Оба fingerprint совпали, но граф не в порядке:")
         log_ownership(ownership, log)
@@ -458,12 +461,14 @@ def main() -> int:
     # FIX-27: отпечаток слоя XML ждёт успешной фазы 2 — см. ниже.
     xml_fp_pending = False
     if xml_needs_reindex:
+        _phase_header("Фаза 1 из 2: XML-метаданные → Neo4j")
         if xml_same:
             log.info("Фаза 1: %s, но форс включён — переиндексация", xml_why)
         else:
             log.info("Фаза 1: %s — переиндексация", xml_why)
         rc = run_xml_phase(neo, src_dir, cfg_name)
         if rc != 0:
+            _outcome("фаза 1 (XML) завершилась с ошибкой — подробности выше")
             return rc
         # После clear_metadata_layer Module-узлы исчезли — фаза 2 ОБЯЗАНА пройти.
         # Это не «заодно», а обязательство: см. PLAN_4_6_2.md «Грабля 3».
@@ -505,9 +510,12 @@ def main() -> int:
             log_bsl.warning("Отпечаток XML НЕ сохранён — обычный следующий "
                             "запуск (без METADATA_SKIP_BSL) пересоберёт слой "
                             "полностью. Это намеренно.")
+        _outcome("METADATA_SKIP_BSL=true — фаза 2 (BSL) пропущена"
+                 + (", слой кода в графе НЕ восстановлен" if xml_fp_pending else ""))
         return 0
 
     if bsl_needs_reindex:
+        _phase_header("Фаза 2 из 2: BSL-код → граф вызовов в Neo4j")
         if bsl_same and force_bsl:
             log_bsl.info("Фаза 2: %s, но форс включён — переиндексация", bsl_why)
         elif bsl_same:
@@ -519,6 +527,7 @@ def main() -> int:
             if xml_fp_pending:
                 log.error("Фаза 2 не отработала (код %d) — отпечаток XML не "
                           "сохранён, следующий запуск повторит обе фазы.", rc)
+            _outcome("фаза 2 (BSL) завершилась с ошибкой — подробности выше")
             return rc
         fingerprint_write(neo, fp_bsl_new, "bsl_source", mode=fp_mode)
         log_bsl.info("  bsl fingerprint сохранён (режим %s)", fp_mode)
@@ -533,6 +542,7 @@ def main() -> int:
             log.error("Внутренняя ошибка: фаза 1 отработала, фаза 2 — нет, "
                       "а отпечаток XML остался несохранённым. Граф без слоя "
                       "владения; запустите прогон заново.")
+            _outcome("внутренняя ошибка: фаза 2 не запустилась после фазы 1")
             return 4
 
     # PERF-12. Снимок счётчиков рёбер: обход всех рёбер платит индексация,
@@ -562,7 +572,80 @@ def main() -> int:
                     "смотрите строки ⚠ выше", bad)
     log.info("✓ Готово! Полный прогон занял %s", human_sec(time.time() - t_total))
     log.info("=" * 60)
+    ran = [name for name, flag in (("XML", xml_needs_reindex), ("BSL", bsl_needs_reindex)) if flag]
+    _outcome("переиндексация выполнена (фазы: " + ", ".join(ran) + ")"
+             + (f"; ⚠ шагов с потерями данных: {bad}" if bad else ""))
     return 0
+
+
+# ─── Итоговая строка прогона ────────────────────────────────────────────
+#
+# LOG-1. Индексер — одноразовый контейнер (restart: "no"): отработал и
+# остановился. В логе при этом не было единой последней строки, по которой
+# видно «процесс закончился, и вот чем». На полном прогоне ею служило
+# «✓ Готово!», но самый частый старт — «fingerprint совпали, выход» — кончался
+# подсказкой про METADATA_FORCE_REINDEX, а ошибки и исключения — чем попало,
+# вплоть до обрыва на трейсбеке. Снаружи оставалось ориентироваться по
+# посеревшему значку контейнера в Docker Desktop.
+#
+# Теперь main() печатает рамку «ЗАВЕРШИЛ РАБОТУ» на ЛЮБОМ выходе: успех,
+# досрочный выход, ошибка с кодом, необработанное исключение. В ней код
+# выхода, итог одной фразой и общее время. Искать в логах:
+#     docker logs metadata-indexer 2>&1 | findstr "ЗАВЕРШИЛ"      (Windows)
+#     docker logs metadata-indexer 2>&1 | grep ЗАВЕРШИЛ           (Linux)
+
+_OUTCOME: dict[str, str] = {"text": ""}
+
+
+def _outcome(text: str) -> None:
+    """Запомнить итог прогона одной фразой — его напечатает рамка в main()."""
+    _OUTCOME["text"] = text
+
+
+def _phase_header(title: str) -> None:
+    """Заметный заголовок фазы — чтобы в длинном логе было видно, где какая."""
+    log.info("")
+    log.info("── %s %s", title, "─" * max(3, 56 - len(title)))
+
+
+def main() -> int:
+    """Обёртка над _main(): гарантирует итоговую рамку на любом выходе."""
+    _OUTCOME["text"] = ""
+    t0 = time.time()
+    rc = 1
+    try:
+        rc = _main()
+    except SystemExit as e:
+        rc = e.code if isinstance(e.code, int) else 1
+        if not isinstance(e.code, int) and e.code:
+            log.error("%s", e.code)
+    except KeyboardInterrupt:
+        rc = 130
+        _outcome("прервано (Ctrl+C / docker stop) — граф может быть неполным, "
+                 "следующий запуск повторит прогон")
+    except Exception as e:  # noqa: BLE001 — печатаем и выходим с кодом
+        rc = 5
+        log.exception("Необработанное исключение")
+        _outcome(f"упал с исключением {type(e).__name__}: {e}")
+    finally:
+        _final_banner(rc, time.time() - t0)
+    return rc
+
+
+def _final_banner(rc: int, elapsed: float) -> None:
+    text = _OUTCOME["text"] or ("завершён" if rc == 0 else "ошибка — подробности выше")
+    emit = log.info if rc == 0 else log.error
+    mark = "■" if rc == 0 else "✗"
+    status = "успех" if rc == 0 else "ОШИБКА"
+    emit("=" * 60)
+    emit("%s metadata-indexer ЗАВЕРШИЛ РАБОТУ — код %s (%s)", mark, rc, status)
+    emit("  Итог:  %s", text)
+    emit("  Время: %s", human_sec(elapsed))
+    if rc == 0:
+        emit("  Контейнер сейчас остановится сам — так и задумано (restart: \"no\").")
+    else:
+        emit("  Перезапуск после исправления: docker compose up -d metadata-indexer")
+    emit("=" * 60)
 
 
 if __name__ == "__main__":
