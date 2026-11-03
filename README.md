@@ -521,6 +521,7 @@ stdlib `urllib`. Разбор XML и BSL собственный: регуляр�
 | агент поправил файлы в `src/` | агент вызывает `metadata_refresh(paths=[…])` — правило для AGENTS.md в `docs/agents/metadata-refresh.md` |
 | обновлять граф автоматически | `.env`: `WATCHER_ENABLED=true`, `SOURCE_POLL_SEC=60` (или `300`), затем `docker compose up -d --no-deps --force-recreate workspace-watcher` |
 | свежий ли граф | `metadata_stats` → блок `source`, поле `hint` говорит, что делать |
+| проверить на стенде, что частичное обновление работает | `.\scripts\check-graph-refresh.ps1` — сценарии «пришла выгрузка» и «правка руками», итог ПРОЙДЕНО/ПРОВАЛ, протокол в `logs\` |
 | где лог | ручной запуск — `logs\graph-refresh-<дата>.log`; watcher — `docker logs -f workspace-watcher` |
 | после обновления кода стека | `docker compose build metadata-indexer workspace-watcher mcp-metadata-graph`, затем `docker compose up -d --no-deps mcp-metadata-graph workspace-watcher` |
 

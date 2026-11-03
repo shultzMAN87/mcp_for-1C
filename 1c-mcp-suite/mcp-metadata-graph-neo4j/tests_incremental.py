@@ -1222,6 +1222,41 @@ class TestOrphanFormFix41(unittest.TestCase):
         self.assertIn("form_not_in_metadata", EXPECTED_SKIPS)
 
 
+class TestCrossModuleCallInPartialFix42(unittest.TestCase):
+    """
+    FIX-42. Точечное обновление передаёт резолверу один модуль, и индекс
+    знал только его общий модуль: вызов `ДругойМодуль.Процедура()` уходил в
+    `unknown_module`, ребро CALLS не писалось. Стенд 4 ноября: после
+    доиндексации модуля из выгрузки GitLab его вызовы общих модулей
+    пропадали из графа до следующей полной индексации.
+    """
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ws = Path(self.tmp.name)
+        f = self.ws / "CommonModules/Мой/Ext/Module.bsl"
+        f.parent.mkdir(parents=True)
+        f.write_text("Процедура Т() Экспорт\n\tАукОбщийКлиент.Метод();\nКонецПроцедуры\n",
+                     encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_call_to_other_common_module_resolves(self):
+        class Neo(SmartFakeNeo4j):
+            def rows(self, c, p=None):
+                if "MATCH (c:Callable) RETURN c.id" in c:
+                    return [{"id": "CommonModule.АукОбщийКлиент.Метод"}]
+                return super().rows(c, p)
+        neo = Neo()
+        r = upsert_bsl_file(neo, self.ws, "CommonModules/Мой/Ext/Module.bsl")
+        self.assertEqual(r["status"], "reindexed")
+        self.assertEqual((r["resolve"]["resolved"], r["resolve"]["unresolved"]), (1, 0))
+        sent = repr([c for c in neo.calls if ":CALLS]" in c[1]])
+        self.assertIn("CommonModule.АукОбщийКлиент.Метод", sent, "ребро CALLS должно уйти в запись")
+
+
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parent))
     unittest.main(verbosity=2)

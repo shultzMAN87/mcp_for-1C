@@ -99,7 +99,7 @@ class TestEncoding(unittest.TestCase):
         UTF-8 с BOM (как setup-deps.ps1, gen_lockfiles.ps1).
         """
         for name in ("graph-refresh.ps1", "restore-src-canon.ps1",
-                     "dump-and-commit.ps1"):
+                     "dump-and-commit.ps1", "check-graph-refresh.ps1"):
             raw = (SCRIPTS / name).read_bytes()
             self.assertTrue(raw.startswith(b"\xef\xbb\xbf"), name)
             self.assertNotIn(b"\r\n", raw, f"{name}: .gitattributes требует LF")
@@ -277,6 +277,129 @@ class TestDumpAndCommit(unittest.TestCase):
                 os.environ["ONEC_PLATFORM_EXE"] = env_saved
         self.assertEqual(r.returncode, 1)
         self.assertIn("1cv8.exe", out(r))
+
+
+@unittest.skipUnless(PWSH, "PowerShell не найден — набор не проверяет ничего")
+class TestCheckGraphRefreshParses(unittest.TestCase):
+    """
+    TEST-SRC. check-graph-refresh.ps1 запускается на стенде целиком, и
+    синтаксическая ошибка в нём видна только там. Разбираем файл парсером
+    PowerShell — без docker и Neo4j.
+    """
+
+    def test_no_parse_errors(self):
+        path = str(SCRIPTS / "check-graph-refresh.ps1").replace("'", "''")
+        r = subprocess.run(
+            [PWSH, "-NoProfile", "-Command",
+             "$e=$null; [System.Management.Automation.Language.Parser]::ParseFile("
+             f"'{path}',[ref]$null,[ref]$e) | Out-Null; $e.Count"],
+            capture_output=True, timeout=120)
+        self.assertEqual(decode(r.stdout).strip().splitlines()[-1], "0", out(r))
+
+
+FAKE_DOCKER = r"""
+import json, os, subprocess, sys
+args = sys.argv[1:]
+d = os.environ["FAKE_DIR"]
+state = os.path.join(d, "state.json")
+s = json.load(open(state)) if os.path.exists(state) else {"sha": os.environ["FAKE_OLD_SHA"]}
+if args[:1] == ["exec"]:
+    q = sys.stdin.read()
+    open(os.path.join(d, "queries.log"), "a", encoding="utf-8").write(q + "\n")
+    rows = ["header"]
+    if "indexed_sha" in q:
+        rows.append('"%s"' % s["sha"])
+    elif "lock_owner" in q:
+        rows.append('""')
+    elif "dirty_json" in q:
+        rows.append('"{}"')
+    elif "RETURN c.module_id LIMIT 1" in q:
+        rows.append('"CommonModule.Мод"')
+    elif "RETURN t.module_id, t.name, t.id" in q and "ObjectModule" in q:
+        rows.append('"CommonModule.Другой", "Б", "CommonModule.Другой.Б"')
+    elif "RETURN t.module_id, t.name, t.id" in q:
+        pass        # модуль не зовёт другие общие модули — как на стенде
+    else:
+        rows.append("0")
+    print("\n".join(rows))
+    sys.exit(0)
+if "compose" in args:
+    open(os.path.join(d, "calls.log"), "a", encoding="utf-8").write(" ".join(args) + "\n")
+    if "--dry-run" not in args:
+        s["sha"] = subprocess.check_output(
+            ["git", "-C", os.environ["FAKE_REPO"], "rev-parse", "HEAD"], text=True).strip()
+        json.dump(s, open(state, "w"))
+    print("ИТОГ: ok")
+sys.exit(0)
+"""
+
+
+@unittest.skipUnless(PWSH and GIT, "нужны PowerShell и git")
+class TestCheckGraphRefreshDryRunFix(unittest.TestCase):
+    """
+    TEST-SRC, первый прогон на стенде 4 ноября. Две ошибки, которые видны
+    только запуском: ключ `-DryRun` в массиве при splatting уходил в
+    graph-refresh позиционным аргументом (и «план» обновлял граф), а
+    кириллица в запросе до Neo4j не доходила (все модули — «в графе 0»).
+    Прогон целиком на подменённом docker: какие ключи дошли до
+    apply_changes.py и в каком виде ушли запросы.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        d = Path(self.tmp.name)
+        self.d = d
+        repo = d / "repo"
+        write(repo, "src/CommonModules/Мод/Ext/Module.bsl", "Процедура А() Экспорт\nКонецПроцедуры\n")
+        write(repo, "src/CommonModules/Другой/Ext/Module.bsl", "Процедура Б() Экспорт\nКонецПроцедуры\n")
+        git(d, "init", "-q", str(repo))
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "1")
+        old = git(repo, "rev-parse", "HEAD").strip()
+        write(repo, "src/CommonModules/Другой/Ext/Module.bsl", "Процедура Б() Экспорт\nКонецПроцедуры\nФункция В()\nКонецФункции\n")
+        git(repo, "commit", "-q", "-am", "2")
+        self.repo = repo
+        fake = d / "fake_docker.py"
+        fake.write_text(FAKE_DOCKER, encoding="utf-8")
+        bindir = d / "bin"
+        bindir.mkdir()
+        if os.name == "nt":
+            (bindir / "docker.cmd").write_text(f'@"{sys.executable}" -X utf8 "{fake}" %*\r\n', encoding="ascii")
+        else:
+            sh = bindir / "docker"
+            sh.write_text(f'#!/bin/sh\nexec "{sys.executable}" -X utf8 "{fake}" "$@"\n', encoding="utf-8")
+            sh.chmod(0o755)
+        self.env = {"PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
+                    "FAKE_DIR": str(d), "FAKE_REPO": str(repo), "FAKE_OLD_SHA": old,
+                    "GRAPH_REFRESH_DOCKER": str(bindir / ("docker.cmd" if os.name == "nt" else "docker")),
+                    "GRAPH_REFRESH_LOG_DIR": str(d / "logs")}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_switches_reach_apply_changes_and_queries_are_escaped(self):
+        saved = {k: os.environ.get(k) for k in self.env}
+        os.environ.update(self.env)
+        try:
+            r = ps("check-graph-refresh.ps1", "-Repo", str(self.repo),
+                   "-TestModule", "CommonModules/Мод/Ext/Module.bsl")
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        calls = (self.d / "calls.log").read_text(encoding="utf-8").splitlines()
+        tails = [c.split("apply_changes.py", 1)[1].strip() for c in calls]
+        self.assertEqual(tails, ["--dry-run", "", "--dry-run", "", "--reconcile", ""], out(r))
+        queries = (self.d / "queries.log").read_text(encoding="utf-8")
+        self.assertIn("\\u041c\\u043e\\u0434", queries, "кириллица должна уходить экранами \\uXXXX")
+        self.assertNotIn("Мод", queries)
+        self.assertIn("ENDS WITH '.ObjectModule'", queries,
+                      "цель вызова должна искаться и запасным путём")
+        self.assertIn("ТестГрафа_Проверка", out(r))
+        self.assertEqual(git(self.repo, "status", "--porcelain").strip(), "",
+                         "тестовая правка должна быть откачена")
 
 
 if __name__ == "__main__":
