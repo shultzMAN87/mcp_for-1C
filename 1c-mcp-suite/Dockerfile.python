@@ -7,6 +7,16 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+# SRC-3. git — только для чтения истории выгрузки: какой коммит в HEAD и
+# какие файлы изменились между двумя коммитами. Граф узнаёт об изменениях
+# у git, а не обходом 56 тысяч файлов через границу Docker Desktop.
+# Ни одна команда, которую вызывает набор, в .git не пишет (белый список —
+# в git_source.py, сторож — tests_git_source.py); выгрузка смонтирована :ro.
+# Прирост образа — около 30 МБ (git без рекомендуемых пакетов).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 # Зависимости Python
 COPY requirements.txt requirements.lock.txt ./
 # TR-2: ставим из лок-файла, если он заполнен, иначе — по границам.
@@ -82,6 +92,12 @@ COPY mcp-metadata-graph-neo4j/apply_changes.py /app/apply_changes.py
 COPY mcp-metadata-graph-neo4j/bsl_parser.py    /app/bsl_parser.py
 COPY mcp-metadata-graph-neo4j/bsl_resolver.py /app/bsl_resolver.py
 COPY mcp-metadata-graph-neo4j/incremental.py  /app/incremental.py
+# SRC-5..7: граф следит за выгрузкой через git. Импортируются индексером,
+# apply_changes и сервером metadata-graph — без этих строк все трое
+# падают на импорте при старте.
+COPY mcp-metadata-graph-neo4j/git_source.py   /app/git_source.py
+COPY mcp-metadata-graph-neo4j/source_state.py /app/source_state.py
+COPY mcp-metadata-graph-neo4j/source_sync.py  /app/source_sync.py
 # B-6. Здесь была строка `COPY mcp-platform-help/server.py`. Она удалена, а
 # не дополнена, и вот почему.
 #

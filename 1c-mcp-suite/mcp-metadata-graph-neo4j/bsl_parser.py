@@ -228,6 +228,29 @@ class ParsedCallAssign:
 # переносами строк и | внутри. Регулярка ниже обрабатывает корректно.
 RE_STRING_LITERAL = re.compile(r'"(?:[^"]|"")*"')
 RE_LINE_COMMENT   = re.compile(r'//[^\r\n]*')
+# FIX-36. Строки и комментарии — ОДНИМ проходом слева направо: что началось
+# раньше, то и затирается. Прежде было два прохода — сначала все строки,
+# потом все комментарии, — и кавычка внутри комментария
+# (`//… по ключу, "ДатаТранзакции, …`) открывала «строку», которая тянулась
+# через переносы до следующей кавычки где-то в коде. Код между ними
+# пропадал из разбора; если в эту дыру попадал `КонецПроцедуры`, процедура
+# выпадала целиком («декларация без закрывающего КонецПроцедуры»), если
+# нет — пропадали молча её вызовы.
+#
+# FIX-38. Литерал описан по правилам платформы, а не «от кавычки до
+# кавычки»: начинается `"`, на следующих строках продолжается только
+# строками, начинающимися с `|`, а между ними допускаются строки-комментарии
+# `//…` — закомментированный кусок текста запроса, и кавычки в нём
+# (`//"ВЫБРАТЬ`, `//|  ТОГДА ""КБТ""`) литерал не закрывают. Кавычка,
+# не закрытая в своей строке и без продолжения `|`, литералом не считается:
+# дальше своей строки она ничего не затирает и код до следующей кавычки
+# не съест.
+_STR_LINE = r'(?:[^"\r\n]|"")*'
+RE_STRING_OR_COMMENT = re.compile(
+    r'"' + _STR_LINE
+    + r'(?:\r?\n(?:[ \t]*//[^\r\n]*\r?\n)*[ \t]*\|' + _STR_LINE + r')*"'
+    r'|//[^\r\n]*'
+)
 
 
 def _preprocess(text: str) -> str:
@@ -247,9 +270,7 @@ def _preprocess(text: str) -> str:
     """
     def _blank(m: re.Match) -> str:
         return "".join(" " if c != "\n" else "\n" for c in m.group(0))
-    text = RE_STRING_LITERAL.sub(_blank, text)
-    text = RE_LINE_COMMENT.sub(_blank, text)
-    return text
+    return RE_STRING_OR_COMMENT.sub(_blank, text)
 
 
 # ─── Регулярки ────────────────────────────────────────────────────────────
@@ -268,7 +289,15 @@ RE_DECL = re.compile(
 )
 
 # Конец процедуры/функции
-RE_END = re.compile(r'^[ \t]*(?P<end>КонецПроцедуры|КонецФункции)\b', re.MULTILINE)
+# FIX-37. Не обязательно с начала строки: в BSL законно
+# `… Отказ); КонецПроцедуры` — оператор и конец процедуры на одной строке
+# (Catalogs/ОбъектыКВыгрузкеВКликХаус, ПередЗаписью). Ищем отдельное слово в
+# тексте после препроцессора (строки и комментарии там уже затёрты):
+# не часть идентификатора и не свойство после точки.
+RE_END = re.compile(
+    r'(?<![А-Яа-яЁёA-Za-z0-9_.])(?P<end>КонецПроцедуры|КонецФункции)'
+    r'(?![А-Яа-яЁёA-Za-z0-9_])'
+)
 
 # Параметр в списке (применяется к содержимому скобок декларации).
 # default_value может содержать вложенные вызовы — `f(...)` — но не запятые
@@ -425,7 +454,7 @@ RE_FOR_VAR = re.compile(
 # в шаблонах и так покрывают оба регистра, поэтому IGNORECASE влияет ровно
 # на literal-части — то есть на ключевые слова, чего мы и добиваемся.
 #
-# RE_STRING_LITERAL и RE_LINE_COMMENT не трогаем: там нет ключевых слов,
+# RE_STRING_OR_COMMENT (и его части) не трогаем: там нет ключевых слов,
 # только кавычки и слэши.
 
 _KEYWORD_PATTERNS = (
@@ -856,6 +885,23 @@ CONTEXT_PROPERTIES_BY_ROLE: dict[str, set[str]] = {
     },
     "ManagerModule": _CONTEXT_COMMON,
     "CommonModule": set(),
+    # FIX-34. Роли, которые раньше в граф не попадали.
+    "RecordSetModule": _CONTEXT_COMMON | {
+        "Отбор", "ДополнительныеСвойства", "ОбменДанными",
+    },
+    "ValueManagerModule": _CONTEXT_COMMON | {
+        "Значение", "ДополнительныеСвойства", "ОбменДанными",
+    },
+    "CommonForm": _CONTEXT_COMMON | {
+        "ЭтаФорма", "Форма", "Элементы", "Команды", "Параметры",
+        "УсловноеОформление", "РеквизитыФормы", "КомандаПараметр",
+        "ВладелецФормы",
+    },
+    "Command": set(),
+    "CommonCommand": set(),
+    "HTTPService": set(),
+    "WebService": set(),
+    "ConfigurationModule": set(),
 }
 
 _CONTEXT_PROPERTIES_FOLDED: dict[str, frozenset[str]] = {
@@ -954,12 +1000,20 @@ def form_xml_for_module(bsl_path: Path) -> Optional[Path]:
 # ─── Парсинг файла ────────────────────────────────────────────────────────
 
 
-def parse_bsl_text(text: str) -> list[ParsedProcedure]:
+# LOG-2. Декларации без закрывающего КонецПроцедуры/Функции за прогон:
+# [(путь, строка, имя)]. Раньше предупреждение называло только имя
+# процедуры — найти место в выгрузке из 17 тысяч модулей было нечем.
+# Читает и сбрасывает walk_workspace_bsl (сводка в конце разбора).
+UNCLOSED_DECLS: list[tuple[str, int, str]] = []
+
+
+def parse_bsl_text(text: str, source: str = "") -> list[ParsedProcedure]:
     """
     Парсит текст BSL-модуля в список ParsedProcedure.
     Не привязан к файлу — нужен для unit-тестов.
 
     `text` — оригинал с переносами строк; preprocessor применяется внутри.
+    `source` — путь модуля для диагностики (LOG-2); в разбор не влияет.
     """
     preprocessed = _preprocess(text)
     # Снимаем BOM, если он попал в начало (не влияет на счёт строк).
@@ -972,8 +1026,11 @@ def parse_bsl_text(text: str) -> list[ParsedProcedure]:
         body_start = decl.end()
         end_match = RE_END.search(preprocessed, pos=body_start)
         if not end_match:
-            log.warning("Декларация %r без закрывающего КонецПроцедуры/Функции — пропуск",
-                        decl.group("name"))
+            line = preprocessed.count("\n", 0, decl.start()) + 1
+            UNCLOSED_DECLS.append((source, line, decl.group("name")))
+            log.warning("Декларация %r без закрывающего КонецПроцедуры/Функции — "
+                        "пропуск (%s:%d)", decl.group("name"),
+                        source or "<текст>", line)
             continue
 
         # FIX-7: сравнение в нижнем регистре. После того как RE_DECL стала
@@ -1017,7 +1074,7 @@ def parse_bsl_module(
     """Парсит один .bsl-файл в ParsedModule."""
     # 1С пишет BSL в UTF-8 с BOM. Снимаем BOM.
     raw = path.read_text(encoding="utf-8-sig", errors="replace")
-    procs = parse_bsl_text(raw)
+    procs = parse_bsl_text(raw, source=source_path)
 
     # FIX-4.1: свойства контекста по роли модуля + реквизиты формы из
     # соседнего Form.xml. Для не-форм второе слагаемое пусто.
@@ -1039,12 +1096,27 @@ def parse_bsl_module(
     )
 
 
+def report_unclosed(limit: int = 10) -> None:
+    """LOG-2: одна сводка вместо россыпи — сколько и где, первые `limit` мест."""
+    if not UNCLOSED_DECLS:
+        return
+    modules = {src for src, _line, _name in UNCLOSED_DECLS}
+    log.warning("Деклараций без КонецПроцедуры/Функции: %d в %d модулях "
+                "(пропущены, в граф не попали). Первые места:",
+                len(UNCLOSED_DECLS), len(modules))
+    for src, line, name in UNCLOSED_DECLS[:limit]:
+        log.warning("    %s:%d  %s", src or "<текст>", line, name)
+    if len(UNCLOSED_DECLS) > limit:
+        log.warning("    … ещё %d", len(UNCLOSED_DECLS) - limit)
+
+
 # ─── Сопоставление путей → module_id/module_kind ─────────────────────────
 
 
 # Соответствие папки в выгрузке английскому KindEng (4.6.1 уже зашит этот
 # маппинг в metadata_xml.py; здесь дублируем нужное подмножество чтобы
-# модуль был самодостаточным).
+# модуль был самодостаточным). Сторож совпадения с metadata_xml.KINDS —
+# tests_bsl_parser.TestDirTableMatchesKinds.
 DIR_TO_KIND_ENG = {
     "Catalogs":                 "Catalog",
     "Documents":                "Document",
@@ -1064,18 +1136,102 @@ DIR_TO_KIND_ENG = {
     "Tasks":                    "Task",
     "DocumentJournals":         "DocumentJournal",
     "CommonModules":            "CommonModule",
+    # FIX-34: виды, чьи модули раньше шли мимо графа (175 Module.bsl плюс
+    # формы и менеджеры этих объектов). Объекты в слое 1 у них есть.
+    "CommonForms":              "CommonForm",
+    "CommonCommands":           "CommonCommand",
+    "HTTPServices":             "HTTPService",
+    "WebServices":              "WebService",
+    "SettingsStorages":         "SettingsStorage",
+    "FilterCriteria":           "FilterCriterion",
+    "Sequences":                "Sequence",
 }
 
-# Имя файла .bsl → роль модуля.
+# Имя файла .bsl в `<Вид>/<Объект>/Ext/` → роль модуля.
 FILENAME_TO_ROLE = {
     "ObjectModule.bsl":  "ObjectModule",
     "ManagerModule.bsl": "ManagerModule",
-    # `Forms/<Y>/Ext/Form/Module.bsl` — специальный кейс, обрабатывается ниже.
-    # `CommonModules/<X>/Ext/Module.bsl` — тоже специальный.
+    # FIX-34: набор записей регистра и последовательности (886 модулей на
+    # боевой конфигурации) и менеджер значения константы.
+    "RecordSetModule.bsl":    "RecordSetModule",
+    "ValueManagerModule.bsl": "ValueManagerModule",
+    # `Forms/<Y>/Ext/Form/Module.bsl` и `Commands/<Y>/Ext/CommandModule.bsl` —
+    # специальные кейсы, обрабатываются ниже.
+}
+
+# FIX-34. Модули, чей id СОВПАДАЕТ с id объекта слоя 1: у объекта один
+# модуль, и он сам и есть «модуль». Как у общего модуля: отдельный узел
+# :Module не создаётся (метка :Module спрятала бы объект из metadata_search,
+# там фильтр `NOT n:Module`), процедуры висят на :MetadataObject объекта.
+#   каталог вида → (путь модуля внутри объекта, вид модуля)
+SAME_ID_MODULES: dict[str, tuple[tuple[str, ...], str]] = {
+    "CommonModules":  (("Ext", "Module.bsl"),         "CommonModule"),
+    "CommonForms":    (("Ext", "Form", "Module.bsl"), "CommonForm"),
+    "CommonCommands": (("Ext", "CommandModule.bsl"),  "CommonCommand"),
+    "HTTPServices":   (("Ext", "Module.bsl"),         "HTTPService"),
+    "WebServices":    (("Ext", "Module.bsl"),         "WebService"),
+}
+SAME_ID_KINDS = frozenset(kind for _path, kind in SAME_ID_MODULES.values())
+
+# FIX-34. Модули конфигурации — `Ext/<Имя>.bsl` в корне выгрузки. Владелец —
+# конфигурация; узел :Module с id `Configuration.<Роль>`.
+CONFIGURATION_MODULES = frozenset({
+    "SessionModule", "ManagedApplicationModule",
+    "OrdinaryApplicationModule", "ExternalConnectionModule",
+})
+
+# FIX-34: где выполняется модуль, если директивы у процедуры нет.
+#   (is_server, is_client); (False, False) — смотреть директиву процедуры.
+_SERVER = (True, False)
+_CLIENT = (False, True)
+_BY_DIRECTIVE = (False, False)
+_CONTEXT_BY_ROLE: dict[str, tuple[bool, bool]] = {
+    "ObjectModule": _SERVER, "ManagerModule": _SERVER,
+    "RecordSetModule": _SERVER, "ValueManagerModule": _SERVER,
+    "HTTPService": _SERVER, "WebService": _SERVER,
+    "SessionModule": _SERVER, "ExternalConnectionModule": _SERVER,
+    "ManagedApplicationModule": _CLIENT, "OrdinaryApplicationModule": _CLIENT,
+    "Form": _BY_DIRECTIVE, "CommonForm": _BY_DIRECTIVE,
+    "Command": _BY_DIRECTIVE, "CommonCommand": _BY_DIRECTIVE,
 }
 
 
-def classify_bsl_path(rel_path_posix: str) -> Optional[tuple[str, str, str, Optional[str]]]:
+def module_context(module_kind: str, role: Optional[str],
+                   common_module_info: Optional[dict] = None) -> tuple[bool, bool]:
+    """
+    `(is_server, is_client)` модуля. Одна функция для полной индексации
+    (walk_workspace_bsl) и точечного обновления (incremental) — раньше у
+    каждого была своя копия ветвлений, и новый вид модуля пришлось бы
+    вписывать дважды.
+
+    Общий модуль — по свойствам из слоя 1 (`Server`, `Client…`).
+    """
+    if module_kind == "CommonModule":
+        info = common_module_info or {}
+        return (bool(info.get("is_server", True)), bool(info.get("is_client", False)))
+    return _CONTEXT_BY_ROLE.get(role or module_kind,
+                                _CONTEXT_BY_ROLE.get(module_kind, _BY_DIRECTIVE))
+
+
+def is_module_owner(owner: str) -> bool:
+    """
+    Владелец частичного обновления — модуль (а не объект метаданных)?
+
+    Для модулей с тем же id, что у объекта (общий модуль, общая форма…),
+    ответ «нет»: их владелец — объект, и обновляется он вместе с XML.
+    Используют partial_fingerprint и apply_changes (PERF-8): раньше там
+    стоял свой список суффиксов, и модуль команды был бы принят за объект —
+    с удалением не того среза.
+    """
+    if owner.startswith("Configuration."):
+        return True
+    parts = owner.split(".")
+    if len(parts) >= 3 and parts[-1] in FILENAME_TO_ROLE.values():
+        return True
+    return len(parts) >= 4 and parts[-2] in ("Form", "Command")
+
+
+def classify_bsl_path(rel_path_posix: str) -> Optional[tuple[str, str, Optional[str], Optional[str]]]:
     """
     По относительному POSIX-пути BSL-файла определяет
     `(module_id, module_kind, parent_metadata_id, role)` или None.
@@ -1091,12 +1247,32 @@ def classify_bsl_path(rel_path_posix: str) -> Optional[tuple[str, str, str, Opti
         → ("Catalog.АукАукционы.Form.ФормаЭлемента", "Form", "Catalog.АукАукционы", "Form")
       tests-extension/CommonModules/Тест_X/Ext/Module.bsl
         → ("CommonModule.Тест_X", "CommonModule", None, "CommonModule")
+
+    FIX-34:
+      AccumulationRegisters/Остатки/Ext/RecordSetModule.bsl
+        → ("AccumulationRegister.Остатки.RecordSetModule", "RecordSetModule", …)
+      Catalogs/Номенклатура/Commands/ПечатьЭтикеток/Ext/CommandModule.bsl
+        → ("Catalog.Номенклатура.Command.ПечатьЭтикеток", "Command",
+           "Catalog.Номенклатура", "Command")
+      CommonForms/Выбор/Ext/Form/Module.bsl
+        → ("CommonForm.Выбор", "CommonForm", None, "CommonForm")
+      Ext/SessionModule.bsl
+        → ("Configuration.SessionModule", "ConfigurationModule", None, "SessionModule")
     """
     parts = rel_path_posix.split("/")
 
     # Сначала отрезаем префикс tests-extension/ если он есть.
-    if parts and parts[0] == "tests-extension":
+    extension = bool(parts) and parts[0] == "tests-extension"
+    if extension:
         parts = parts[1:]
+
+    # Модули конфигурации: Ext/<Роль>.bsl. У расширения свои модули
+    # конфигурации, и их id совпал бы с основными — не берём.
+    if len(parts) == 2 and parts[0] == "Ext" and parts[1].endswith(".bsl"):
+        role = parts[1][:-4]
+        if role in CONFIGURATION_MODULES and not extension:
+            return (f"Configuration.{role}", "ConfigurationModule", None, role)
+        return None
 
     if len(parts) < 4:
         return None
@@ -1108,16 +1284,17 @@ def classify_bsl_path(rel_path_posix: str) -> Optional[tuple[str, str, str, Opti
 
     obj_name = parts[1]
 
-    # CommonModules/X/Ext/Module.bsl
-    if top == "CommonModules":
-        if len(parts) == 4 and parts[2] == "Ext" and parts[3] == "Module.bsl":
-            module_id = f"CommonModule.{obj_name}"
-            return (module_id, "CommonModule", None, "CommonModule")
+    # Модуль с тем же id, что у объекта: CommonModules/X/Ext/Module.bsl и т.п.
+    if top in SAME_ID_MODULES:
+        tail, module_kind = SAME_ID_MODULES[top]
+        if tuple(parts[2:]) == tail:
+            module_id = f"{kind_eng}.{obj_name}"
+            return (module_id, module_kind, None, module_kind)
         return None
 
     parent_id = f"{kind_eng}.{obj_name}"
 
-    # X/Y/Ext/ObjectModule.bsl или X/Y/Ext/ManagerModule.bsl
+    # X/Y/Ext/ObjectModule.bsl, ManagerModule.bsl, RecordSetModule.bsl, …
     if len(parts) == 4 and parts[2] == "Ext" and parts[3] in FILENAME_TO_ROLE:
         role = FILENAME_TO_ROLE[parts[3]]
         module_id = f"{parent_id}.{role}"
@@ -1135,16 +1312,184 @@ def classify_bsl_path(rel_path_posix: str) -> Optional[tuple[str, str, str, Opti
         module_id = f"{parent_id}.Form.{form_name}"
         return (module_id, "Form", parent_id, "Form")
 
+    # FIX-34, часть Б: X/Y/Commands/Z/Ext/CommandModule.bsl. Имя команды —
+    # в id модуля: у всех команд процедура `ОбработкаКоманды`, и без имени
+    # команды их процедуры слились бы в одну (решение владельца, PLAN-12).
+    if (
+        len(parts) == 6
+        and parts[2] == "Commands"
+        and parts[4] == "Ext"
+        and parts[5] == "CommandModule.bsl"
+    ):
+        module_id = f"{parent_id}.Command.{parts[3]}"
+        return (module_id, "Command", parent_id, "Command")
+
     return None
 
 
 # ─── Обход workspace ──────────────────────────────────────────────────────
 
 
+# ─── PERF-15: параллельность ──────────────────────────────────────────────
+#
+# Процессы, а не потоки: разбор и резолв — чистый Python, и потоки упёрлись
+# бы в GIL. Процессы стартуют через fork (только Linux, то есть контейнер):
+# дочерний получает модули и индекс без копирования (copy-on-write). На
+# Windows-хосте (тесты разработчика) fork нет — работаем последовательно.
+
+PARALLEL_MIN_ITEMS = 2000      # меньше — накладные расходы дороже выигрыша
+
+
+def resolve_workers(requested: Optional[int] = None) -> int:
+    """
+    Сколько процессов использовать. `requested` None — из METADATA_WORKERS:
+    число или `auto` (= min(4, ядра − 1)). 1 — прежний последовательный путь.
+    Без fork (Windows) — всегда 1.
+    """
+    import multiprocessing as mp
+    import os
+    if "fork" not in mp.get_all_start_methods():
+        return 1
+    if requested is None:
+        raw = (os.environ.get("METADATA_WORKERS", "auto") or "auto").strip().lower()
+        if raw == "auto":
+            requested = min(4, max(1, (os.cpu_count() or 2) - 1))
+        else:
+            try:
+                requested = int(raw)
+            except ValueError:
+                log.warning("METADATA_WORKERS=%r — не число; работаю в 1 процесс", raw)
+                requested = 1
+    return max(1, int(requested))
+
+
+class frozen_for_fork:
+    """
+    `gc.freeze()` перед fork: объекты родителя уходят в «вечное» поколение,
+    и сборщик мусора в дочерних процессах их не трогает — иначе он
+    переписывал бы их заголовки, и copy-on-write копировал бы страницы
+    памяти в каждый процесс. Если заморожено раньше (METADATA_GC_FREEZE) —
+    не трогаем; иначе размораживаем на выходе.
+    """
+
+    def __enter__(self):
+        import gc
+        self._ours = gc.get_freeze_count() == 0
+        if self._ours:
+            gc.freeze()
+        return self
+
+    def __exit__(self, *exc):
+        import gc
+        if self._ours:
+            gc.unfreeze()
+        return False
+
+
+def balanced_slices(sizes: list[int], n_chunks: int) -> list[tuple[int, int, int]]:
+    """
+    Разрезать последовательность на `n_chunks` подряд идущих кусков примерно
+    равного веса: `[(начало, конец, вес)]`. Порядок сохраняется — на нём
+    держится совпадение результата с последовательным проходом.
+    """
+    total = sum(sizes)
+    if not sizes:
+        return []
+    n_chunks = max(1, min(n_chunks, len(sizes)))
+    target = total / n_chunks if total else 1
+    out: list[tuple[int, int, int]] = []
+    lo = acc = 0
+    for i, w in enumerate(sizes):
+        acc += w
+        if acc >= target and len(out) < n_chunks - 1:
+            out.append((lo, i + 1, acc))
+            lo, acc = i + 1, 0
+    if lo < len(sizes):
+        out.append((lo, len(sizes), acc))
+    return out
+
+
+_PARSE_STATE: dict = {}
+
+
+def _parse_chunk(bounds: tuple[int, int]) -> list:
+    """Дочерний процесс: разобрать файлы [lo, hi) списка. Результат по файлу:
+    (rel, 'ok'|'skip'|'missing'|'error', модуль|причина), и места
+    деклараций без конца этого куска."""
+    st = _PARSE_STATE
+    lo, hi = bounds
+    UNCLOSED_DECLS.clear()
+    out = [_parse_one(st["root"], rel, st["modules_info"])
+           for rel in st["rel_paths"][lo:hi]]
+    return [out, list(UNCLOSED_DECLS)]
+
+
+def _parse_one(root: Path, rel: str, modules_info: dict) -> tuple:
+    classified = classify_bsl_path(rel)
+    if not classified:
+        return (rel, "skip", "вне схемы путей")
+    module_id, module_kind, parent_metadata_id, role = classified
+    is_server, is_client = module_context(module_kind, role, modules_info.get(module_id))
+    try:
+        return (rel, "ok", parse_bsl_module(
+            path=root / rel, module_id=module_id, module_kind=module_kind,
+            parent_metadata_id=parent_metadata_id, source_path=rel,
+            is_server=is_server, is_client=is_client))
+    except FileNotFoundError:
+        return (rel, "missing", "нет на диске")
+    except Exception as e:  # noqa: BLE001 — один файл не роняет разбор
+        return (rel, "error", f"{type(e).__name__}: {e}")
+
+
+def list_bsl_files(root: Path, progress_every_sec: float = 20.0) -> list[str]:
+    """
+    Все `*.bsl` под `root` — пути от корня, POSIX, отсортированы.
+
+    PERF-14: запасной путь. Список берётся из git (`ls-files`) или из обхода
+    для отпечатков; сюда приходят, только когда ни того ни другого нет. Но и
+    тогда — с прогрессом: прежний `sorted(root.rglob("*.bsl"))` на боевой
+    выгрузке молчал 16 минут, и снаружи зависший процесс не отличался от
+    работающего.
+    """
+    import os
+    import time as _time
+    out: list[str] = []
+    t0 = last = _time.monotonic()
+    dirs = 0
+    stack = [(str(root), "")]
+    while stack:
+        current, prefix = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                entries = list(it)
+        except OSError:
+            continue
+        dirs += 1
+        for e in entries:
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    stack.append((e.path, f"{prefix}{e.name}/"))
+                elif e.name.lower().endswith(".bsl"):
+                    out.append(f"{prefix}{e.name}")
+            except OSError:
+                continue
+        now = _time.monotonic()
+        if now - last >= progress_every_sec:
+            last = now
+            log.info("  [поиск *.bsl] найдено %d, каталогов %d, прошло %.0f с",
+                     len(out), dirs, now - t0)
+    out.sort()
+    log.info("  поиск *.bsl обходом каталога: %d файлов за %.1f с",
+             len(out), _time.monotonic() - t0)
+    return out
+
+
 def walk_workspace_bsl(
     root: Path,
     modules_info: Optional[dict[str, dict]] = None,
     tally: Optional[Tally] = None,
+    paths: Optional[Iterable[str]] = None,
+    workers: Optional[int] = None,
 ) -> list[ParsedModule]:
     """
     Обходит все *.bsl в `root`, парсит, возвращает список ParsedModule.
@@ -1155,17 +1500,28 @@ def walk_workspace_bsl(
     Form = по директиве позже, при анализе процедур; в самом ParsedModule
     оставляем False/False — конкретность не нужна для парсера, нужна для
     резолвера).
+
+    `paths` — PERF-14: готовый список файлов (пути от `root`), из git или из
+    обхода для отпечатков. Не передан — список строится обходом
+    (`list_bsl_files`, с прогрессом). Файл из списка, которого нет на диске
+    (удалён, но ещё в индексе git), отсеивается с причиной «нет на диске».
     """
     modules_info = modules_info or {}
     modules: list[ParsedModule] = []
+    UNCLOSED_DECLS.clear()
+
+    if paths is None:
+        rel_paths = list_bsl_files(root)
+    else:
+        rel_paths = sorted({p.replace("\\", "/") for p in paths
+                            if p.lower().endswith(".bsl")})
 
     # PERF-5: на боевой конфигурации это 14 тысяч модулей и 6,6 минуты
     # без единой строки в логе. Список файлов и так материализуется
     # сортировкой, поэтому общее число известно заранее — можно показывать
     # проценты и ETA, а не голый счётчик.
-    paths = sorted(root.rglob("*.bsl"))
-    prog = ProgressLogger(log, "разбор BSL", total=len(paths),
-                          every_sec=20.0, unit="файл") if len(paths) >= 500 else None
+    prog = ProgressLogger(log, "разбор BSL", total=len(rel_paths),
+                          every_sec=20.0, unit="файл") if len(rel_paths) >= 500 else None
 
     # A-1: число файлов известно здесь (оно нужно прогресс-бару), а наружу
     # уходило только число модулей. Файл, не подошедший под известную схему
@@ -1177,53 +1533,54 @@ def walk_workspace_bsl(
                        # Ниже девяти десятых на реальной выгрузке не бывает:
                        # схема путей покрывает все штатные размещения модулей.
                        min_keep_ratio=0.9)
-    t.see(len(paths))
+    t.see(len(rel_paths))
 
-    for bsl_path in paths:
-        if prog:
-            prog.step()
-        rel = bsl_path.relative_to(root).as_posix()
-        classified = classify_bsl_path(rel)
-        if not classified:
+    def account(result: tuple) -> None:
+        rel, status, payload = result
+        if status == "ok":
+            modules.append(payload)
+            t.keep()
+        elif status == "skip":
             log.debug("BSL вне известной схемы путей — пропуск: %s", rel)
             t.drop("вне схемы путей", example=rel)
-            continue
-        module_id, module_kind, parent_metadata_id, role = classified
-
-        # Определяем серверность/клиентскость.
-        info = modules_info.get(module_id) or {}
-        if module_kind == "CommonModule":
-            # Из properties_json :CommonModule (Server, ClientManagedApplication, ...)
-            is_server = bool(info.get("is_server", True))
-            is_client = bool(info.get("is_client", False))
-        elif module_kind in ("ObjectModule", "ManagerModule"):
-            is_server, is_client = True, False
-        elif module_kind == "Form":
-            # Контекст конкретной процедуры определяется директивой — здесь
-            # ставим False/False, и резолвер потом смотрит на per-procedure
-            # `directive`.
-            is_server, is_client = False, False
+        elif status == "missing":
+            # Список из git может отстать от диска (файл удалён, а в индексе
+            # ещё есть). Отдельный stat на каждый файл стоил бы ~1,5 минуты
+            # через границу Docker — ловим при чтении.
+            t.drop("нет на диске", example=rel)
         else:
-            is_server, is_client = False, False
-
-        try:
-            modules.append(parse_bsl_module(
-                path=bsl_path,
-                module_id=module_id,
-                module_kind=module_kind,
-                parent_metadata_id=parent_metadata_id,
-                source_path=rel,
-                is_server=is_server,
-                is_client=is_client,
-            ))
-            t.keep()
-        except Exception as e:
-            log.warning("Ошибка парсинга %s: %s", rel, e)
+            log.warning("Ошибка парсинга %s: %s", rel, payload)
             t.drop("ошибка разбора", example=rel, alarm=True)
-            continue
+
+    n_workers = resolve_workers(workers)
+    if n_workers > 1 and len(rel_paths) >= PARALLEL_MIN_ITEMS:
+        # PERF-15: файлы независимы — режем список на куски, порядок
+        # сохраняем (imap), результат тот же, что последовательно.
+        import multiprocessing as mp
+        slices = balanced_slices([1] * len(rel_paths), n_workers * 16)
+        _PARSE_STATE.update(root=root, rel_paths=rel_paths, modules_info=modules_info)
+        log.info("  разбор BSL: %d процессов, кусков %d", n_workers, len(slices))
+        try:
+            with frozen_for_fork(), mp.get_context("fork").Pool(n_workers) as pool:
+                for (out, unclosed), (_lo, _hi, n) in zip(
+                        pool.imap(_parse_chunk, [(a, b) for a, b, _w in slices]),
+                        slices):
+                    for result in out:
+                        account(result)
+                    UNCLOSED_DECLS.extend(unclosed)
+                    if prog:
+                        prog.step(n)
+        finally:
+            _PARSE_STATE.clear()
+    else:
+        for rel in rel_paths:
+            if prog:
+                prog.step()
+            account(_parse_one(root, rel, modules_info))
 
     if prog:
         prog.done(extra=f"модулей в разборе {len(modules)}")
+    report_unclosed()
     if own_tally:
         t.report(hint="схема путей — classify_bsl_path(); если выгрузка "
                       "сменила раскладку каталогов, править надо там")

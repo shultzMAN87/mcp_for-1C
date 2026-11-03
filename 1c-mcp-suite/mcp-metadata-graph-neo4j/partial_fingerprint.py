@@ -43,22 +43,34 @@ import time
 from pathlib import Path
 from typing import Iterable, Optional
 
-from bsl_parser import classify_bsl_path
+from bsl_parser import classify_bsl_path, is_module_owner
 from metadata_xml import KIND_BY_DIR
 from progress_log import ProgressLogger
 
 log = logging.getLogger(__name__)
 
-# Ключ для файлов, которые не принадлежат ни объекту, ни модулю:
-# Configuration.xml, DefinedTypes на верхнем уровне и прочее корневое.
-# Их изменение затрагивает конфигурацию целиком, поэтому такой ключ —
-# сигнал «частичным обновлением не обойтись».
+# SRC-1. Здесь был ключ для корневых файлов выгрузки (`Configuration.xml`,
+# `ConfigDumpInfo.xml` и прочее без объекта-владельца), и его изменение
+# означало «частичным обновлением не обойтись».
+#
+# Правило было осторожным, но неверным: граф содержимое корневых файлов НЕ
+# читает. Индексер проверяет только существование `Configuration.xml`,
+# объекты находит обходом каталогов (`KIND_BY_DIR`), имя конфигурации берёт
+# из `METADATA_CONFIG_NAME`. А `ConfigDumpInfo.xml` меняется при КАЖДОЙ
+# выгрузке из хранилища — для клона, который обновляется раз в час, это
+# означало двухчасовую полную индексацию после каждого pull.
+#
+# Теперь корневые файлы в план не входят вовсе (`owner_of` → None).
+# Константа оставлена: старые сохранённые состояния содержат этот ключ, и
+# `build_plan` обязан его молча отбросить, а не показать как «удалённый
+# владелец». Сторож независимости графа от корневых файлов —
+# `TestRootFilesDoNotFeedTheGraph` в tests_partial_fingerprint.py.
 ROOT_KEY = "_root"
 
 
 def owner_of(rel_path: str) -> Optional[str]:
     """
-    Кому принадлежит файл: id объекта метаданных, id модуля или ROOT_KEY.
+    Кому принадлежит файл: id объекта метаданных или id модуля.
 
     Возвращает None для файлов, которые индексатор всё равно не читает
     (картинки, макеты в бинарном виде и т. п.) — их изменение не должно
@@ -100,9 +112,8 @@ def owner_of(rel_path: str) -> Optional[str]:
         return f"{KIND_BY_DIR[parts[0]][1]}.{parts[1]}"
 
     # ─ Корневые файлы конфигурации ─
-    if len(parts) == 1:
-        return ROOT_KEY
-
+    #
+    # SRC-1: в граф не идут — см. комментарий у ROOT_KEY.
     return None
 
 
@@ -247,11 +258,10 @@ def dependent_owners(owner: str, all_owners: Iterable[str]) -> list[str]:
     """
     if "." not in owner:
         return []
-    # Модуль? Тогда зависимых нет.
-    tail = owner.rsplit(".", 1)[-1]
-    if tail in ("ObjectModule", "ManagerModule") or ".Form." in owner:
-        return []
-    if owner.startswith("CommonModule."):
+    # Модуль? Тогда зависимых нет. FIX-34: вид модуля определяет одна
+    # функция из bsl_parser — раньше здесь был свой список суффиксов, и
+    # модуль набора записей или команды считался бы объектом.
+    if is_module_owner(owner):
         return []
     prefix = owner + "."
     return sorted(o for o in all_owners if o.startswith(prefix))
@@ -312,6 +322,12 @@ def build_plan(current: dict[str, str], stored: dict[str, str],
     знаем»: первый прогон обязан быть полным, иначе слой 2 соберётся из
     несвязанных кусков.
     """
+    # SRC-1: ключ корневых файлов из старых сохранённых состояний — не
+    # владелец и в план не входит. Без этого первый прогон после обновления
+    # показал бы «удалён `_root`» и попытался бы его удалить из графа.
+    current = {k: v for k, v in current.items() if k != ROOT_KEY}
+    stored = {k: v for k, v in stored.items() if k != ROOT_KEY}
+
     if not stored:
         return ChangePlan(set(), set(), set(),
                           reason="сохранённого состояния нет — первая индексация")
@@ -320,10 +336,6 @@ def build_plan(current: dict[str, str], stored: dict[str, str],
     added = cur_keys - old_keys
     removed = old_keys - cur_keys
     changed = {k for k in (cur_keys & old_keys) if current[k] != stored[k]}
-
-    if ROOT_KEY in (added | changed):
-        return ChangePlan(added, changed, removed,
-                          reason="изменились корневые файлы конфигурации")
 
     plan = ChangePlan(added, changed, removed)
     if max_partial and plan.total > max_partial:

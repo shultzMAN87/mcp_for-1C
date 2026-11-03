@@ -116,9 +116,22 @@ services:
     container_name: metadata-indexer
     command: python /app/mcp_metadata_indexer.py
     volumes:
-      - ${WORKSPACE_DIR:-./workspace}:/data/1c-xml:ro   # XML-выгрузка для v3
+      # SRC-2. Монтируется КОРЕНЬ репозитория (с .git), а не только каталог
+      # конфигурации: граф узнаёт об изменениях у git. Где внутри лежит
+      # сама конфигурация — CONFIG_SUBDIR (`src` у клона ubd_for_ai, пусто —
+      # если WORKSPACE_DIR и есть корень конфигурации, как было раньше).
+      - ${WORKSPACE_DIR:-./workspace}:/data/repo:ro
     environment:
-      - METADATA_SRC_DIR=/data/1c-xml         # ← переопределение, было /data/1c-src
+      - METADATA_REPO_DIR=/data/repo
+      - METADATA_CONFIG_SUBDIR=${CONFIG_SUBDIR:-}
+      - METADATA_SRC_DIR=/data/repo/${CONFIG_SUBDIR:-}
+      # SRC-5: auto — git, если в WORKSPACE_DIR есть репозиторий, иначе
+      # прежний режим отпечатков (legacy); git | legacy — принудительно.
+      - SOURCE_MODE=${SOURCE_MODE:-auto}
+      # Порог частичного обновления (PERF-8) и долга (SRC-13) — общие для
+      # индексера, сервера и watcher'а.
+      - METADATA_MAX_PARTIAL=${METADATA_MAX_PARTIAL:-300}
+      - METADATA_STALE_DEBT_LIMIT=${METADATA_STALE_DEBT_LIMIT:-20000}
       # PERF-5: без этого прогресс-логи копятся в буфере stdout и долетают
       # рывками. У help-indexer это стоило суток слепоты: этап dense-
       # эмбеддингов печатает скорость и ETA каждые 20 батчей, но ни одна
@@ -153,6 +166,14 @@ services:
       # продолжать не окупается; 0 возвращает прежнее поведение (до предела).
       - METADATA_FIXPOINT_MIN_GAIN_PCT=${METADATA_FIXPOINT_MIN_GAIN_PCT:-1.0}
       - METADATA_MAX_ITERATIONS=${METADATA_MAX_ITERATIONS:-8}
+      # PERF-15: процессов на разбор и резолв BSL. auto = min(4, ядер − 1);
+      # 1 — прежний последовательный путь (откат, если что-то не так).
+      - METADATA_WORKERS=${METADATA_WORKERS:-auto}
+      # PERF-13: замеры. GC_FREEZE — заморозить разобранные модули для
+      # сборщика мусора; PROFILE — 30 самых тяжёлых функций резолва в лог
+      # (резолв на время профиля идёт в один процесс). См. .env.example.
+      - METADATA_GC_FREEZE=${METADATA_GC_FREEZE:-false}
+      - METADATA_PROFILE=${METADATA_PROFILE:-false}
     depends_on:
       neo4j:
         condition: service_healthy
@@ -180,26 +201,24 @@ services:
         condition: service_healthy
     restart: "no"
 
-  # Watcher кодовой базы и XML-метаданных (задача 2.3 + 4.6.5).
-  # Слушает выгрузку 1С и инкрементально переиндексирует изменённые файлы
-  # через MCP-серверы:
-  #   .bsl     → mcp-metadata-graph.metadata_upsert_file (Neo4j call graph;
-  #              опционально, при METADATA_WATCH_ENABLED=true — 4.6.5)
-  #   .xml     → mcp-metadata-graph.metadata_upsert_file (Neo4j data schema;
-  #              опционально, при METADATA_WATCH_ENABLED=true)
+  # Watcher: следит за выгрузкой и доиндексирует граф (SRC-9).
   #
-  # PORT-2 (доделано): путь к выгрузке во ВСЕХ сервисах берётся из
-  # WORKSPACE_DIR. Раньше переменную читал только bsl-checker, а остальные
-  # четыре монтирования были прибиты как ./workspace — смена пути в .env
-  # переключала один сервис из пяти, молча и незаметно.
+  # Выключен по умолчанию (WATCHER_ENABLED=false). Ручной запуск работает
+  # всегда и делает ровно то же самое:
+  #     docker compose run --rm --entrypoint python metadata-indexer /app/apply_changes.py
+  #     .\scripts\graph-refresh.ps1     (Windows)   /   make graph-refresh
   #
-  # Про монтирование (4.6.5): watcher монтирует выгрузку в /workspace,
-  # metadata-graph — то же ./workspace, но в /data/1c-xml. Watcher шлёт
-  # абсолютные /workspace-пути; на стороне metadata-graph _norm_rel с
-  # tail-suffix фолбэком распознаёт хвост (CommonModules/X/Ext/Module.bsl
-  # и т.п.) и резолвит независимо от точки монтирования. Поэтому нам не
-  # нужно держать единый путь /data/1c-xml в обоих контейнерах: каждый
-  # видит выгрузку под своим именем.
+  # Два режима (WATCHER_MODE):
+  #   git  — раз в SOURCE_POLL_SEC спрашивает git: сдвинулся ли HEAD,
+  #          изменились ли файлы, о которых сообщал агент. Читается только
+  #          .git и несколько конкретных файлов — миллисекунды, поэтому
+  #          держать включённым круглосуточно дёшево. Граф обновляет сам,
+  #          через тот же модуль source_sync, что и ручной запуск.
+  #   poll — прежний опрос файлов (watchdog) для каталога без git: каждый
+  #          цикл = полный обход выгрузки. На Windows это дорого (HYG-7).
+  #   auto — git, если в WORKSPACE_DIR есть репозиторий, иначе poll.
+  #
+  # PORT-2: путь к выгрузке во ВСЕХ сервисах берётся из WORKSPACE_DIR.
   workspace-watcher:
     build:
       context: ./1c-mcp-suite
@@ -207,27 +226,61 @@ services:
     container_name: workspace-watcher
     command: python /app/workspace_watcher.py
     volumes:
-      - ${WORKSPACE_DIR:-./workspace}:/workspace:ro
+      - ${WORKSPACE_DIR:-./workspace}:/data/repo:ro
     environment:
       - MCP_SHARED_SECRET=${MCP_SHARED_SECRET:?Задайте MCP_SHARED_SECRET в .env (openssl rand -hex 32)}
-      # HYG-7: умолчание false — см. .env.example и README.
+      # Главный выключатель. HYG-7: умолчание false — включение осознанное.
       - WATCHER_ENABLED=${WATCHER_ENABLED:-false}
+      - WATCHER_MODE=${WATCHER_MODE:-auto}
+      # ── режим git (SRC-9) ──
+      # Интервал такта, секунды: 60 — раз в минуту, 300 — раз в 5 минут.
+      # Допустимо 30…3600; вне диапазона контейнер не стартует.
+      - SOURCE_POLL_SEC=${SOURCE_POLL_SEC:-60}
+      # Ночная сверка (SRC-11), «ЧЧ:ММ» по TZ. Пусто — выключена.
+      - SOURCE_RECONCILE_AT=${SOURCE_RECONCILE_AT:-}
+      # Сверка по флагу needs_reconcile (ставится после полной индексации).
+      # false — если сверка на боевой выгрузке оказалась дольше 15 минут.
+      - SOURCE_RECONCILE_ON_FLAG=${SOURCE_RECONCILE_ON_FLAG:-true}
+      # Разрешить watcher'у самому запускать полную индексацию при
+      # needs_full (по умолчанию только напоминает в логе и metadata_stats).
+      - SOURCE_AUTO_FULL=${SOURCE_AUTO_FULL:-false}
+      # Плановая полная индексация (SRC-13), «день ЧЧ:ММ», например
+      # «sat 02:00». Пусто — выключена.
+      - SOURCE_FULL_REINDEX_AT=${SOURCE_FULL_REINDEX_AT:-}
+      - TZ=${TZ:-UTC}
+      - SOURCE_MODE=${SOURCE_MODE:-auto}
+      - METADATA_REPO_DIR=/data/repo
+      - METADATA_CONFIG_SUBDIR=${CONFIG_SUBDIR:-}
+      - METADATA_SRC_DIR=/data/repo/${CONFIG_SUBDIR:-}
+      - METADATA_MAX_PARTIAL=${METADATA_MAX_PARTIAL:-300}
+      - METADATA_STALE_DEBT_LIMIT=${METADATA_STALE_DEBT_LIMIT:-20000}
+      # Полную переиндексацию watcher запускает индексером-подпроцессом —
+      # ему нужны те же настройки фазы 2, что и metadata-indexer.
+      - METADATA_WORKERS=${METADATA_WORKERS:-auto}
+      - METADATA_GC_FREEZE=${METADATA_GC_FREEZE:-false}
+      - METADATA_PROFILE=${METADATA_PROFILE:-false}
+      - NEO4J_URL=http://neo4j:7474
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:?Задайте NEO4J_PASSWORD в .env (см. .env.example)}
+      - PYTHONUNBUFFERED=1
+      # ── режим poll (прежний) ──
       - WATCHER_DEBOUNCE_SEC=${WATCHER_DEBOUNCE_SEC:-3}
-      # 4.6.5: ставь true, чтобы .bsl-события фанаутили в metadata-graph
-      # (Neo4j call graph), а .xml — триггерили metadata_upsert_file
-      # (Neo4j data schema). По умолчанию false для совместимости со
-      # стариками, у кого образ mcp-metadata-graph ещё не пересобран.
-      # Образ пересобран, tools metadata_upsert_file/metadata_remove_file есть —
-      # инкрементальный апдейт графа включён по умолчанию.
+      # Без этих строк значения из .env в контейнер не попадали, и совет
+      # «WATCHER_POLLING_INTERVAL=10» молча не работал: опрос шёл раз в
+      # 2 секунды — впятеро дороже. На Windows/Docker Desktop USE_POLLING
+      # должен быть true: события ФС через bind-mount не доходят.
+      - WATCHER_POLLING_INTERVAL=${WATCHER_POLLING_INTERVAL:-10}
+      - WATCHER_USE_POLLING=${WATCHER_USE_POLLING:-true}
       - METADATA_WATCH_ENABLED=${METADATA_WATCH_ENABLED:-true}
-      - WATCH_CODE_DIR=/workspace
-      - WATCH_XML_DIR=/workspace               # ← XML лежит вместе с BSL в ./workspace
+      - WATCH_CODE_DIR=/data/repo/${CONFIG_SUBDIR:-}
+      - WATCH_XML_DIR=/data/repo/${CONFIG_SUBDIR:-}
       - METADATA_GRAPH_URL=http://mcp-metadata-graph:8001/mcp
-      # CFG-2: задержка была костылём против ровно той гонки, которую
-      # теперь снимает condition: service_healthy. Оставлена как запас —
-      # graph отвечает на /healthz раньше, чем заканчивает индексацию.
+      # CFG-2: запас поверх condition: service_healthy — graph отвечает на
+      # /healthz раньше, чем заканчивает индексацию.
       - WATCHER_INITIAL_DELAY=30
     depends_on:
+      neo4j:
+        condition: service_healthy
       mcp-metadata-graph:
         condition: service_healthy
     restart: unless-stopped
@@ -249,12 +302,11 @@ services:
     volumes:
       - ./evals/journal:/journal
       - mcp-metrics:/data/metrics
-      # 4.6.5: серверу нужна та же выгрузка, что и metadata-indexer'у,
-      # чтобы tools metadata_upsert_file/metadata_remove_file могли
-      # читать .bsl/.xml с диска. Путь /data/1c-xml внутри контейнера
-      # ДОЛЖЕН СОВПАДАТЬ с METADATA_SRC_DIR у indexer'а и с тем абсолютным
-      # путём, который шлёт workspace-watcher (см. там же).
-      - ${WORKSPACE_DIR:-./workspace}:/data/1c-xml:ro
+      # 4.6.5 / SRC-2: серверу нужна та же выгрузка, что и индексеру, —
+      # metadata_refresh читает файлы с диска и спрашивает git. Монтируется
+      # корень репозитория; точка монтирования та же, что у индексера и
+      # watcher'а.
+      - ${WORKSPACE_DIR:-./workspace}:/data/repo:ro
     environment:
       # EVAL-7: трасса вызовов для ручного прогона (журнал вызовов).
       # Пусто — журнал выключен, и сервер говорит об этом в логе при старте.
@@ -269,17 +321,25 @@ services:
       # даёт сотни совпадений. Пусто — искать по всей базе; в вызове
       # инструмента subsystem="*" разово отменяет это умолчание.
       - METADATA_DEFAULT_SUBSYSTEM=${METADATA_DEFAULT_SUBSYSTEM:-}
-      # 4.6.5: совпадает с METADATA_SRC_DIR у metadata-indexer (выше).
-      # Если значения разойдутся, watcher будет слать пути, которые сервер
-      # не сможет резолвить — _norm_rel вернёт path_outside_src_root.
-      - METADATA_SRC_DIR=/data/1c-xml
+      # 4.6.5 / SRC-2: совпадает с metadata-indexer и workspace-watcher.
+      - METADATA_REPO_DIR=/data/repo
+      - METADATA_CONFIG_SUBDIR=${CONFIG_SUBDIR:-}
+      - METADATA_SRC_DIR=/data/repo/${CONFIG_SUBDIR:-}
+      - SOURCE_MODE=${SOURCE_MODE:-auto}
+      - METADATA_MAX_PARTIAL=${METADATA_MAX_PARTIAL:-300}
+      - METADATA_STALE_DEBT_LIMIT=${METADATA_STALE_DEBT_LIMIT:-20000}
+      # Для блока source в metadata_stats: включён ли watcher и с каким
+      # интервалом (сам watcher живёт в другом контейнере).
+      - WATCHER_ENABLED=${WATCHER_ENABLED:-false}
+      - SOURCE_POLL_SEC=${SOURCE_POLL_SEC:-60}
       # TOOL-1: core = рабочий набор под три задачи плана; full = ничего не резать
       - MCP_TOOL_PROFILE=${MCP_TOOL_PROFILE:-core}
       # SEC-5: metadata_reload делает MATCH (n) DETACH DELETE n.
       # SEC-6: metadata_cypher — произвольный Cypher. Оба по умолчанию скрыты.
       - ALLOW_DESTRUCTIVE_TOOLS=${ALLOW_DESTRUCTIVE_TOOLS:-0}
       - ALLOW_RAW_CYPHER=${ALLOW_RAW_CYPHER:-0}
-      # Служебные metadata_upsert_file / metadata_remove_file нужны watcher'у
+      # Служебные metadata_upsert_file / metadata_remove_file — прежний
+      # режим watcher'а (poll). metadata_refresh этим флагом не скрывается.
       - ENABLE_WATCH_TOOLS=${ENABLE_WATCH_TOOLS:-1}
       - METRICS_DASHBOARD=true
       - METRICS_DB=/data/metrics/mcp_metrics.db
@@ -324,7 +384,8 @@ services:
       # FIX-1: раньше монтировался ./1c-config-xml, где лежит только
       # ОтчетПоКонфигурации.txt — bsl_check_directory анализировал пустоту.
       # Настоящая XML-выгрузка лежит в ./workspace. Путь вынесен в .env (PORT-2).
-      - ${WORKSPACE_DIR:-./workspace}:/data/1c-src:ro
+      # SRC-2: проверке BSL нужен только каталог конфигурации, git — нет.
+      - ${WORKSPACE_DIR:-./workspace}/${CONFIG_SUBDIR:-}:/data/1c-src:ro
       # CFG-4: свой набор диагностик. Монтируется КАТАЛОГ, а не файл:
       # docker при bind-mount несуществующего файла создаёт на его месте
       # каталог, и опечатка в пути дала бы не «файла нет», а «файл есть, но

@@ -69,8 +69,14 @@ class TestOwnerMapping(unittest.TestCase):
                             path)
             self.assertNotIn("Forms", owner_of(path))
 
-    def test_root_files(self):
-        self.assertEqual(owner_of("Configuration.xml"), ROOT_KEY)
+    def test_root_files_are_not_owners(self):
+        """
+        SRC-1. Корневые файлы выгрузки в план не входят: граф их не читает,
+        а `ConfigDumpInfo.xml` меняется при каждой выгрузке из хранилища.
+        """
+        for path in ("Configuration.xml", "ConfigDumpInfo.xml",
+                     "Ext/ParentConfigurations.bin"):
+            self.assertIsNone(owner_of(path), path)
 
     def test_tests_extension_prefix_stripped(self):
         self.assertEqual(
@@ -193,14 +199,26 @@ class TestPlan(unittest.TestCase):
         self.assertEqual(plan.removed, {"Enum.Э"})
         self.assertEqual(plan.total, 3)
 
-    def test_root_change_forces_full(self):
+    def test_legacy_root_key_is_ignored(self):
         """
-        Configuration.xml задаёт состав конфигурации целиком — точечным
-        обновлением такое не разложить.
+        SRC-1. Сохранённые до правки состояния содержат ключ корневых
+        файлов. Его изменение больше не требует полной индексации, а его
+        исчезновение из текущего обхода — не «удалённый владелец».
         """
         plan = build_plan({ROOT_KEY: "new", "Catalog.К": "aa"},
                           {ROOT_KEY: "old", "Catalog.К": "aa"})
-        self.assertIn("корневые", plan.full_reindex_reason)
+        self.assertIsNone(plan.full_reindex_reason)
+        self.assertEqual(plan.total, 0)
+
+        plan = build_plan({"Catalog.К": "aa"},
+                          {ROOT_KEY: "old", "Catalog.К": "aa"})
+        self.assertEqual(plan.removed, set())
+        self.assertEqual(plan.total, 0)
+
+    def test_only_root_key_stored_means_no_state(self):
+        """Состояние из одного корневого ключа — это отсутствие состояния."""
+        plan = build_plan({"Catalog.К": "aa"}, {ROOT_KEY: "old"})
+        self.assertIn("сохранённого состояния нет", plan.full_reindex_reason)
 
     def test_threshold_forces_full(self):
         stored = {f"Catalog.К{i}": "aa" for i in range(100)}
@@ -513,6 +531,92 @@ class TestGlobalFingerprint(unittest.TestCase):
         d2, after = scan_workspace(self.root)
         self.assertNotEqual(before["global_digests"][".bsl"],
                             after["global_digests"][".bsl"])
+
+
+class TestFix34Owners(unittest.TestCase):
+    """
+    FIX-34 в частичном обновлении: новые модули — свои владельцы, и правка
+    XML объекта перезаливает модули его команд, как модули форм.
+    """
+
+    def test_owners(self):
+        self.assertEqual(owner_of("Catalogs/Х/Commands/К/Ext/CommandModule.bsl"),
+                         "Catalog.Х.Command.К")
+        self.assertEqual(owner_of("AccumulationRegisters/О/Ext/RecordSetModule.bsl"),
+                         "AccumulationRegister.О.RecordSetModule")
+        self.assertEqual(owner_of("CommonForms/Ф/Ext/Form/Module.bsl"), "CommonForm.Ф")
+        self.assertEqual(owner_of("CommonForms/Ф.xml"), "CommonForm.Ф")
+        self.assertEqual(owner_of("Ext/SessionModule.bsl"), "Configuration.SessionModule")
+
+    def test_object_xml_pulls_its_command_modules(self):
+        all_owners = ["Catalog.Х", "Catalog.Х.ObjectModule", "Catalog.Х.Command.К",
+                      "Catalog.Х.Form.Ф", "Catalog.Х2.Command.К"]
+        self.assertEqual(dependent_owners("Catalog.Х", all_owners),
+                         ["Catalog.Х.Command.К", "Catalog.Х.Form.Ф",
+                          "Catalog.Х.ObjectModule"])
+        self.assertEqual(dependent_owners("Catalog.Х.Command.К", all_owners), [])
+        self.assertEqual(
+            dependent_owners("AccumulationRegister.О.RecordSetModule", all_owners), [])
+
+    def test_apply_changes_removes_module_slices_for_new_kinds(self):
+        """
+        Удаление владельца-модуля снимает срез КОДА. Если бы модуль команды
+        считался объектом, apply_changes снёс бы срез метаданных с этим id
+        и оставил процедуры без владельца.
+        """
+        import importlib
+        ac = importlib.import_module("apply_changes")
+        for owner in ("Catalog.Х.Command.К", "AccumulationRegister.О.RecordSetModule",
+                      "Configuration.SessionModule", "CommonModule.М"):
+            with self.subTest(owner=owner):
+                self.assertTrue(ac._is_module(owner))
+        for owner in ("Catalog.Х", "CommonForm.Ф"):
+            with self.subTest(owner=owner):
+                self.assertFalse(ac._is_module(owner))
+
+
+class TestRootFilesDoNotFeedTheGraph(unittest.TestCase):
+    """
+    SRC-1, сторож. Корневые файлы выкинуты из плана на том основании, что
+    граф их не читает. Если кто-то начнёт их читать, это основание
+    исчезнет молча — частичное обновление перестанет замечать правки,
+    которые меняют граф. Поэтому проверяется сам граф: две выгрузки,
+    отличающиеся только корневыми файлами, обязаны дать одно и то же.
+    """
+
+    def _graph(self, configuration_xml: str, dump_info: str) -> dict:
+        from metadata_xml import build_graph, walk_workspace
+        from tests_metadata_xml import CATALOG_XML
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "Catalogs").mkdir()
+            (root / "Catalogs" / "АукАукционы.xml").write_text(
+                CATALOG_XML, encoding="utf-8")
+            (root / "Configuration.xml").write_text(
+                configuration_xml, encoding="utf-8")
+            (root / "ConfigDumpInfo.xml").write_text(dump_info, encoding="utf-8")
+            graph = build_graph(walk_workspace(root))
+        graph.pop("stats", None)
+        return graph
+
+    def test_root_files_do_not_change_the_graph(self):
+        a = self._graph(
+            '<MetaDataObject><Configuration><Properties><Name>А</Name>'
+            '</Properties><ChildObjects><Catalog>АукАукционы</Catalog>'
+            '</ChildObjects></Configuration></MetaDataObject>',
+            '<ConfigDumpInfo><ConfigVersions>'
+            '<Metadata name="Catalog.АукАукционы" id="1" configVersion="a"/>'
+            '</ConfigVersions></ConfigDumpInfo>')
+        b = self._graph(
+            '<MetaDataObject><Configuration><Properties><Name>Б</Name>'
+            '<Synonym>другое</Synonym></Properties><ChildObjects>'
+            '<Catalog>АукАукционы</Catalog><Catalog>Другой</Catalog>'
+            '</ChildObjects></Configuration></MetaDataObject>',
+            '<ConfigDumpInfo><ConfigVersions>'
+            '<Metadata name="Catalog.АукАукционы" id="1" configVersion="b"/>'
+            '</ConfigVersions></ConfigDumpInfo>')
+        self.assertTrue(a["meta_nodes"], "фикстура не дала ни одного объекта")
+        self.assertEqual(a, b)
 
 
 if __name__ == "__main__":

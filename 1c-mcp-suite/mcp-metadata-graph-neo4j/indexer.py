@@ -48,6 +48,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 # Импорты соседних модулей.
 from metadata_xml import walk_workspace, build_graph
@@ -57,8 +58,8 @@ from graph_writer import (
     fingerprint_get_meta, fingerprint_matches, fingerprint_workspace_multi,
     fingerprint_write, relations_snapshot_write, write_code_graph, write_graph,
 )
-from progress_log import human_bytes, human_sec
-from bsl_parser import walk_workspace_bsl
+from progress_log import GC_METER, human_bytes, human_sec
+from bsl_parser import resolve_workers, walk_workspace_bsl
 from bsl_resolver import build_call_graph, build_index_from_neo4j
 
 # A-2: сверка «вход против выхода» по всем шагам, где вход известен.
@@ -182,8 +183,90 @@ def _build_modules_info_from_neo4j(neo: Neo4j) -> dict[str, dict]:
     return result
 
 
-def run_bsl_phase(neo: Neo4j, src_dir: Path) -> int:
-    """Выполняет фазу 2. Возвращает 0 при успехе, не-0 при ошибке."""
+def _build_call_graph_measured(modules, index) -> dict:
+    """
+    build_call_graph + замеры PERF-13: итог сборщика мусора и, по флагу
+    METADATA_PROFILE, профиль (30 самых тяжёлых функций по собственному
+    времени) — чтобы одна полная индексация на стенде ответила и «сколько
+    съедает gc», и «если не gc, то что».
+    """
+    profile = _env_bool("METADATA_PROFILE", False)
+    try:
+        if not profile:
+            return build_call_graph(modules, index)
+        import cProfile
+        import io
+        import pstats
+        # Профиль видит только свой процесс: с PERF-15 он показал бы одно
+        # ожидание дочерних. Поэтому с профилем резолв идёт в один процесс.
+        log_bsl.info("METADATA_PROFILE: резолв в один процесс (METADATA_WORKERS "
+                     "на время профиля не действует)")
+        prof = cProfile.Profile()
+        try:
+            return prof.runcall(build_call_graph, modules, index, workers=1)
+        finally:
+            buf = io.StringIO()
+            pstats.Stats(prof, stream=buf).sort_stats("tottime").print_stats(30)
+            log_bsl.info("METADATA_PROFILE — 30 самых тяжёлых функций резолва "
+                         "(по собственному времени):\n%s", buf.getvalue())
+    finally:
+        log_bsl.info("  %s", GC_METER.summary())
+        GC_METER.stop()
+
+
+ORPHAN_FORM_REASON = "форма не числится в XML своего объекта (файлы остались в выгрузке)"
+
+
+def drop_orphan_forms(neo: Neo4j, modules: list) -> list:
+    """
+    FIX-41. Модуль формы не создаёт свой узел — он вешает метку :Module на
+    узел :Form слоя 1, а тот строится по `<ChildObjects><Form>` XML объекта.
+    Если форму удалили из объекта, а файлы `Forms/<Имя>/…` остались в
+    выгрузке, платформа такой формы не видит, и узла :Form нет. Раньше такой
+    модуль всё равно уходил в запись: узел молча не находился (предупреждение
+    «несовпадение меток, см. FIX-14» уводило не туда), а процедуры формы
+    оставались без владельца — 68 штук в шести формах на стенде 3 ноября.
+    Теперь такие модули отсеиваются до резолва, с причиной и списком.
+    """
+    forms = [m for m in modules if m.module_kind == "Form"]
+    if not forms:
+        return modules
+    known = {r["id"] for r in neo.rows("MATCH (f:Form) RETURN f.id AS id")}
+    tally = TALLIES.stage("модули форм → узлы :Form слоя 1", unit="модуль",
+                          log=log_bsl)
+    orphans = []
+    for m in forms:
+        tally.see()
+        if m.module_id in known:
+            tally.keep()
+        else:
+            orphans.append(m)
+            tally.drop(ORPHAN_FORM_REASON, example=m.module_id)
+    if orphans:
+        log_bsl.warning(
+            "Модулей форм, которых нет в метаданных объектов: %d (процедур %d) — "
+            "в граф не идут. Это хвосты в выгрузке: форма удалена из объекта, "
+            "файлы остались. Удалите каталоги Forms/<Имя> и Forms/<Имя>.xml или "
+            "верните форму в объект:", len(orphans),
+            sum(len(m.procedures) for m in orphans))
+        for m in orphans[:20]:
+            log_bsl.warning("    %s  (%s, процедур %d)", m.module_id,
+                            m.source_path, len(m.procedures))
+        if len(orphans) > 20:
+            log_bsl.warning("    … ещё %d", len(orphans) - 20)
+    tally.report()
+    drop = {id(m) for m in orphans}
+    return [m for m in modules if id(m) not in drop]
+
+
+def run_bsl_phase(neo: Neo4j, src_dir: Path,
+                  bsl_paths: Optional[list] = None) -> int:
+    """
+    Выполняет фазу 2. Возвращает 0 при успехе, не-0 при ошибке.
+
+    `bsl_paths` — PERF-14: готовый список файлов (из git или из обхода для
+    отпечатков). None — список строится обходом каталога.
+    """
     # Pre-flight: слой 1 ДОЛЖЕН быть в графе. См. PLAN_4_6_2.md «Грабля 2».
     rows = neo.rows("MATCH (m:MetadataObject) RETURN count(m) AS n")
     meta_count = rows[0]["n"] if rows else 0
@@ -197,16 +280,31 @@ def run_bsl_phase(neo: Neo4j, src_dir: Path) -> int:
     modules_info = _build_modules_info_from_neo4j(neo)
     log_bsl.info("  ✓ модулей: %d", len(modules_info))
 
+    # PERF-15: сколько процессов на разбор и резолв (METADATA_WORKERS).
+    log_bsl.info("Процессов на разбор и резолв: %d (METADATA_WORKERS=%s)",
+                 resolve_workers(), os.environ.get("METADATA_WORKERS", "auto"))
+
+    # PERF-13: доля сборщика мусора — в каждой строке прогресса фазы 2.
+    GC_METER.start()
     log_bsl.info("Парсим BSL…")
     t0 = time.time()
     bsl_tally = TALLIES.stage("разбор BSL", unit="файл", log=log_bsl,
                               min_keep_ratio=0.9)
+    if bsl_paths is not None:
+        log_bsl.info("  список файлов готов: %d (без повторного обхода выгрузки)",
+                     len(bsl_paths))
     modules = walk_workspace_bsl(src_dir, modules_info=modules_info,
-                                 tally=bsl_tally)
+                                 tally=bsl_tally, paths=bsl_paths)
     n_procs = sum(len(m.procedures) for m in modules)
     log_bsl.info("  ✓ модулей: %d, процедур/функций: %d (за %.2f с)",
                  len(modules), n_procs, time.time() - t0)
     bsl_tally.report(hint="схема путей — classify_bsl_path() в bsl_parser.py")
+
+    modules = drop_orphan_forms(neo, modules)
+    # Отсеянные формы уже посчитаны своим шагом сводки — вход следующих
+    # шагов (модули, процедуры) считаем без них, иначе их процедуры
+    # всплывали ниже «потерей без объяснения».
+    n_procs = sum(len(m.procedures) for m in modules)
 
     log_bsl.info("Строим индекс резолвера из Neo4j + модулей…")
     t0 = time.time()
@@ -215,9 +313,20 @@ def run_bsl_phase(neo: Neo4j, src_dir: Path) -> int:
                  len(index.common_modules), len(index.callable_ids),
                  len(index.metadata_full_set), time.time() - t0)
 
+    # PERF-13. Разобранные модули дальше не меняются — их можно «заморозить»:
+    # сборщик мусора перестаёт их пересматривать на каждой полной сборке.
+    # Включается флагом до замера: решение — по доле gc в логе (PLAN-12).
+    if _env_bool("METADATA_GC_FREEZE", False):
+        import gc
+        t_fz = time.time()
+        gc.collect()
+        gc.freeze()
+        log_bsl.info("METADATA_GC_FREEZE: заморожено объектов %d (за %.1f с)",
+                     gc.get_freeze_count(), time.time() - t_fz)
+
     log_bsl.info("Собираем code_graph с резолвом (Day-2)…")
     t0 = time.time()
-    code_graph = build_call_graph(modules, index)
+    code_graph = _build_call_graph_measured(modules, index)
     s = code_graph["stats"]
     log_bsl.info(
         "  ✓ узлов Module=%d, Callable=%d, Parameter=%d, CallSite=%d, Type=%d; "
@@ -325,6 +434,229 @@ def check_ownership(neo: Neo4j) -> dict:
     return ownership_report(callables, modules, has_method, objects=objects)
 
 
+# ─── SRC-10: режим git ────────────────────────────────────────────────────
+#
+# В режиме git индексер при старте не обходит выгрузку (3–12 минут через
+# границу Docker Desktop), а спрашивает git, что изменилось с прошлой
+# индексации, и догоняет граф тем же `source_sync.sync()`, что и watcher, и
+# ручной запуск. Полная индексация — только когда без неё нельзя: состояния
+# нет, изменений больше порога, история переписана, сменился CONFIG_SUBDIR,
+# форс.
+#
+# Первый старт после перехода (состояния ещё нет) идёт прежним путём, по
+# отпечаткам: сошлись — граф принимается как есть, без индексации; нет —
+# полная. В обоих случаях после прогона записывается состояние, и со
+# следующего старта работает быстрый путь.
+
+def _indexer_owner() -> str:
+    """
+    FIX-39. Имя владельца аренды — своё у каждого индексера: в контейнере
+    имя хоста — id контейнера, плюс pid. Раньше у всех было `indexer`, а
+    аренда своему владельцу выдаётся повторно (так её продлевают) — и
+    второй индексер, запущенный, пока идёт первый (`docker compose up -d`
+    во время `graph-refresh.ps1 -Full`), принимал чужую аренду за свою:
+    две полные индексации писали в один граф.
+    """
+    import socket
+    return f"indexer:{socket.gethostname()}:{os.getpid()}"
+
+
+INDEXER_OWNER = _indexer_owner()
+_PHASES_RAN: list = []
+_STOP_BEAT: list = []
+
+
+class _GitRun:
+    def __init__(self, ctx, store, head: str):
+        self.ctx = ctx
+        self.store = store
+        self.head = head
+        self.plan: Optional[str] = None   # None | 'full' | 'phase2'
+        self.done = False
+        self.rc = 0
+        self.mark = False                 # записать состояние после прогона
+        self.flag_reconcile = False
+
+
+def _git_start(neo: Neo4j, forced: bool) -> Optional[_GitRun]:
+    from git_source import GitError
+    from source_state import INDEXER_LEASE_SEC, Neo4jStore
+    from source_sync import context_from_env
+    try:
+        ctx = context_from_env()
+    except GitError as e:
+        _outcome(f"источник не определён: {e}")
+        raise SystemExit(1)
+    log.info("Источник: режим %s — %s", ctx.mode, ctx.reason)
+    if not ctx.is_git:
+        return None
+
+    store = Neo4jStore(neo)
+    store.ensure_schema()
+    # По умолчанию ждём чуть дольше срока аренды: если держатель упал, его
+    # аренда истечёт, и индексер продолжит сам, без --force-unlock.
+    wait_sec = float(os.environ.get("SOURCE_INDEXER_WAIT_SEC",
+                                    str(INDEXER_LEASE_SEC + 300)))
+    deadline = time.time() + wait_sec
+    said = 0.0
+    while True:
+        lease = store.acquire(INDEXER_OWNER, INDEXER_LEASE_SEC)
+        if lease.ok:
+            break
+        if time.time() > deadline:
+            _outcome(f"граф занят: {lease.describe()} — повторите позже "
+                     f"(или apply_changes.py --force-unlock, если держатель упал)")
+            raise SystemExit(1)
+        if time.time() - said >= 60:
+            log.info("Граф сейчас обновляет %s — жду (не дольше %s)…",
+                     lease.describe(), human_sec(max(0.0, deadline - time.time())))
+            said = time.time()
+        time.sleep(10)
+    _start_heartbeat(store)
+
+    # Аренда взята. Дальше любой сбой (git, Neo4j) обязан её отпустить:
+    # иначе граф остался бы занятым на INDEXER_LEASE_SEC — восемь часов, в
+    # которые watcher и metadata_refresh отвечали бы «busy». На штатных
+    # выходах аренду отпускает _git_finish.
+    try:
+        return _git_decide(neo, ctx, store, forced)
+    except BaseException:
+        _release(store)
+        raise
+
+
+def _start_heartbeat(store) -> None:
+    """FIX-39: продлевать аренду, пока прогон жив (из строк прогресса)."""
+    from progress_log import add_heartbeat
+    from source_state import INDEXER_LEASE_SEC
+
+    def renew() -> None:
+        lease = store.acquire(INDEXER_OWNER, INDEXER_LEASE_SEC)
+        if not lease.ok:
+            log.error("Аренду графа перехватил %s — этот прогон больше не "
+                      "единственный писатель; состояние источника записано "
+                      "не будет", lease.describe())
+    _STOP_BEAT.append(add_heartbeat(renew, every_sec=60.0))
+
+
+def _release(store) -> None:
+    while _STOP_BEAT:
+        _STOP_BEAT.pop()()
+    store.release(INDEXER_OWNER)
+
+
+def _git_decide(neo: Neo4j, ctx, store, forced: bool) -> "_GitRun":
+    from source_state import INDEXER_LEASE_SEC
+    from source_sync import (Neo4jGraphOps, max_partial_from_env,
+                             state_usable, sync)
+    from git_source import GitError
+    head = ctx.repo.head()
+    if not head:
+        raise GitError("в репозитории нет коммитов")
+    run = _GitRun(ctx, store, head)
+    log.info("  HEAD %s", run.head[:12])
+    if forced:
+        run.plan, run.mark = "full", True
+        return run
+
+    state = store.read()
+    usable, why = state_usable(state, ctx)
+    if not usable:
+        log.info("Состояния источника нет (%s) — проверяю граф прежним "
+                 "способом, по отпечаткам выгрузки (один раз)", why)
+        run.mark = True
+        return run
+
+    log.info("  проиндексировано: %s, правок агента поверх: %d",
+             state.indexed_sha[:12], len(state.dirty))
+    res = sync(ctx, store, Neo4jGraphOps(neo, ctx.src_root), owner=INDEXER_OWNER,
+               keep_lease=True, lease_ttl=INDEXER_LEASE_SEC,
+               max_partial=max_partial_from_env())
+    log.info("  доиндексация: %s — %s", res.status, res.message)
+    if res.status in ("ok", "unchanged"):
+        ownership = check_ownership(neo)
+        if ownership["state"] == STATE_OK:
+            log_ownership(ownership, log)
+            _outcome("граф догнан по git: " + res.message)
+            run.done = True
+            return run
+        log.warning("Граф догнан по git, но владение кодом не в порядке:")
+        log_ownership(ownership, log)
+        if not ownership.get("objects"):
+            # Слоя метаданных нет вовсе (база очищена, а узел состояния
+            # уцелел): фазе 2 не на что опереться — как и в legacy-ветке
+            # FIX-27, нужна полная.
+            log.warning("Слоя метаданных в графе нет — полная индексация")
+            run.plan, run.mark = "full", True
+            return run
+        run.plan, run.flag_reconcile = "phase2", True
+        return run
+    if res.status == "needs_full":
+        log.warning("%s — полная индексация", res.message)
+        run.plan, run.mark = "full", True
+        return run
+    _outcome(f"доиндексация не удалась: {res.message}")
+    run.done, run.rc = True, 1
+    return run
+
+
+def _git_bsl_paths(run: _GitRun) -> Optional[list]:
+    """
+    PERF-14: список .bsl для фазы 2 в режиме git — индекс git плюс файлы,
+    которые агент правил поверх коммита (dirty). Неотслеживаемые файлы, о
+    которых никто не сообщил, найдёт сверка: после полной индексации она
+    запускается сама (needs_reconcile). Ошибка git — None, и фаза 2 строит
+    список обходом, как раньше.
+    """
+    from git_source import GitError
+    from source_state import DELETED
+    try:
+        paths = set(run.ctx.repo.ls_files(".bsl"))
+    except GitError as e:
+        log.warning("git ls-files не отработал (%s) — список .bsl обходом", e)
+        return None
+    try:
+        state = run.store.read()
+    except Exception:  # noqa: BLE001
+        state = None
+    if state is not None:
+        paths |= {p for p, h in state.dirty.items()
+                  if h != DELETED and p.lower().endswith(".bsl")}
+    log.info("Список .bsl из git: %d файлов", len(paths))
+    return sorted(paths)
+
+
+def _git_finish(neo: Neo4j, run: _GitRun, rc: int) -> None:
+    """После прогона: записать состояние источника и отпустить аренду."""
+    from source_state import LeaseLost
+    from source_sync import mark_indexed
+    try:
+        if rc == 0 and run.mark:
+            ownership = check_ownership(neo)
+            if ownership["state"] == STATE_OK:
+                full = bool(_PHASES_RAN)
+                mark_indexed(run.ctx, run.store, INDEXER_OWNER, run.head, full=full)
+                log.info("Состояние источника записано: граф = коммит %s%s; "
+                         "незакоммиченные правки найдёт сверка",
+                         run.head[:12],
+                         "" if full else " (граф принят как есть — выгрузка "
+                                         "не менялась с прошлой индексации)")
+            else:
+                log.warning("Состояние источника НЕ записано: владение кодом "
+                            "не в порядке — следующий старт повторит прогон")
+        elif rc == 0 and run.flag_reconcile:
+            st = run.store.read()
+            if st is not None:
+                st.needs_reconcile = True
+                run.store.write(st, INDEXER_OWNER)
+    except LeaseLost as e:
+        log.error("Состояние источника не записано: %s", e)
+    except Exception as e:  # noqa: BLE001 — итог прогона важнее
+        log.error("Состояние источника не записано: %s: %s", type(e).__name__, e)
+    finally:
+        _release(run.store)
+
+
 # ─── Main pipeline ────────────────────────────────────────────────────────
 
 
@@ -379,6 +711,32 @@ def _main() -> int:
     neo.wait(timeout=120)
     log.info("  ✓ доступен")
 
+    # ─ SRC-10: режим git — решение по HEAD, а не по обходу выгрузки ─
+    git_run = _git_start(neo, force_xml or force_bsl)
+    if git_run is not None and git_run.done:
+        _git_finish(neo, git_run, git_run.rc)
+        return git_run.rc
+    rc = 1
+    try:
+        rc = _run_phases(neo, src_dir, cfg_name, force_xml=force_xml,
+                         force_bsl=force_bsl, strict_fp=strict_fp,
+                         skip_bsl=skip_bsl, t_total=t_total,
+                         git_plan=git_run.plan if git_run else None,
+                         bsl_paths=_git_bsl_paths(git_run)
+                         if git_run and git_run.plan else None)
+        return rc
+    finally:
+        if git_run is not None:
+            _git_finish(neo, git_run, rc)
+
+
+def _legacy_fingerprints(neo: Neo4j, src_dir: Path, strict_fp: bool) -> tuple:
+    """
+    Прежний (legacy) способ узнать, менялась ли выгрузка: отпечаток обоих
+    слоёв одним обходом дерева. В режиме git (SRC-10) не вызывается, кроме
+    первого перехода: тогда граф принимается как есть, если отпечатки
+    сошлись.
+    """
     # ─ Считаем оба fingerprint'а за один обход дерева (PERF-3) ──────
     log.info("Считаем fingerprint workspace…")
     digests, fp_meta = fingerprint_workspace_multi(
@@ -410,6 +768,38 @@ def _main() -> int:
 
     xml_same, xml_why = fingerprint_matches(fp_xml_old, fp_xml_new, fp_mode)
     bsl_same, bsl_why = fingerprint_matches(fp_bsl_old, fp_bsl_new, fp_mode)
+
+    return (fp_mode, fp_xml_new, fp_bsl_new, xml_same, xml_why, bsl_same, bsl_why,
+            fp_meta.get("paths", {}).get(".bsl"))
+
+
+def _run_phases(neo: Neo4j, src_dir: Path, cfg_name: str, *, force_xml: bool,
+                force_bsl: bool, strict_fp: bool, skip_bsl: bool,
+                t_total: float, git_plan: Optional[str] = None,
+                bsl_paths: Optional[list] = None) -> int:
+    """
+    Обе фазы индексации — тело прежнего _main без изменений, кроме одного:
+    откуда берётся решение «какую фазу гнать».
+
+      git_plan=None     — как раньше, по отпечаткам (legacy и первый переход);
+      git_plan='full'   — SRC-10: решено по git, нужна полная; обход
+                          выгрузки ради отпечатков не делается;
+      git_plan='phase2' — SRC-10: граф догнан по git, но владение кодом не в
+                          порядке (FIX-27) — только фаза 2.
+    """
+    if git_plan is None:
+        (fp_mode, fp_xml_new, fp_bsl_new,
+         xml_same, xml_why, bsl_same, bsl_why, fp_bsl_paths) = _legacy_fingerprints(
+            neo, src_dir, strict_fp)
+        if bsl_paths is None:
+            bsl_paths = fp_bsl_paths
+    else:
+        fp_mode = fp_xml_new = fp_bsl_new = None
+        xml_same = git_plan == "phase2"
+        bsl_same = False
+        xml_why = bsl_why = f"режим git, решение: {git_plan}"
+        log.info("Отпечатки выгрузки не считаются: режим git, решение — %s",
+                 git_plan)
 
     xml_needs_reindex = (not xml_same) or force_xml
     bsl_needs_reindex = (not bsl_same) or force_bsl
@@ -522,19 +912,23 @@ def _main() -> int:
             log_bsl.info("Фаза 2: %s", bsl_why)
         else:
             log_bsl.info("Фаза 2: %s — переиндексация", bsl_why)
-        rc = run_bsl_phase(neo, src_dir)
+        rc = run_bsl_phase(neo, src_dir, bsl_paths=bsl_paths)
         if rc != 0:
             if xml_fp_pending:
                 log.error("Фаза 2 не отработала (код %d) — отпечаток XML не "
                           "сохранён, следующий запуск повторит обе фазы.", rc)
             _outcome("фаза 2 (BSL) завершилась с ошибкой — подробности выше")
             return rc
-        fingerprint_write(neo, fp_bsl_new, "bsl_source", mode=fp_mode)
-        log_bsl.info("  bsl fingerprint сохранён (режим %s)", fp_mode)
+        # SRC-10: в режиме git отпечатков нет (обход не делался) — их место
+        # занимает состояние источника, его пишет main() после прогона.
+        if fp_bsl_new is not None:
+            fingerprint_write(neo, fp_bsl_new, "bsl_source", mode=fp_mode)
+            log_bsl.info("  bsl fingerprint сохранён (режим %s)", fp_mode)
         if xml_fp_pending:
-            fingerprint_write(neo, fp_xml_new, "metadata_xml", mode=fp_mode)
-            log.info("  xml fingerprint сохранён (режим %s) — после фазы 2, "
-                     "когда слой владения уже восстановлен (FIX-27)", fp_mode)
+            if fp_xml_new is not None:
+                fingerprint_write(neo, fp_xml_new, "metadata_xml", mode=fp_mode)
+                log.info("  xml fingerprint сохранён (режим %s) — после фазы 2, "
+                         "когда слой владения уже восстановлен (FIX-27)", fp_mode)
             xml_fp_pending = False
     else:
         log_bsl.info("Фаза 2 пропущена: %s", bsl_why)
@@ -573,6 +967,7 @@ def _main() -> int:
     log.info("✓ Готово! Полный прогон занял %s", human_sec(time.time() - t_total))
     log.info("=" * 60)
     ran = [name for name, flag in (("XML", xml_needs_reindex), ("BSL", bsl_needs_reindex)) if flag]
+    _PHASES_RAN[:] = ran
     _outcome("переиндексация выполнена (фазы: " + ", ".join(ran) + ")"
              + (f"; ⚠ шагов с потерями данных: {bad}" if bad else ""))
     return 0

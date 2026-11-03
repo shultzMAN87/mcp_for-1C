@@ -11,6 +11,30 @@ PERF-8, шаг 2 — применить изменения точечно, бе�
     docker compose run --rm --entrypoint python metadata-indexer \\
         /app/apply_changes.py
 
+    Короче, с хоста: .\\scripts\\graph-refresh.ps1 [-DryRun|-Reconcile|-Full]
+
+──────────────────────────────────────────────────────────────────────
+SRC-12: РЕЖИМ GIT
+──────────────────────────────────────────────────────────────────────
+Если выгрузка лежит в git-репозитории (раскладка — README, «Обновление
+выгрузки»), скрипт не обходит выгрузку, а делает ТАКТ — ровно то же, что
+watcher по таймеру и metadata_refresh() из чата (source_sync.sync):
+HEAD против проиндексированного коммита плюс файлы, которые правил агент.
+
+    (без ключа)     такт: доиндексировать изменившееся
+    --dry-run       показать план, ничего не меняя
+    --reconcile     сверка через git status: найти правки, о которых никто
+                    не сообщил (минуты на большой выгрузке)
+    --full          полная индексация (часы), с подтверждением
+    --force-unlock  снять аренду, если её держатель упал и ждать её
+                    истечения не хочется
+
+Коды выхода в режиме git: 0 — готово или делать нечего; 1 — ошибки при
+обновлении; 2 — Neo4j не отвечает; 3 — нужна полная индексация или
+состояния ещё нет; 4 — граф сейчас обновляет кто-то другой.
+
+Без git — прежнее поведение, описанное ниже.
+
 ──────────────────────────────────────────────────────────────────────
 ЧТО ЭТОТ РЕЖИМ НЕ ДЕЛАЕТ — прочитать до первого запуска
 ──────────────────────────────────────────────────────────────────────
@@ -53,6 +77,7 @@ from graph_writer import (                              # noqa: E402
 from incremental import (                               # noqa: E402
     _clear_meta_object_slice, _clear_module_code_slice, upsert_file,
 )
+from bsl_parser import is_module_owner                  # noqa: E402
 from partial_fingerprint import (                       # noqa: E402
     build_plan, dependent_owners, is_upsertable, read_stored, scan_workspace,
     stale_debt, write_stored,
@@ -77,10 +102,14 @@ DEFAULT_DEBT_LIMIT = 20000
 
 
 def _is_module(owner: str) -> bool:
-    tail = owner.rsplit(".", 1)[-1]
-    return (owner.startswith("CommonModule.")
-            or tail in ("ObjectModule", "ManagerModule")
-            or ".Form." in owner)
+    """
+    Удалять срез модуля (код) или объекта (метаданные)?
+
+    Общий модуль — модуль: его XML и BSL под одним id, и при исчезновении
+    владельца снимается код. Остальное — как скажет bsl_parser (FIX-34:
+    наборы записей, команды, модули конфигурации).
+    """
+    return owner.startswith("CommonModule.") or is_module_owner(owner)
 
 
 # Статусы `upsert_file`, означающие успех.
@@ -91,7 +120,8 @@ OK_STATUSES = {"reindexed", "removed", "created", "updated", "ok"}
 # (is_upsertable), но проверка оставлена — на случай, если список
 # расширится со стороны incremental.
 EXPECTED_SKIPS = {"not_a_toplevel_object_xml", "not_an_xml_file",
-                  "not_a_bsl_file", "unsupported_extension"}
+                  "not_a_bsl_file", "unsupported_extension",
+                  "form_not_in_metadata"}     # FIX-41: хвост формы в выгрузке
 
 
 def _ownership(neo: Neo4j) -> dict:
@@ -120,6 +150,128 @@ def _ordered_files(owner: str, files: list[str]) -> list[str]:
     return sorted(usable, key=lambda f: (0 if f.lower().endswith(".xml") else 1, f))
 
 
+# ─── SRC-12: режим git ────────────────────────────────────────────────────
+
+GIT_EXIT = {"ok": 0, "unchanged": 0, "dry_run": 0, "error": 1,
+            "needs_full": 3, "no_state": 3, "busy": 4}
+
+
+def _neo_from_env() -> Neo4j:
+    return Neo4j(
+        os.environ.get("NEO4J_URL", "http://neo4j:7474"),
+        os.environ.get("NEO4J_USER", "neo4j"),
+        os.environ.get("NEO4J_PASSWORD", ""),
+        timeout=float(os.environ.get("NEO4J_TIMEOUT_SEC", "600")),
+    )
+
+
+def _run_full(assume_yes: bool) -> int:
+    """Полная индексация тем же индексером, что и контейнер metadata-indexer."""
+    import subprocess
+    if not assume_yes:
+        log.warning("Полная индексация: на боевой выгрузке 1,5–2 часа, граф "
+                    "всё это время отвечает по старым данным.")
+        try:
+            answer = input("Продолжить? [y/N] ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer not in ("y", "yes", "д", "да"):
+            log.info("Отменено.")
+            return 0
+    env = dict(os.environ, METADATA_FORCE_REINDEX="true")
+    return subprocess.call([sys.executable, "/app/mcp_metadata_indexer.py"], env=env)
+
+
+def _git_main(args) -> "int | None":
+    """
+    Режим git. None — выгрузка не в git, работать прежним способом.
+    """
+    from git_source import GitError
+    from source_state import Neo4jStore
+    from source_sync import (Neo4jGraphOps, context_from_env, describe,
+                             max_partial_from_env, sync)
+    try:
+        ctx = context_from_env()
+    except GitError as e:
+        log.error("Источник не определён: %s", e)
+        return 2
+    if not ctx.is_git:
+        if args.reconcile or args.force_unlock:
+            log.warning("--reconcile и --force-unlock — только для режима git "
+                        "(%s); выполняю обычный прогон", ctx.reason)
+        log.info("Режим legacy: %s", ctx.reason)
+        return None
+    log.info("Режим git: %s", ctx.reason)
+
+    neo = _neo_from_env()
+    try:
+        neo.rows("RETURN 1 AS ok")
+    except Exception as e:
+        log.error("Neo4j не отвечает: %s", e)
+        return 2
+    store = Neo4jStore(neo)
+    store.ensure_schema()
+
+    if args.force_unlock:
+        holder = store.holder()
+        store.force_unlock()
+        log.warning("Аренда снята%s.", f" (держал {holder.describe()})"
+                    if holder.ok else " (никто не держал)")
+        return 0
+
+    t0 = time.monotonic()
+    res = sync(ctx, store, None if args.dry_run else Neo4jGraphOps(neo, ctx.src_root),
+               owner="manual", reconcile=args.reconcile, dry_run=args.dry_run,
+               max_partial=max_partial_from_env())
+    took = time.monotonic() - t0
+
+    log.info("ИТОГ: %s — %s (за %s)", res.status, res.message, human_sec(took))
+    if res.planned:
+        title = "Будет обновлено" if args.dry_run else "Обновлено"
+        log.info("%s файлов: %d", title, len(res.planned))
+        for rel in res.planned[:50]:
+            log.info("    %s", rel)
+        if len(res.planned) > 50:
+            log.info("    … ещё %d", len(res.planned) - 50)
+    if res.applied and res.applied.failed:
+        for f in res.applied.files:
+            if f["status"] not in OK_STATUSES:
+                log.error("    ✗ %s %s → %s (%s)", f["action"], f["rel"],
+                          f["status"], f["reason"])
+    if res.dirty_count:
+        log.info("Правки поверх коммита (dirty): %d", res.dirty_count)
+    if res.normalized_matches:
+        log.info("Совпадений только после нормализации переводов строк: %d "
+                 "(в git LF, на диске CRLF — это нормально)", res.normalized_matches)
+    if res.applied and res.applied.finish:
+        fin = res.applied.finish
+        if fin.get("ownership"):
+            log.info("")
+            log.info("Проверка целостности:")
+            log_ownership(fin["ownership"], log)
+        if "stale_debt" in fin:
+            limit = int(os.environ.get("METADATA_STALE_DEBT_LIMIT", DEFAULT_DEBT_LIMIT))
+            log.info("Долг точечных обновлений: %d callsite'ов (порог %d).",
+                     fin["stale_debt"], limit)
+            if fin["stale_debt"] >= limit:
+                log.warning("Долг превысил порог — пора полную: "
+                            ".\\scripts\\graph-refresh.ps1 -Full")
+    if res.status == "needs_full":
+        log.warning("Полная индексация: .\\scripts\\graph-refresh.ps1 -Full "
+                    "(или этот скрипт с --full)")
+    elif res.status == "no_state":
+        log.warning("Граф ещё не индексировался в режиме git — запустите "
+                    "индексер: docker compose up metadata-indexer")
+    elif res.status == "busy":
+        log.warning("Повторите позже. Если держатель упал: --force-unlock")
+    if not args.dry_run:
+        src_block = describe(store.read(), ctx)
+        if src_block.get("needs_reconcile") and not args.reconcile:
+            log.info("Незакоммиченные правки на диске ещё не сверялись: "
+                     "запустите с --reconcile")
+    return GIT_EXIT.get(res.status, 1)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="PERF-8: точечно применить изменения выгрузки.")
@@ -129,7 +281,22 @@ def main() -> int:
                     default=int(os.environ.get("METADATA_MAX_PARTIAL", "300")),
                     help="выше этого числа изменений частичный режим "
                          "не окупается — нужна полная пересборка")
+    ap.add_argument("--reconcile", action="store_true",
+                    help="режим git: сверка через git status — найти правки, "
+                         "о которых никто не сообщил")
+    ap.add_argument("--full", action="store_true",
+                    help="полная индексация (часы), с подтверждением")
+    ap.add_argument("--yes", action="store_true",
+                    help="не спрашивать подтверждения для --full")
+    ap.add_argument("--force-unlock", action="store_true",
+                    help="режим git: снять аренду записи (держатель упал)")
     args = ap.parse_args()
+
+    if args.full:
+        return _run_full(args.yes)
+    rc = _git_main(args)
+    if rc is not None:
+        return rc
 
     src = Path(os.environ.get("METADATA_SRC_DIR", "/data/1c-xml"))
     if not src.exists():

@@ -292,6 +292,15 @@ def _neo4j_count(cypher, params=None):
 
 # ─── MCP инструменты ─────────────────────────────────────────────────────
 
+def _source_block() -> dict:
+    """SRC-12: блок `source` для metadata_stats; не бросает исключений."""
+    try:
+        from server_v3_watch_tools import source_stats_block
+    except ImportError as e:
+        return {"mode": "unknown", "error": f"ImportError: {e}"}
+    return source_stats_block()
+
+
 @mcp.tool()
 # OBS-1, находка приёмки 15 августа. Здесь стоял `@cached(ttl=600)`.
 #
@@ -619,6 +628,11 @@ def metadata_stats() -> str:
         # остальным; убирать их наугад нельзя, поэтому сначала счётчик.
         "usage":       usage_snapshot(tool_names(mcp)),
         "graph_empty": metadata_block["objects"] == 0 and code_block["callables"] == 0,
+        # SRC-12: свежий ли граф относительно выгрузки — режим (git/legacy),
+        # HEAD против проиндексированного коммита, правки агента (dirty),
+        # нужна ли полная индексация, включён ли watcher, и подсказка, что
+        # делать. Ответ на вопрос «граф свежий?» без чтения логов.
+        "source":      _source_block(),
         # PERF-10: цифра, по которой правку можно проверить на своём стенде,
         # а не поверить на слово. Тот же приём, что `--breakdown` у справки
         # — с той разницей, что тот прибор сам не считал главного этапа
