@@ -240,6 +240,118 @@ npx @modelcontextprotocol/inspector
 Transport — `Streamable HTTP`, адрес `http://127.0.0.1:8001/mcp`, заголовок
 `Authorization: Bearer <секрет>`.
 
+### 6. Правила и скиллы для агента (Cursor, OpenCode)
+
+MCP-серверы дают агенту данные, а правила и скиллы — порядок работы с ними:
+какой инструмент звать первым, как читать ответ, как писать запрос. Они
+лежат в этом репозитории, а нужны в **рабочем проекте 1С** (репозитории
+выгрузки), где работает агент.
+
+| Что | Файл в этом репозитории | Когда действует |
+|---|---|---|
+| язык ответа — русский | `.cursor/rules/language.mdc` | всегда |
+| порядок работы с MCP-серверами | `.cursor/rules/mcp-tools.mdc` | всегда |
+| антипаттерны кода 1С | `.cursor/rules/bsl-code.mdc` | при работе с `*.bsl` |
+| именование в коде 1С | `.cursor/rules/naming.mdc` | при работе с `*.bsl` |
+| скилл «запрос 1С»: от постановки до проверенного текста | `.cursor/skills/1c-query/` | когда просят написать, починить или ускорить запрос |
+| правило «граф свежий»: `metadata_refresh` после правок | `docs/agents/metadata-refresh.md` | вставить в AGENTS.md репозитория выгрузки |
+
+Правила и скилл не привязаны к IDE: правило — markdown, скилл — папка с
+SKILL.md и фронтматтером `name` + `description` (общий формат Agent
+Skills). Различается только место, где их ищет агент.
+
+Чтобы не копировать файлы (и не держать две версии), в рабочий проект
+ставятся **ссылки-junction** на папки этого репозитория — прав
+администратора не нужно, правка скилла здесь сразу видна агенту там.
+Примеры ниже — для `D:\projects\Cursor\ubd_for_ai` (рабочий проект) и
+`D:\Docker\mcp_for-1C` (этот репозиторий); подставьте свои пути.
+
+#### Cursor
+
+Cursor читает правила из `.cursor/rules/` и скиллы из `.cursor/skills/`
+рабочего проекта:
+
+```powershell
+cd D:\projects\Cursor\ubd_for_ai
+New-Item -ItemType Directory -Force .cursor\skills | Out-Null
+New-Item -ItemType Junction -Path .cursor\rules            -Target D:\Docker\mcp_for-1C\.cursor\rules
+New-Item -ItemType Junction -Path .cursor\skills\1c-query  -Target D:\Docker\mcp_for-1C\.cursor\skills\1c-query
+```
+
+Если в рабочем проекте уже есть свои `.cursor/rules`, делайте junction не на
+всю папку, а копируйте нужные `.mdc` рядом со своими.
+
+#### OpenCode
+
+OpenCode каталог `.cursor/skills` **не читает**. Скиллы он ищет так (в
+проекте — поднимаясь от текущего каталога до корня git):
+
+| Где | Путь |
+|---|---|
+| проект, общий для агентов | `.agents/skills/<имя>/SKILL.md` |
+| проект, только OpenCode | `.opencode/skills/<имя>/SKILL.md` |
+| проект, совместимо с Claude Code | `.claude/skills/<имя>/SKILL.md` |
+| глобально, для всех проектов | `%USERPROFILE%\.config\opencode\skills\<имя>\SKILL.md` |
+
+Имя папки скилла обязано совпадать с `name` во фронтматтере и состоять из
+строчных латинских букв, цифр и дефисов — `1c-query` подходит.
+
+Правила Cursor OpenCode подключает полем `instructions` (поддерживает
+маски), AGENTS.md в корне проекта читает сам — правило `metadata_refresh`
+работает и в нём.
+
+```powershell
+cd D:\projects\Cursor\ubd_for_ai
+New-Item -ItemType Directory -Force .agents\skills, .opencode | Out-Null
+New-Item -ItemType Junction -Path .agents\skills\1c-query -Target D:\Docker\mcp_for-1C\.cursor\skills\1c-query
+New-Item -ItemType Junction -Path .opencode\rules          -Target D:\Docker\mcp_for-1C\.cursor\rules
+```
+
+`opencode.json` в корне рабочего проекта — правила и MCP-серверы. Адреса
+`127.0.0.1`, как у Cursor: OpenCode на хосте. (`opencode-config.json` в корне
+этого репозитория — для контейнера `opencode`, там имена сервисов docker-сети.)
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [".opencode/rules/*.mdc"],
+  "mcp": {
+    "1c-metadata-graph": { "type": "remote", "url": "http://127.0.0.1:8001/mcp",
+      "headers": { "Authorization": "Bearer {env:MCP_SHARED_SECRET}" } },
+    "1c-bsl-checker":    { "type": "remote", "url": "http://127.0.0.1:8002/mcp",
+      "headers": { "Authorization": "Bearer {env:MCP_SHARED_SECRET}" } },
+    "1c-platform-help":  { "type": "remote", "url": "http://127.0.0.1:8003/mcp",
+      "headers": { "Authorization": "Bearer {env:MCP_SHARED_SECRET}" } },
+    "1c-query-builder":  { "type": "remote", "url": "http://127.0.0.1:8009/mcp",
+      "headers": { "Authorization": "Bearer {env:MCP_SHARED_SECRET}" } },
+    "v8std":             { "type": "remote", "url": "http://127.0.0.1:8765/mcp" }
+  }
+}
+```
+
+`{env:MCP_SHARED_SECRET}` OpenCode берёт из окружения — задать один раз
+значением из `.env` и открыть новый терминал:
+`setx MCP_SHARED_SECRET "<значение из .env>"`.
+
+Проверка: `opencode` в каталоге рабочего проекта, вопрос «какие скиллы тебе
+доступны?» — в списке `1c-query`; «напиши запрос: остатки товаров в пути по
+складам» — агент загружает скилл и идёт в `metadata_search`, затем в
+инструменты `query_*`.
+
+Ограничение: фронтматтер `.mdc` (`globs`, `alwaysApply`) OpenCode не
+понимает и подключает все правила всегда — `bsl-code.mdc` и `naming.mdc`
+будут действовать и вне `*.bsl`. Для этих четырёх правил это не мешает.
+
+#### Не отдавать это в GitLab
+
+Ссылки и `opencode.json` — локальная настройка рабочего места, в
+репозиторий выгрузки их коммитить не нужно. Исключение без правки
+`.gitignore` (файл `.git/info/exclude` живёт только у вас):
+
+```powershell
+Add-Content D:\projects\Cursor\ubd_for_ai\.git\info\exclude "`n.agents/`n.opencode/`nopencode.json`n.cursor/skills/`n.cursor/rules/"
+```
+
 ---
 
 ## MCP-серверы и инструменты
