@@ -50,6 +50,14 @@ jobs:
       - name: MCP SDK для eval-runner
         run: python -m pip install --disable-pip-version-check "mcp[cli]==1.29.0"
 
+      # CI-6. PyYAML для контура документации: scripts/docs_validate.py и
+      # docs_affects.py читают фронтматтер. Без пакета оба набора падали с
+      # «Нужен pyyaml» — CI был красным с 1 сентября (блок A контура docs)
+      # на каждом пуше, включая main. Версия — из requirements-v8std.lock.txt,
+      # сверяет scripts/tests_lockfile_pairs.py.
+      - name: PyYAML для проверок документации
+        run: python -m pip install --disable-pip-version-check "pyyaml==6.0.3"
+
       # A-5: набор, который НЕ запустился, считается провалом. Без --strict
       # отсутствующая зависимость выглядит как зелёный прогон с примечанием
       # — то есть как раз тем молчаливым отказом, против которого построен

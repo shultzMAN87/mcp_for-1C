@@ -156,6 +156,29 @@ class TestCiPinsSameMcpVersion(unittest.TestCase):
         )
 
 
+class TestCiPinsSamePyyamlVersion(unittest.TestCase):
+    """
+    CI-6. Workflow ставит pyyaml для проверок документации
+    (docs_validate.py, docs_affects.py). Без строки в workflow CI краснел с
+    1 сентября на всех ветках; со строкой — она обязана совпадать с
+    лок-файлом, по той же причине, что и mcp выше.
+    """
+
+    WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
+    LOCK = SUITE / "requirements-v8std.lock.txt"
+
+    def test_workflow_installs_pyyaml_from_lock(self):
+        if not self.WORKFLOW.exists():
+            self.skipTest("workflow не заведён")
+        wf = self.WORKFLOW.read_text(encoding="utf-8")
+        pinned = re.findall(r"pyyaml==([\d.]+)", wf, re.I)
+        self.assertTrue(pinned, "workflow не ставит pyyaml — наборы docs_* "
+                                "в CI падают с «Нужен pyyaml»")
+        in_lock = re.findall(r"^pyyaml==([\d.]+)",
+                             self.LOCK.read_text(encoding="utf-8"), re.M | re.I)
+        self.assertEqual(set(pinned), set(in_lock))
+
+
 class TestGeneratorsUseTheSameFlags(unittest.TestCase):
     """
     PERF-11. Одинаковые пары — половина дела; флаги тоже обязаны совпадать.
