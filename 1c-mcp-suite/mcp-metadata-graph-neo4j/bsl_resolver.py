@@ -74,11 +74,12 @@ from bsl_parser import (
     ParsedModule, ParsedProcedure, ParsedCall,
     iter_calls, iter_metadata_access, iter_predef, iter_assign_refs,
     iter_new_assigns, iter_var_assigns, iter_call_assigns, split_args,
-    collect_local_names,
+    collect_local_names, SAME_ID_KINDS,
+    PARALLEL_MIN_ITEMS, balanced_slices, frozen_for_fork, resolve_workers,
 )
 
 
-from progress_log import ProgressLogger, human_sec
+from progress_log import GC_METER, ProgressLogger, human_sec
 
 log = logging.getLogger(__name__)
 
@@ -570,12 +571,27 @@ class TypeRef:
             return f"Type:{self.kind}:{self.target}"
         return f"Type:{self.kind}"
 
+    def __reduce__(self):
+        # PERF-15. Сентинел AMBIGUOUS сравнивается по идентичности (`is`).
+        # Результаты параллельного прохода приезжают из другого процесса
+        # через pickle — без этого сентинел вернулся бы НОВЫМ объектом, и
+        # `t is AMBIGUOUS` молча стал бы ложью. Распаковка возвращает тот же
+        # объект модуля.
+        if self.kind == _AMBIGUOUS_KIND and self.source == "ambiguous":
+            return (_ambiguous_sentinel, ())
+        return (TypeRef, (self.kind, self.target, self.confidence, self.source))
+
 
 # Сентинел «тип параметра конфликтует на разных callsite'ах». Монотонность
 # фикс-пойнта: раз параметр стал AMBIGUOUS — он таким и остаётся (решётка
 # конечна → завершение гарантировано). AMBIGUOUS-параметр не даёт :CALLS и
 # не пишет :INFERRED_TYPE (сознательное упрощение v1, см. план 3.5).
-AMBIGUOUS = TypeRef(kind="<ambiguous>", target="", confidence=0.0, source="ambiguous")
+_AMBIGUOUS_KIND = "<ambiguous>"
+AMBIGUOUS = TypeRef(kind=_AMBIGUOUS_KIND, target="", confidence=0.0, source="ambiguous")
+
+
+def _ambiguous_sentinel() -> TypeRef:
+    return AMBIGUOUS
 
 
 @dataclass
@@ -1286,6 +1302,7 @@ def build_call_graph(
     index: Index,
     max_iterations: Optional[int] = None,
     min_gain_pct: Optional[float] = None,
+    workers: Optional[int] = None,
 ) -> dict:
     """
     Собирает полный code_graph (формат write_code_graph).
@@ -1349,7 +1366,9 @@ def build_call_graph(
     duplicate_ids: list[str] = []
     seen_module_ids: set[str] = set()
     for m in modules:
-        if m.module_kind == "CommonModule":
+        # FIX-34: то же для всех модулей с id объекта (общая форма, общая
+        # команда, HTTP- и веб-сервис) — узел уже есть в слое 1.
+        if m.module_kind in SAME_ID_KINDS:
             skipped_common += 1
             continue
         if m.module_id in seen_module_ids:
@@ -1359,7 +1378,7 @@ def build_call_graph(
             continue
         seen_module_ids.add(m.module_id)
 
-        if m.module_kind == "Form":
+        if m.module_kind in ("Form", "Command"):
             name = ".".join(m.module_id.split(".")[-2:])
         else:
             name = m.module_id.split(".")[-1]
@@ -1460,6 +1479,7 @@ def build_call_graph(
     while True:
         iteration += 1
         _t_iter = time.monotonic()
+        _gc_iter = GC_METER.total     # PERF-13: время сборщика за итерацию
 
         # PERF-5: прогресс внутри одного прохода — по процедурам. Один проход
         # на боевой конфигурации это 230 тысяч процедур и 723 тысячи
@@ -1468,10 +1488,10 @@ def build_call_graph(
             log, f"резолв, итерация {iteration}", total=n_procs_total,
             every_sec=20.0, unit="проц",
         )
-        pass_result = _resolve_pass(
+        pass_result = resolve_pass_any(
             modules, index, params_by_callable,
             param_types, return_types,
-            progress=iter_prog,
+            progress=iter_prog, workers=workers,
         )
 
         # Монотонно вливаем свежие факты в реестры.
@@ -1498,6 +1518,9 @@ def build_call_graph(
         pct_callsites = 100.0 * gain_callsites / cur_callsites if cur_callsites else 0.0
         prev_resolved, prev_callsites = cur_resolved, cur_callsites
 
+        if GC_METER.active:
+            log.info("build_call_graph: итерация %d — из них сборщик мусора %s",
+                     iteration, human_sec(GC_METER.total - _gc_iter))
         log.info(
             "build_call_graph: итерация %d/%d за %s — callsites %d "
             "(resolved %d, unresolved %d); прирост: resolved %+d (%.3f%%), "
@@ -1626,6 +1649,85 @@ def build_call_graph(
     }
 
 
+# ─── PERF-15: параллельный проход резолва ─────────────────────────────────
+#
+# Внутри прохода модули независимы: `_resolve_pass` только читает реестры
+# и индекс и ничего не пишет в общее состояние. Поэтому проход режется на
+# подряд идущие куски модулей, каждый кусок резолвит дочерний процесс
+# (fork: модули, индекс и реестры достаются ему без копирования), а родитель
+# склеивает результаты в исходном порядке — списки конкатенацией, счётчики
+# суммой. Результат совпадает с последовательным проходом байт в байт
+# (это проверяет tests_parallel_resolve). Пул — на каждую итерацию: реестры
+# между итерациями растут, и дочерний процесс должен видеть свежие.
+
+_RESOLVE_STATE: dict = {}
+_COUNTERS = ("stats_resolved", "stats_unresolved", "stats_skipped", "stats_non_config")
+_LISTS = ("callsite_nodes", "edges", "param_facts", "return_facts")
+
+
+def _resolve_chunk(bounds: tuple[int, int]) -> dict:
+    st = _RESOLVE_STATE
+    lo, hi = bounds
+    return _resolve_pass(st["modules"][lo:hi], st["index"], st["params_by_callable"],
+                         st["param_types"], st["return_types"])
+
+
+def merge_pass_results(parts: list[dict]) -> dict:
+    """Склеить результаты кусков в том порядке, в каком они идут."""
+    out: dict = {k: [] for k in _LISTS}
+    out.update({k: 0 for k in _COUNTERS})
+    out["reason_counts"] = {}
+    for part in parts:
+        for k in _LISTS:
+            out[k].extend(part[k])
+        for k in _COUNTERS:
+            out[k] += part[k]
+        for reason, n in part["reason_counts"].items():
+            out["reason_counts"][reason] = out["reason_counts"].get(reason, 0) + n
+    return out
+
+
+def resolve_pass_any(
+    modules: list[ParsedModule],
+    index: Index,
+    params_by_callable: dict[str, list],
+    param_types: dict[str, TypeRef],
+    return_types: dict[str, TypeRef],
+    progress=None,
+    workers: Optional[int] = None,
+) -> dict:
+    """Проход резолва: параллельно, если есть fork, процессов больше одного
+    и процедур не меньше PARALLEL_MIN_ITEMS; иначе — прежний путь."""
+    n_workers = resolve_workers(workers)
+    sizes = [len(m.procedures) for m in modules]
+    if n_workers <= 1 or sum(sizes) < PARALLEL_MIN_ITEMS:
+        return _resolve_pass(modules, index, params_by_callable,
+                             param_types, return_types, progress=progress)
+
+    import multiprocessing as mp
+    # Кусков больше, чем процессов: модули сильно разные по весу, и мелкие
+    # куски выравнивают нагрузку, а прогресс идёт ровнее.
+    slices = balanced_slices(sizes, n_workers * 8)
+    _RESOLVE_STATE.update(modules=modules, index=index,
+                          params_by_callable=params_by_callable,
+                          param_types=param_types, return_types=return_types)
+    parts: list[dict] = []
+    resolved = gaps = 0
+    try:
+        with frozen_for_fork(), mp.get_context("fork").Pool(n_workers) as pool:
+            for part, (_lo, _hi, n_procs) in zip(
+                    pool.imap(_resolve_chunk, [(a, b) for a, b, _w in slices]),
+                    slices):
+                parts.append(part)
+                resolved += part["stats_resolved"]
+                gaps += part["stats_unresolved"] - part["stats_non_config"]
+                if progress is not None:
+                    progress.step(n_procs, extra=f"разрешено {resolved}, пробелов {gaps}")
+    finally:
+        _RESOLVE_STATE.clear()
+    return merge_pass_results(parts)
+
+
 def _resolve_pass(
     modules: list[ParsedModule],
     index: Index,
@@ -1650,6 +1752,12 @@ def _resolve_pass(
     НЕ мутирует param_types / return_types — только читает их.
     """
     callsite_nodes: list[dict] = []
+    # PERF-17: id уже заведённых callsite'ов. Раньше вызов менеджера
+    # проверялся на дубль проходом по ВСЕМУ списку callsite_nodes — к концу
+    # итерации это 700+ тысяч словарей на каждый `Справочники.X.Метод()`:
+    # квадратичный рост, тот самый спад скорости резолва в 20 раз по ходу
+    # одной итерации (PERF-13). Множество даёт тот же ответ за O(1).
+    callsite_ids: set[str] = set()
     edges: list[dict] = []
     stats_resolved = 0
     stats_unresolved = 0
@@ -1699,6 +1807,7 @@ def _resolve_pass(
                     continue
 
                 cs_id = f"{caller_id}:{c.line}:{c.col}"
+                callsite_ids.add(cs_id)
                 callsite_nodes.append({
                     "id":          cs_id,
                     "caller_id":   caller_id,
@@ -1792,7 +1901,8 @@ def _resolve_pass(
                     nl = proc.body_text.rfind("\n", 0, mc.start())
                     col = mc.start() - nl - 1 if nl >= 0 else mc.start()
                     cs_id = f"{caller_id}:{line}:{col}"
-                    if not any(n["id"] == cs_id for n in callsite_nodes):
+                    if cs_id not in callsite_ids:
+                        callsite_ids.add(cs_id)
                         callsite_nodes.append({
                             "id":          cs_id,
                             "caller_id":   caller_id,

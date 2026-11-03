@@ -135,7 +135,7 @@ class PhaseCase(unittest.TestCase):
         self.events.append("phase1")
         return 0
 
-    def _bsl_phase(self, neo, src_dir):
+    def _bsl_phase(self, neo, src_dir, bsl_paths=None):
         self.events.append("phase2")
         return self.bsl_rc
 
@@ -273,6 +273,103 @@ class TestForceFlags(PhaseCase):
         os.environ["METADATA_FORCE_XML"] = "true"
         self.run_main()
         self.assertEqual(self.events[:2], ["phase1", "phase2"])
+
+
+class TestDropOrphanFormsFix41(unittest.TestCase):
+    """FIX-41: модули форм, которых нет в XML объекта, не идут в резолв —
+    иначе их процедуры остаются без владельца (стенд 3 ноября: 6 форм,
+    68 процедур)."""
+
+    def test_orphans_dropped_with_reason(self):
+        import indexer
+        from bsl_parser import ParsedModule, parse_bsl_text
+
+        def mod(mid, kind):
+            return ParsedModule(module_id=mid, module_kind=kind,
+                                parent_metadata_id="DataProcessor.Обр",
+                                source_path=mid.replace(".", "/") + ".bsl",
+                                is_server=True, is_client=False,
+                                procedures=parse_bsl_text("Процедура П()\nКонецПроцедуры"))
+
+        class Neo:
+            def rows(self, cypher, params=None):
+                assert "MATCH (f:Form)" in cypher
+                return [{"id": "DataProcessor.Обр.Form.Живая"}]
+
+        mods = [mod("DataProcessor.Обр.ObjectModule", "ObjectModule"),
+                mod("DataProcessor.Обр.Form.Живая", "Form"),
+                mod("DataProcessor.Обр.Form.Хвост", "Form")]
+        with self.assertLogs(indexer.log_bsl, "WARNING") as cm:
+            kept = indexer.drop_orphan_forms(Neo(), mods)
+        self.assertEqual([m.module_id for m in kept],
+                         ["DataProcessor.Обр.ObjectModule", "DataProcessor.Обр.Form.Живая"])
+        text = "\n".join(cm.output)
+        self.assertIn("DataProcessor.Обр.Form.Хвост", text)
+        self.assertIn("хвосты в выгрузке", text)
+
+    def test_no_forms_no_query(self):
+        import indexer
+
+        class Neo:
+            def rows(self, *a, **k):
+                raise AssertionError("без модулей форм в базу не ходим")
+        self.assertEqual(indexer.drop_orphan_forms(Neo(), []), [])
+
+
+class TestBslPhaseTalliesBalanceFix41(unittest.TestCase):
+    """
+    Стенд 3 ноября после FIX-41: 6 форм отсеяны своим шагом, а шаг
+    «процедуры → узлы :Callable» всё ещё считал их процедуры входом —
+    «68 процедура потеряно без объяснения» и ⚠ в итоге прогона. Прогон фазы
+    2 целиком (база и запись подменены): сводка не должна иметь ⚠.
+    """
+
+    def test_no_unexplained_losses(self):
+        import indexer
+        from bsl_parser import ParsedModule, parse_bsl_text
+        from bsl_resolver import build_index_from_modules
+        from shortfall import TallyBook
+
+        def mod(mid, kind):
+            return ParsedModule(module_id=mid, module_kind=kind,
+                                parent_metadata_id="DataProcessor.Обр",
+                                source_path=mid.replace(".", "/") + ".bsl",
+                                is_server=True, is_client=False,
+                                procedures=parse_bsl_text(
+                                    "Процедура А()\n Б();\nКонецПроцедуры\n"
+                                    "Процедура Б()\nКонецПроцедуры"))
+        mods = [mod("DataProcessor.Обр.ObjectModule", "ObjectModule"),
+                mod("DataProcessor.Обр.Form.Живая", "Form"),
+                mod("DataProcessor.Обр.Form.Хвост", "Form")]
+
+        class Neo:
+            def rows(self, cypher, params=None):
+                if "MATCH (f:Form)" in cypher:
+                    return [{"id": "DataProcessor.Обр.Form.Живая"}]
+                if "count(m)" in cypher:
+                    return [{"n": 1}]
+                return []
+
+        book = TallyBook(indexer.log)
+        patches = {
+            "TALLIES": book,
+            "_build_modules_info_from_neo4j": lambda neo: {},
+            "walk_workspace_bsl": lambda *a, **k: list(mods),
+            "build_index_from_neo4j": lambda neo, ms: build_index_from_modules(ms),
+            "clear_code_layer": lambda neo: {"deleted_nodes": 0},
+            "write_code_graph": lambda neo, cg: {"nodes_written": {}, "edges_written": {}},
+        }
+        saved = {k: getattr(indexer, k) for k in patches}
+        try:
+            for k, v in patches.items():
+                setattr(indexer, k, v)
+            with self.assertLogs(indexer.log_bsl, "INFO"):
+                rc = indexer.run_bsl_phase(Neo(), Path("."), bsl_paths=[])
+        finally:
+            for k, v in saved.items():
+                setattr(indexer, k, v)
+        self.assertEqual(rc, 0)
+        self.assertEqual([t.what for t in book.bad], [])
 
 
 if __name__ == "__main__":

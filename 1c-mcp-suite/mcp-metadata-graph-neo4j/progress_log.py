@@ -173,7 +173,11 @@ class ProgressLogger:
         else:
             head = f"{self.count} {self.unit}"
 
+        beat(now)
         tail = f" — {extra}" if extra else ""
+        gc_s = GC_METER.share_text(now)
+        if gc_s:
+            tail = f"{tail}; {gc_s}" if tail else f" — {gc_s}"
         self.log.log(
             self.level, "  [%s] %s, %.0f %s/с, прошло %s%s",
             self.label, head, rate, self.unit, human_sec(elapsed), tail,
@@ -181,3 +185,116 @@ class ProgressLogger:
         self._t_last = now
         self._count_last = self.count
         self._lines += 1
+
+
+class GcMeter:
+    """
+    PERF-13. Сколько времени уходит на сборщик мусора Python.
+
+    Гипотеза: резолв замедляется в пять раз по ходу одной итерации (701 →
+    133 проц/с при 98 % CPU и свободной памяти), потому что сборщик раз за
+    разом пересматривает миллионы объектов — разобранные модули плюс
+    копящиеся узлы и рёбра. Проверяется не рассуждением, а числом: доля
+    времени сборщика пишется в каждую строку прогресса, пока счётчик
+    включён (`start()`), — «gc 41 %» с прошлой строки.
+
+    Цена — два вызова `perf_counter()` на сборку; сборок тысячи, не
+    миллионы.
+    """
+
+    def __init__(self):
+        self.active = False
+        self.total = 0.0
+        self.collections = [0, 0, 0]
+        self._t0: Optional[float] = None
+        self._mark_wall = 0.0
+        self._mark_gc = 0.0
+
+    def _cb(self, phase: str, info: dict) -> None:
+        if phase == "start":
+            self._t0 = time.perf_counter()
+        elif self._t0 is not None:
+            self.total += time.perf_counter() - self._t0
+            self._t0 = None
+            gen = info.get("generation", 0)
+            if 0 <= gen < 3:
+                self.collections[gen] += 1
+
+    def start(self) -> None:
+        import gc
+        if not self.active:
+            gc.callbacks.append(self._cb)
+            self.active = True
+        self._mark_wall = time.monotonic()
+        self._mark_gc = self.total
+
+    def stop(self) -> None:
+        import gc
+        if self.active:
+            try:
+                gc.callbacks.remove(self._cb)
+            except ValueError:
+                pass
+            self.active = False
+
+    def share_text(self, now: Optional[float] = None) -> str:
+        """«gc 41 %» — доля с прошлого вызова; пусто, если счётчик выключен."""
+        if not self.active:
+            return ""
+        now = time.monotonic() if now is None else now
+        wall = now - self._mark_wall
+        spent = self.total - self._mark_gc
+        self._mark_wall, self._mark_gc = now, self.total
+        if wall <= 0:
+            return ""
+        return f"gc {100.0 * spent / wall:.0f}%"
+
+    def summary(self) -> str:
+        return (f"сборщик мусора: {human_sec(self.total)} всего, сборок "
+                f"{self.collections[0]}/{self.collections[1]}/{self.collections[2]} "
+                f"(поколения 0/1/2)")
+
+
+# Один на процесс: gc.callbacks — глобальный список интерпретатора.
+GC_METER = GcMeter()
+
+
+# ─── Пульс долгих прогонов (FIX-39) ──────────────────────────────────────
+#
+# Полная индексация держит аренду графа часами. Раньше аренда бралась сразу
+# на восемь часов: упавший индексер запирал граф на всё это время, а чтобы
+# этого не было, у всех индексеров было одно имя владельца — и второй
+# индексер принимал чужую аренду за свою и писал в граф одновременно с
+# первым. Теперь аренда короткая и продлевается, пока прогон жив. Продлевать
+# удобнее всего здесь: строка прогресса выводится каждые десятки секунд в
+# любой долгой фазе (разбор, резолв, запись), и всегда в главном процессе —
+# дочерние процессы PERF-15 прогресс не ведут, а пульс проверяет pid.
+
+_BEATS: list[dict] = []
+
+
+def add_heartbeat(fn, every_sec: float = 60.0):
+    """Звать `fn()` не чаще раза в `every_sec` при выводе строк прогресса.
+    Возвращает функцию, которая пульс снимает."""
+    import os
+    h = {"fn": fn, "every": every_sec, "last": time.monotonic(), "pid": os.getpid()}
+    _BEATS.append(h)
+
+    def remove() -> None:
+        if h in _BEATS:
+            _BEATS.remove(h)
+    return remove
+
+
+def beat(now: Optional[float] = None) -> None:
+    import os
+    now = time.monotonic() if now is None else now
+    pid = os.getpid()
+    for h in list(_BEATS):
+        if h["pid"] != pid or now - h["last"] < h["every"]:
+            continue
+        h["last"] = now
+        try:
+            h["fn"]()
+        except Exception as e:  # noqa: BLE001 — пульс не роняет прогон
+            logging.getLogger("progress").warning("пульс: %s: %s", type(e).__name__, e)

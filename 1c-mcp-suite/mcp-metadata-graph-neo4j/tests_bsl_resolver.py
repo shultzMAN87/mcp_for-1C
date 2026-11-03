@@ -418,6 +418,39 @@ class TestBuildCallGraph(unittest.TestCase):
         module_ids = {m["id"] for m in cg["module_nodes"]}
         self.assertEqual(module_ids, {"Catalog.Y.ObjectModule"})
 
+    def test_fix34_module_nodes_and_owners(self):
+        """
+        FIX-34. Модули с id объекта (общая форма, общая команда, сервисы)
+        узла :Module не получают — процедуры висят на объекте слоя 1, как у
+        общего модуля. Модули команд, наборов записей и конфигурации —
+        получают; имя модуля команды — «Command.<Имя>», как у формы.
+        """
+        def mod(mid, kind, parent=None):
+            return ParsedModule(module_id=mid, module_kind=kind,
+                                parent_metadata_id=parent, source_path="",
+                                is_server=True, is_client=False,
+                                procedures=[_make_proc("П", "")])
+        mods = [
+            mod("CommonForm.Выбор", "CommonForm"),
+            mod("CommonCommand.Загрузка", "CommonCommand"),
+            mod("HTTPService.Обмен", "HTTPService"),
+            mod("WebService.Сервис", "WebService"),
+            mod("Catalog.Х.Command.Печать", "Command", "Catalog.Х"),
+            mod("AccumulationRegister.О.RecordSetModule", "RecordSetModule",
+                "AccumulationRegister.О"),
+            mod("Configuration.SessionModule", "ConfigurationModule"),
+        ]
+        cg = build_call_graph(mods, build_index_from_modules(mods))
+        nodes = {m["id"]: m for m in cg["module_nodes"]}
+        self.assertEqual(set(nodes), {"Catalog.Х.Command.Печать",
+                                      "AccumulationRegister.О.RecordSetModule",
+                                      "Configuration.SessionModule"})
+        self.assertEqual(nodes["Catalog.Х.Command.Печать"]["name"], "Command.Печать")
+        has_method = {e["src"]: e["src_label"] for e in cg["edges"]
+                      if e["rel"] == "HAS_METHOD"}
+        self.assertEqual(len(has_method), len(mods), "у каждой процедуры есть владелец")
+        self.assertEqual(set(has_method.values()), {"MetadataObject"})
+
     def test_operates_on_metadata_access(self):
         # Процедура, которая обращается к Справочники.АукАукционы
         text = (
@@ -1328,6 +1361,57 @@ class TestFix5EndToEnd(unittest.TestCase):
         self.assertIn("context_property", reasons)
         self.assertNotIn("unknown_module", reasons)
 
+
+
+class TestResolvePassScalesLinearly(unittest.TestCase):
+    """
+    PERF-17. Вызов менеджера (`Справочники.X.Метод()`) проверялся на дубль
+    проходом по всем callsite'ам прохода — квадратичный рост: на боевой
+    выгрузке скорость резолва падала с 722 до ~40 проц/с внутри одной
+    итерации. Тест: вход ×4 — время должно расти примерно ×4, а не ×16.
+    Порог 8 — с запасом на шум, квадратичная версия даёт 12–16.
+    """
+
+    @staticmethod
+    def _modules(n):
+        mgr = ParsedModule(
+            module_id="Catalog.Товары.ManagerModule", module_kind="ManagerModule",
+            parent_metadata_id="Catalog.Товары",
+            source_path="Catalogs/Товары/Ext/ManagerModule.bsl",
+            is_server=True, is_client=False,
+            procedures=parse_bsl_text("Функция Найти() Экспорт\n Возврат 1;\nКонецФункции"))
+        text = "".join(
+            f"Процедура П{i}()\n  а = Справочники.Товары.Найти();\n  Б.В();\nКонецПроцедуры\n"
+            for i in range(n))
+        caller = ParsedModule(
+            module_id="CommonModule.М", module_kind="CommonModule",
+            parent_metadata_id=None, source_path="CommonModules/М/Ext/Module.bsl",
+            is_server=True, is_client=False, procedures=parse_bsl_text(text))
+        return [mgr, caller]
+
+    def _time(self, n):
+        import time
+        from bsl_resolver import _resolve_pass
+        mods = self._modules(n)
+        idx = build_index_from_modules(mods, metadata_objects={"Товары": "Catalog.Товары"})
+        best, result = None, None
+        for _ in range(3):
+            t0 = time.perf_counter()
+            result = _resolve_pass(mods, idx, {}, {}, {})
+            dt = time.perf_counter() - t0
+            best = dt if best is None else min(best, dt)
+        return best, result
+
+    def test_manager_calls_do_not_go_quadratic(self):
+        t_small, r_small = self._time(1000)
+        t_big, r_big = self._time(4000)
+        # Результат: callsite на каждый вызов, без дублей.
+        ids = [c["id"] for c in r_big["callsite_nodes"]]
+        self.assertEqual(len(ids), 8000)
+        self.assertEqual(len(set(ids)), 8000)
+        self.assertEqual(r_big["stats_resolved"], 4000)
+        self.assertLess(t_big / max(t_small, 1e-6), 8.0,
+                        f"вход ×4, время ×{t_big / max(t_small, 1e-6):.1f} — рост квадратичный")
 
 
 if __name__ == "__main__":

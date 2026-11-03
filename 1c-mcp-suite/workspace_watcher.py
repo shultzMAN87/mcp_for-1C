@@ -1,5 +1,19 @@
 """
-Workspace watcher — задача 2.3.
+Workspace watcher — задача 2.3, режим git — SRC-9.
+
+Два режима (WATCHER_MODE):
+
+  git  — раз в SOURCE_POLL_SEC делает ТАКТ: спрашивает git, сдвинулся ли
+         HEAD, и проверяет файлы, которые агент правил поверх коммита
+         (source_sync.sync). Читаются .git и несколько конкретных файлов —
+         миллисекунды, поэтому включённый watcher почти ничего не стоит.
+         Ровно то же делает ручной запуск (apply_changes.py,
+         metadata_refresh()) — логика одна.
+  poll — прежний режим ниже: watchdog опрашивает каталог, каждый цикл —
+         полный обход выгрузки. Для каталога без git.
+  auto — git, если выгрузка в git-репозитории, иначе poll.
+
+Главный выключатель — WATCHER_ENABLED, по умолчанию false.
 
 Следит за изменениями BSL-кода и XML-метаданных и инкрементально обновляет
 граф Neo4j. Работает поверх уже существующего MCP-сервера:
@@ -438,11 +452,233 @@ class CodeXmlHandler(FileSystemEventHandler):
             ))
 
 
+# ─── SRC-9: режим git ────────────────────────────────────────────────────
+
+WATCHER_MODE = os.environ.get("WATCHER_MODE", "auto").strip().lower()
+POLL_SEC_MIN, POLL_SEC_MAX = 30, 3600
+EX_CONFIG = 78
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def parse_poll_sec(raw: Optional[str]) -> float:
+    """
+    SOURCE_POLL_SEC → секунды. Вне 30…3600 — ошибка, а не молчаливая
+    подстановка: урок WATCHER_POLLING_INTERVAL, который из .env не доходил
+    до контейнера, и опрос шёл впятеро чаще обещанного без единого слова.
+    """
+    raw = (raw or "60").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(f"SOURCE_POLL_SEC={raw!r}: нужно число секунд") from None
+    if not POLL_SEC_MIN <= value <= POLL_SEC_MAX:
+        raise ValueError(f"SOURCE_POLL_SEC={raw}: допустимо от {POLL_SEC_MIN} "
+                         f"до {POLL_SEC_MAX} секунд (60 — раз в минуту, "
+                         f"300 — раз в 5 минут)")
+    return value
+
+
+_WEEKDAYS = {
+    "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
+    "пн": 0, "вт": 1, "ср": 2, "чт": 3, "пт": 4, "сб": 5, "вс": 6,
+}
+
+
+def parse_schedule(raw: Optional[str], *, weekly: bool) -> Optional[tuple]:
+    """
+    «ЧЧ:ММ» (ежедневно) или «день ЧЧ:ММ» (еженедельно; mon…sun или
+    пн…вс) → `(день_недели | None, часы, минуты)`. Пусто — None
+    (расписание выключено). Ошибка формата — ValueError.
+    """
+    raw = (raw or "").strip().lower()
+    if not raw:
+        return None
+    parts = raw.split()
+    day = None
+    if len(parts) == 2:
+        if parts[0] not in _WEEKDAYS:
+            raise ValueError(f"{raw!r}: день недели — mon…sun или пн…вс")
+        day = _WEEKDAYS[parts[0]]
+        hm = parts[1]
+    elif len(parts) == 1:
+        if weekly:
+            raise ValueError(f"{raw!r}: нужен день недели, например «sat 02:00»")
+        hm = parts[0]
+    else:
+        raise ValueError(f"{raw!r}: формат «ЧЧ:ММ» или «день ЧЧ:ММ»")
+    try:
+        h, m = (int(x) for x in hm.split(":"))
+    except ValueError:
+        raise ValueError(f"{raw!r}: время — ЧЧ:ММ") from None
+    if not (0 <= h < 24 and 0 <= m < 60):
+        raise ValueError(f"{raw!r}: время вне суток")
+    return day, h, m
+
+
+# Через сколько повторять неудавшуюся полную индексацию.
+FULL_RETRY_SEC = 6 * 3600
+
+# Сколько после назначенного времени задачу ещё можно догнать (машина была
+# выключена в 03:00 — сверка пройдёт, когда включат, но не через неделю).
+SCHEDULE_GRACE_SEC = 12 * 3600
+
+
+def last_slot(spec: tuple, now: float) -> float:
+    """Последний назначенный момент не позже `now` (локальное время)."""
+    day, h, m = spec
+    lt = time.localtime(now)
+    base = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, h, m, 0, 0, 0, -1))
+    if day is None:
+        return base if base <= now else base - 86400
+    back = (lt.tm_wday - day) % 7
+    slot = base - back * 86400
+    return slot if slot <= now else slot - 7 * 86400
+
+
+def is_due(spec: Optional[tuple], now: float, last_run: float) -> bool:
+    """Пора ли: назначенный момент прошёл, после него не запускали, и он не
+    слишком давно (SCHEDULE_GRACE_SEC)."""
+    if spec is None:
+        return False
+    slot = last_slot(spec, now)
+    return last_run < slot and now - slot <= SCHEDULE_GRACE_SEC
+
+
+class _Quiet:
+    """Повтор одной и той же строки не чаще раза в `period` секунд."""
+
+    def __init__(self, period: float = 3600.0):
+        self.period = period
+        self._last: dict = {}
+
+    def say(self, key: str, msg: str) -> None:
+        now = time.monotonic()
+        prev = self._last.get(key)
+        if prev is None or prev[0] != msg or now - prev[1] >= self.period:
+            _log(msg)
+            self._last[key] = (msg, now)
+
+
+def _run_full_index(reason: str) -> int:
+    """
+    Полная индексация тем же индексером, что и контейнер metadata-indexer
+    (образ один). Аренду индексер берёт сам; такты в это время отвечают
+    busy и пропускаются.
+    """
+    import subprocess
+    _log(f"полная индексация: {reason}")
+    env = dict(os.environ, METADATA_FORCE_REINDEX="true")
+    t0 = time.monotonic()
+    rc = subprocess.call([sys.executable, "/app/mcp_metadata_indexer.py"], env=env)
+    _log(f"полная индексация завершилась с кодом {rc} за "
+         f"{(time.monotonic() - t0) / 60:.1f} мин")
+    return rc
+
+
+def _main_git(ctx) -> int:
+    from graph_writer import Neo4j
+    from source_state import Neo4jStore
+    from source_sync import Neo4jGraphOps, max_partial_from_env, sync
+
+    try:
+        poll_sec = parse_poll_sec(os.environ.get("SOURCE_POLL_SEC"))
+        reconcile_spec = parse_schedule(os.environ.get("SOURCE_RECONCILE_AT"),
+                                        weekly=False)
+        full_spec = parse_schedule(os.environ.get("SOURCE_FULL_REINDEX_AT"),
+                                   weekly=True)
+    except ValueError as e:
+        _log(f"ОШИБКА КОНФИГУРАЦИИ: {e}")
+        _log("watcher не запущен — исправьте .env и пересоздайте контейнер: "
+             "docker compose up -d --no-deps --force-recreate workspace-watcher")
+        return EX_CONFIG
+    auto_full = _env_bool("SOURCE_AUTO_FULL", False)
+    reconcile_on_flag = _env_bool("SOURCE_RECONCILE_ON_FLAG", True)
+    max_partial = max_partial_from_env()
+
+    _log(f"mode: GIT (interval={poll_sec:.0f}s) — {ctx.reason}")
+    _log(f"  сверка: {os.environ.get('SOURCE_RECONCILE_AT') or 'по флагу needs_reconcile'}"
+         f"{'' if reconcile_on_flag else ' (по флагу — выключено)'}; "
+         f"плановая полная: {os.environ.get('SOURCE_FULL_REINDEX_AT') or 'выкл.'}; "
+         f"сама при needs_full: {'да' if auto_full else 'нет, только напоминает'}")
+
+    neo = Neo4j(os.environ.get("NEO4J_URL", "http://neo4j:7474"),
+                os.environ.get("NEO4J_USER", "neo4j"),
+                os.environ.get("NEO4J_PASSWORD", ""),
+                timeout=float(os.environ.get("NEO4J_TIMEOUT_SEC", "600")))
+    neo.wait(timeout=300)
+    store = Neo4jStore(neo)
+    store.ensure_schema()
+    ops = Neo4jGraphOps(neo, ctx.src_root)
+    quiet = _Quiet()
+    last_alive = 0.0
+    # Неудачная полная индексация не пишет last_full_at, и без этой
+    # отметки watcher перезапускал бы её на каждом такте всё окно догона —
+    # по два часа подряд. Повтор — не раньше, чем через FULL_RETRY_SEC.
+    full_attempt = 0.0
+
+    _log("watcher запущен, жду изменений...")
+    while True:
+        t0 = time.monotonic()
+        now = time.time()
+        try:
+            state = store.read()
+            reconcile = False
+            if state is not None:
+                want_full = is_due(full_spec, now, state.last_full_at) or \
+                    (auto_full and state.needs_full)
+                if want_full and now - full_attempt >= FULL_RETRY_SEC:
+                    why = ("по расписанию" if not state.needs_full
+                           else f"needs_full: {state.needs_full_reason}")
+                    full_attempt = now
+                    if _run_full_index(why) != 0:
+                        _log(f"полная индексация не удалась — повтор не раньше "
+                             f"чем через {FULL_RETRY_SEC / 3600:.0f} ч")
+                    continue
+                reconcile = is_due(reconcile_spec, now, state.last_reconcile_at) \
+                    or (reconcile_on_flag and state.needs_reconcile)
+            if reconcile:
+                _log("сверка рабочей копии (git status)…")
+            res = sync(ctx, store, ops, owner="watcher", reconcile=reconcile,
+                       max_partial=max_partial)
+            took = time.monotonic() - t0
+            if res.status == "ok":
+                quiet._last.clear()
+                applied = res.applied.summary() if res.applied else {}
+                _log(f"HEAD {res.indexed_before[:10]}→{res.head[:10]}: "
+                     f"файлов {len(res.planned)}, "
+                     f"{applied.get('by_action', {})}, dirty {res.dirty_count}, "
+                     f"за {took:.1f} с")
+            elif res.status == "needs_full":
+                quiet.say("needs_full", res.message + (
+                    "" if auto_full else
+                    " — запустите: .\\scripts\\graph-refresh.ps1 -Full "
+                    "(или SOURCE_AUTO_FULL=true)"))
+            elif res.status in ("busy", "no_state", "error"):
+                quiet.say(res.status, f"{res.status}: {res.message}")
+            if reconcile and res.ok:
+                _log(f"сверка завершена за {took:.1f} с, dirty {res.dirty_count}")
+            if time.monotonic() - last_alive >= 3600:
+                _log(f"жив: HEAD {res.head[:10] or '—'}, dirty {res.dirty_count}, "
+                     f"статус {res.status}")
+                last_alive = time.monotonic()
+        except Exception as e:  # noqa: BLE001 — такт упал, watcher жив
+            quiet.say("exception", f"такт упал: {type(e).__name__}: {e}")
+        time.sleep(max(1.0, poll_sec - (time.monotonic() - t0)))
+
+
 # ─── Main ────────────────────────────────────────────────────────────────
 
 def main() -> int:
     if not WATCHER_ENABLED:
         _log("WATCHER_ENABLED=false — watcher отключён, идём в простой sleep-loop")
+        _log("  ручная доиндексация работает и так: .\\scripts\\graph-refresh.ps1 "
+             "или metadata_refresh() из чата")
         try:
             while True:
                 time.sleep(3600)
@@ -451,6 +687,38 @@ def main() -> int:
 
     _log(f"initial delay {INITIAL_DELAY_SEC:.0f}s (даём MCP-серверам подняться)")
     time.sleep(INITIAL_DELAY_SEC)
+
+    if WATCHER_MODE not in ("auto", "git", "poll"):
+        _log(f"ОШИБКА КОНФИГУРАЦИИ: WATCHER_MODE={WATCHER_MODE!r} — "
+             f"допустимо auto | git | poll")
+        return EX_CONFIG
+    if WATCHER_MODE in ("auto", "git"):
+        try:
+            sys.path.insert(0, "/app")
+            from source_sync import context_from_env
+            ctx = context_from_env()
+        except Exception as e:  # noqa: BLE001
+            if WATCHER_MODE == "git":
+                _log(f"ОШИБКА: WATCHER_MODE=git, но источник не определён: {e}")
+                return EX_CONFIG
+            _log(f"режим git недоступен ({e}) — перехожу в poll")
+            ctx = None
+        if ctx is not None and ctx.is_git:
+            try:
+                return _main_git(ctx)
+            except KeyboardInterrupt:
+                return 0
+        if WATCHER_MODE == "git":
+            _log(f"ОШИБКА: WATCHER_MODE=git, но выгрузка не в git: "
+                 f"{ctx.reason if ctx else '—'}")
+            return EX_CONFIG
+        _log(f"выгрузка не в git ({ctx.reason if ctx else '—'}) — режим poll: "
+             f"каждый цикл = полный обход каталога (HYG-7)")
+    return _main_poll()
+
+
+def _main_poll() -> int:
+    """Прежний режим: watchdog опрашивает каталог (задача 2.3 + 4.6.5)."""
 
     code_path = Path(CODE_DIR)
     xml_path = Path(XML_DIR)

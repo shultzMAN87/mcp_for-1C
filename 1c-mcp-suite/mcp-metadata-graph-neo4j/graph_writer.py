@@ -390,6 +390,10 @@ def fingerprint_workspace_multi(
         "elapsed_sec":  time.monotonic() - t0,
         "by_suffix":    {s: len(v) for s, v in items.items()},
         "newest_mtime": newest_mtime,
+        # PERF-14: сами пути (от корня выгрузки). Обход уже сделан — список
+        # .bsl для фазы 2 берётся отсюда, а не вторым обходом 58 тысяч
+        # файлов через границу Docker (16 минут без единой строки в логе).
+        "paths":        {s: [ln.split("\t", 1)[0] for ln in v] for s, v in items.items()},
     }
     return digests, meta
 

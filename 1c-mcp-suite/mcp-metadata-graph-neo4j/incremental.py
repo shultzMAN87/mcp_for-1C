@@ -54,6 +54,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -64,7 +66,7 @@ from graph_writer import (
     write_meta_nodes, write_attribute_nodes, write_tabular_section_nodes,
     write_form_nodes, write_enum_value_nodes,
 )
-from bsl_parser import classify_bsl_path, parse_bsl_module, walk_workspace_bsl
+from bsl_parser import classify_bsl_path, module_context, parse_bsl_module
 from bsl_resolver import build_call_graph, build_index_from_neo4j
 from metadata_xml import KINDS, _parse_object, build_graph
 
@@ -80,7 +82,8 @@ def _norm_rel(src_root: Path, filepath: str) -> Optional[str]:
     src_root) к относительному POSIX-пути от корня выгрузки.
 
     Стратегия резолва:
-      1. Если путь относительный — возвращаем как есть (POSIX-нормализованный).
+      1. Если путь относительный — нормализуем (`a/../b` → `b`) и возвращаем.
+         Путь, выходящий наружу (`../x`), — None.
       2. Если путь абсолютный и ВНУТРИ src_root — режем префикс.
       3. ФОЛБЭК: если путь абсолютный, но НЕ внутри src_root, пытаемся
          найти его «общий хвост» с известной схемой 1С-выгрузки. Например,
@@ -92,35 +95,102 @@ def _norm_rel(src_root: Path, filepath: str) -> Optional[str]:
       4. Если хвост не найден — возвращаем None (watcher следит за чужой
          папкой, либо это случайный левый путь).
 
+    SRC-4. Пути от агента. Агент на Windows пришлёт
+    `D:\\projects\\ubd\\src\\Catalogs\\X\\Ext\\ObjectModule.bsl`. После замены
+    слешей это `D:/projects/...`, и PurePosixPath считает его ОТНОСИТЕЛЬНЫМ —
+    раньше он возвращался как есть, неверный, без единой ошибки. Теперь путь
+    с буквой диска и UNC-путь (`\\\\wsl$\\...`) идут по ветке абсолютного.
+
+    Второй случай — путь от корня репозитория, а не от корня конфигурации:
+    `src/Catalogs/X.xml`. Так его отдаёт `git diff` и так его видит агент в
+    рабочей папке. Префикс подкаталога конфигурации (`METADATA_CONFIG_SUBDIR`)
+    срезается; если переменная не задана, а первый компонент пути — не
+    каталог выгрузки, ищется хвост, как для абсолютного пути.
+
     Тонкость кросс-платформенности: контейнер у нас всегда Linux, поэтому
     «абсолютным» считаем POSIX-путь, начинающийся с '/'. Использовать
     `Path.is_absolute()` нельзя — под Windows-разработчиком `Path('/data/...')`
     is_absolute()==False. PurePosixPath одинаково ведёт себя на любой ОС.
     """
+    import posixpath
     from pathlib import PurePosixPath
-    fp_norm = filepath.replace("\\", "/")
+    fp_norm = filepath.strip().replace("\\", "/")
+    if not fp_norm:
+        return None
+
+    # SRC-4: буква диска (`D:/…`) и UNC (`//server/…`) — абсолютные пути
+    # чужой файловой системы. Внутри src_root они не бывают никогда, им
+    # прямая дорога в фолбэк по хвосту.
+    if _WIN_DRIVE_RE.match(fp_norm) or fp_norm.startswith("//"):
+        return _tail_rel(src_root, PurePosixPath(fp_norm).parts)
+
     pp = PurePosixPath(fp_norm)
     if not pp.is_absolute():
-        return str(pp)
+        rel = posixpath.normpath(fp_norm)
+        if rel == "." or rel == ".." or rel.startswith("../"):
+            return None
+        return _strip_repo_prefix(src_root, rel)
 
     # Прямой случай: путь внутри src_root.
     root_pp = PurePosixPath(str(src_root).replace("\\", "/"))
     try:
-        return str(pp.relative_to(root_pp))
+        return str(PurePosixPath(posixpath.normpath(fp_norm)).relative_to(root_pp))
     except ValueError:
         pass
 
-    # Фолбэк: общий хвост по известным top-level директориям выгрузки.
-    # Хвост должен начинаться с одной из этих папок (`tests-extension`
-    # входит в множество наравне с видами — см. _TAIL_TOP_DIRS ниже).
-    # Если src_root реально существует на диске (и в нём есть нужный хвост) —
-    # дополнительно проверяем существование, чтобы случайные строки типа
-    # `/etc/Catalogs/foo.bsl` не маппились.
-    parts = pp.parts  # ('/', 'workspace', 'Catalogs', ...) на POSIX
+    return _tail_rel(src_root, pp.parts)
+
+
+# SRC-4: `C:/…`, `d:/…` — путь с буквой диска после замены обратных слешей.
+_WIN_DRIVE_RE = re.compile(r"^[A-Za-z]:/")
+
+
+def _strip_repo_prefix(src_root: Path, rel: str) -> Optional[str]:
+    """
+    SRC-4. Относительный путь от корня РЕПОЗИТОРИЯ → путь от корня
+    конфигурации. `src/Catalogs/X.xml` → `Catalogs/X.xml`.
+
+    Порядок: сначала явный подкаталог (`METADATA_CONFIG_SUBDIR`) — он
+    однозначен, в том числе для корневых модулей (`src/Ext/SessionModule.bsl`),
+    у которых нет каталога вида. Потом, если первый компонент не каталог
+    выгрузки, — поиск хвоста. Путь, у которого хвоста нет, возвращается как
+    есть: это корневой файл (`Configuration.xml`, `Ext/…`), и решать, нужен
+    ли он, будет вызывающий.
+    """
+    subdir = os.environ.get("METADATA_CONFIG_SUBDIR", "").strip().strip("/\\")
+    if subdir:
+        prefix = subdir.replace("\\", "/") + "/"
+        if rel.startswith(prefix):
+            return rel[len(prefix):] or None
+    first = rel.split("/", 1)[0]
+    if first in _TAIL_TOP_DIRS or "/" not in rel:
+        return rel
+    from pathlib import PurePosixPath
+    parts = PurePosixPath(rel).parts
+    if not any(p in _TAIL_TOP_DIRS for p in parts):
+        return rel
+    tail = _tail_rel(src_root, parts)
+    return tail if tail is not None else rel
+
+
+def _tail_rel(src_root: Path, parts: tuple) -> Optional[str]:
+    """
+    Фолбэк: общий хвост по известным top-level директориям выгрузки.
+
+    Хвост должен начинаться с одной из этих папок (`tests-extension`
+    входит в множество наравне с видами — см. _TAIL_TOP_DIRS ниже).
+    Если src_root реально существует на диске (и в нём есть нужный хвост) —
+    дополнительно проверяем существование, чтобы случайные строки типа
+    `/etc/Catalogs/foo.bsl` не маппились.
+
+    Если кандидатов несколько (`D:/Documents/proj/src/Catalogs/…` — первый
+    компонент `Documents` тоже вид метаданных), побеждает первый, который
+    существует на диске; на синтетическом src_root, которого нет, — первый.
+    """
+    from pathlib import PurePosixPath
     for i, part in enumerate(parts):
         if part in _TAIL_TOP_DIRS:
-            tail = PurePosixPath(*parts[i:])
-            tail_str = str(tail)
+            tail_str = str(PurePosixPath(*parts[i:]))
             # Доп.санити: если src_root существует — должен существовать
             # и (src_root / tail). На юнит-тестах src_root может быть
             # синтетическим (например, /data/1c-src), тогда .exists() даст
@@ -382,8 +452,22 @@ def upsert_bsl_file(neo: Neo4j, src_root: Path, filepath: str) -> dict:
                 "file": rel,
                 "hint": "Сначала прогоните полный metadata-indexer (фаза 1 XML)"}
 
-    # is_server/is_client — для CommonModule берём из properties_json в Neo4j.
-    is_server, is_client = True, False
+    # FIX-41: модуль формы, которой нет в метаданных объекта (файлы остались
+    # в выгрузке), владельца в графе не получит — пропускаем явно. Ожидаемый
+    # пропуск: иначе каждый такт спотыкался бы об один и тот же файл.
+    if module_kind == "Form":
+        form_rows = neo.rows("MATCH (f:Form {id: $id}) RETURN count(f) AS n",
+                             {"id": module_id})
+        if not (form_rows and form_rows[0]["n"]):
+            log.warning("Форма %s не числится в XML своего объекта — модуль %s "
+                        "пропущен (хвост в выгрузке)", module_id, rel)
+            return {"status": "skipped", "reason": "form_not_in_metadata",
+                    "file": rel, "module_id": module_id}
+
+    # is_server/is_client — для CommonModule берём из properties_json в Neo4j,
+    # для остальных — по роли модуля той же функцией, что и полная
+    # индексация (FIX-34: раньше здесь была своя копия ветвлений).
+    common_info = None
     if module_kind == "CommonModule":
         prop_rows = neo.rows(
             "MATCH (m:MetadataObject:CommonModule {id: $id}) "
@@ -396,15 +480,14 @@ def upsert_bsl_file(neo: Neo4j, src_root: Path, filepath: str) -> dict:
                 props = _json.loads(prop_rows[0]["props"])
             except (TypeError, ValueError):
                 props = {}
-            is_server = bool(props.get("Server", True))
-            is_client = bool(
-                props.get("ClientManagedApplication", False)
-                or props.get("ClientOrdinaryApplication", False)
-            )
-    elif module_kind in ("ObjectModule", "ManagerModule"):
-        is_server, is_client = True, False
-    else:  # Form — контекст определяется директивой процедуры
-        is_server, is_client = False, False
+            common_info = {
+                "is_server": bool(props.get("Server", True)),
+                "is_client": bool(
+                    props.get("ClientManagedApplication", False)
+                    or props.get("ClientOrdinaryApplication", False)
+                ),
+            }
+    is_server, is_client = module_context(module_kind, role, common_info)
 
     try:
         parsed = parse_bsl_module(

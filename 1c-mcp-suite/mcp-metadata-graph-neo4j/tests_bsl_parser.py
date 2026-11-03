@@ -509,6 +509,196 @@ class TestClassifyBslPath(unittest.TestCase):
         self.assertIsNone(classify_bsl_path("Languages/Russian.xml"))
 
 
+class TestClassifyFix34(unittest.TestCase):
+    """
+    FIX-34. Модули, которые раньше шли мимо графа: 2 685 файлов (15 %) на
+    боевой конфигурации, и code_callers отвечал неполно, не говоря об этом.
+    """
+
+    CASES = [
+        # путь → (module_id, module_kind, parent, role)
+        ("AccumulationRegisters/Остатки/Ext/RecordSetModule.bsl",
+         ("AccumulationRegister.Остатки.RecordSetModule", "RecordSetModule",
+          "AccumulationRegister.Остатки", "RecordSetModule")),
+        ("InformationRegisters/Цены/Ext/RecordSetModule.bsl",
+         ("InformationRegister.Цены.RecordSetModule", "RecordSetModule",
+          "InformationRegister.Цены", "RecordSetModule")),
+        ("Sequences/Порядок/Ext/RecordSetModule.bsl",
+         ("Sequence.Порядок.RecordSetModule", "RecordSetModule",
+          "Sequence.Порядок", "RecordSetModule")),
+        ("Constants/Валюта/Ext/ValueManagerModule.bsl",
+         ("Constant.Валюта.ValueManagerModule", "ValueManagerModule",
+          "Constant.Валюта", "ValueManagerModule")),
+        ("Catalogs/Номенклатура/Commands/ПечатьЭтикеток/Ext/CommandModule.bsl",
+         ("Catalog.Номенклатура.Command.ПечатьЭтикеток", "Command",
+          "Catalog.Номенклатура", "Command")),
+        ("Documents/Заказ/Commands/Открыть/Ext/CommandModule.bsl",
+         ("Document.Заказ.Command.Открыть", "Command", "Document.Заказ", "Command")),
+        ("CommonForms/Выбор/Ext/Form/Module.bsl",
+         ("CommonForm.Выбор", "CommonForm", None, "CommonForm")),
+        ("CommonCommands/Загрузка/Ext/CommandModule.bsl",
+         ("CommonCommand.Загрузка", "CommonCommand", None, "CommonCommand")),
+        ("HTTPServices/Обмен/Ext/Module.bsl",
+         ("HTTPService.Обмен", "HTTPService", None, "HTTPService")),
+        ("WebServices/Сервис/Ext/Module.bsl",
+         ("WebService.Сервис", "WebService", None, "WebService")),
+        ("SettingsStorages/Настройки/Ext/ManagerModule.bsl",
+         ("SettingsStorage.Настройки.ManagerModule", "ManagerModule",
+          "SettingsStorage.Настройки", "ManagerModule")),
+        ("SettingsStorages/Настройки/Forms/Сохранение/Ext/Form/Module.bsl",
+         ("SettingsStorage.Настройки.Form.Сохранение", "Form",
+          "SettingsStorage.Настройки", "Form")),
+        ("FilterCriteria/ПоКонтрагенту/Ext/ManagerModule.bsl",
+         ("FilterCriterion.ПоКонтрагенту.ManagerModule", "ManagerModule",
+          "FilterCriterion.ПоКонтрагенту", "ManagerModule")),
+        ("Ext/SessionModule.bsl",
+         ("Configuration.SessionModule", "ConfigurationModule", None, "SessionModule")),
+        ("Ext/ManagedApplicationModule.bsl",
+         ("Configuration.ManagedApplicationModule", "ConfigurationModule", None,
+          "ManagedApplicationModule")),
+    ]
+
+    def test_table(self):
+        for path, expected in self.CASES:
+            with self.subTest(path=path):
+                self.assertEqual(classify_bsl_path(path), expected)
+
+    def test_still_unsupported(self):
+        for path in (
+            "ExternalDataSources/И/Tables/Т/Ext/ManagerModule.bsl",
+            "tests-extension/Ext/SessionModule.bsl",     # совпал бы с основным
+            "Ext/Неизвестный.bsl",
+            "CommonForms/Выбор/Ext/Module.bsl",          # не путь модуля формы
+            "Catalogs/Х/Commands/К/Ext/Module.bsl",      # не CommandModule
+        ):
+            with self.subTest(path=path):
+                self.assertIsNone(classify_bsl_path(path))
+
+    def test_two_commands_of_one_object_are_two_modules(self):
+        a = classify_bsl_path("Catalogs/Х/Commands/А/Ext/CommandModule.bsl")
+        b = classify_bsl_path("Catalogs/Х/Commands/Б/Ext/CommandModule.bsl")
+        self.assertNotEqual(a[0], b[0])
+
+    def test_module_context(self):
+        from bsl_parser import module_context
+        self.assertEqual(module_context("RecordSetModule", "RecordSetModule"), (True, False))
+        self.assertEqual(module_context("ConfigurationModule", "SessionModule"), (True, False))
+        self.assertEqual(module_context("ConfigurationModule", "ManagedApplicationModule"),
+                         (False, True))
+        self.assertEqual(module_context("Command", "Command"), (False, False))
+        self.assertEqual(module_context("CommonForm", "CommonForm"), (False, False))
+        self.assertEqual(module_context("HTTPService", "HTTPService"), (True, False))
+        # общий модуль — по свойствам; без свойств — как раньше: сервер
+        self.assertEqual(module_context("CommonModule", "CommonModule"), (True, False))
+        self.assertEqual(module_context("CommonModule", "CommonModule",
+                                        {"is_server": False, "is_client": True}),
+                         (False, True))
+        # прежние роли — прежние значения
+        self.assertEqual(module_context("ObjectModule", "ObjectModule"), (True, False))
+        self.assertEqual(module_context("Form", "Form"), (False, False))
+
+    def test_is_module_owner(self):
+        from bsl_parser import is_module_owner
+        for owner in ("Catalog.Х.ObjectModule", "Catalog.Х.ManagerModule",
+                      "AccumulationRegister.О.RecordSetModule",
+                      "Constant.В.ValueManagerModule", "Catalog.Х.Form.Ф",
+                      "Catalog.Х.Command.К", "Configuration.SessionModule"):
+            with self.subTest(owner=owner):
+                self.assertTrue(is_module_owner(owner))
+        for owner in ("Catalog.Х", "CommonModule.М", "CommonForm.Ф",
+                      "HTTPService.Обмен", "Catalog.Form", "Document.Command"):
+            with self.subTest(owner=owner):
+                self.assertFalse(is_module_owner(owner))
+
+
+class TestDirTableMatchesKinds(unittest.TestCase):
+    """
+    Сторож расхождения таблицы каталогов слоя 2 со слоем 1 (урок FIX-32:
+    рукописная копия расходится не потому, что поленились, а потому, что
+    источник меняют в другом файле).
+    """
+
+    def test_every_dir_has_the_same_kind_in_layer_1(self):
+        from bsl_parser import DIR_TO_KIND_ENG
+        from metadata_xml import KIND_BY_DIR
+        for d, kind in DIR_TO_KIND_ENG.items():
+            with self.subTest(dir=d):
+                self.assertIn(d, KIND_BY_DIR, "каталога нет в metadata_xml.KINDS")
+                self.assertEqual(KIND_BY_DIR[d][1], kind)
+
+    def test_same_id_modules_are_in_the_table(self):
+        from bsl_parser import DIR_TO_KIND_ENG, SAME_ID_MODULES
+        self.assertLessEqual(set(SAME_ID_MODULES), set(DIR_TO_KIND_ENG))
+
+
+class TestWalkWithPathList(unittest.TestCase):
+    """
+    PERF-14. Разбор по готовому списку (из git или из обхода для отпечатков)
+    обязан дать ровно то же, что прежний обход каталога.
+    """
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        for rel, text in {
+            "CommonModules/М/Ext/Module.bsl": "Процедура А() Экспорт\nКонецПроцедуры\n",
+            "Catalogs/Х/Ext/ObjectModule.bsl": "Процедура Б()\nКонецПроцедуры\n",
+            "Catalogs/Х/Commands/К/Ext/CommandModule.bsl":
+                "&НаКлиенте\nПроцедура ОбработкаКоманды(П, В)\nКонецПроцедуры\n",
+            "ExternalDataSources/И/Tables/Т/Ext/ManagerModule.bsl": "// вне схемы\n",
+        }.items():
+            f = self.root / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(text, encoding="utf-8-sig")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def summary(mods):
+        return sorted((m.module_id, m.module_kind, tuple(p.name for p in m.procedures))
+                      for m in mods)
+
+    def test_same_result(self):
+        from bsl_parser import list_bsl_files, walk_workspace_bsl
+        listed = list_bsl_files(self.root)
+        self.assertEqual(listed, sorted(p.relative_to(self.root).as_posix()
+                                        for p in self.root.rglob("*.bsl")))
+        a = walk_workspace_bsl(self.root)
+        b = walk_workspace_bsl(self.root, paths=listed)
+        self.assertEqual(self.summary(a), self.summary(b))
+        self.assertEqual(len(a), 3)
+
+    def test_missing_file_is_dropped_not_crashed(self):
+        from bsl_parser import walk_workspace_bsl
+        from shortfall import Tally
+        t = Tally("разбор BSL", unit="файл")
+        mods = walk_workspace_bsl(
+            self.root, tally=t,
+            paths=["CommonModules/М/Ext/Module.bsl",
+                   "CommonModules/Удалён/Ext/Module.bsl"])
+        self.assertEqual([m.module_id for m in mods], ["CommonModule.М"])
+        self.assertEqual(t.dropped["нет на диске"], 1)
+        self.assertEqual((t.seen, t.kept), (2, 1))
+
+
+class TestUnclosedDeclarationReport(unittest.TestCase):
+    """LOG-2: предупреждение называет файл и строку, место попадает в сводку."""
+
+    def test_path_and_line(self):
+        import bsl_parser
+        bsl_parser.UNCLOSED_DECLS.clear()
+        text = "Процедура А()\nКонецПроцедуры\n\n// x\nПроцедура Б()\n  Возврат;\n"
+        with self.assertLogs("bsl_parser", level="WARNING") as cm:
+            procs = parse_bsl_text(text, source="CommonModules/М/Ext/Module.bsl")
+        self.assertEqual([p.name for p in procs], ["А"])
+        self.assertEqual(bsl_parser.UNCLOSED_DECLS,
+                         [("CommonModules/М/Ext/Module.bsl", 5, "Б")])
+        self.assertIn("CommonModules/М/Ext/Module.bsl:5", cm.output[0])
+        bsl_parser.UNCLOSED_DECLS.clear()
+
+
 # ─── 10. Полный парсинг небольшого модуля ─────────────────────────────────
 
 
@@ -1161,6 +1351,141 @@ class TestRealWorldCaseSnippet(unittest.TestCase):
         proc = parse_bsl_text(self.SOURCE)[0]
         names = {c.method_name for c in iter_calls(proc.body_text)}
         self.assertIn("УстановитьПараметр", names)
+
+
+class TestQuoteInCommentFix36(unittest.TestCase):
+    """
+    FIX-36. Кавычка в комментарии открывала «строку», которая съедала код
+    до следующей кавычки: на боевой выгрузке так выпадали целые процедуры
+    (МастерСверкиПоЭквайрингу, строка 5404: комментарий
+    `//… по ключу, "ДатаТранзакции, …` без закрывающей кавычки).
+    """
+
+    TEXT = (
+        "Процедура Первая() Экспорт\n"
+        "\t//Ищем по ключу, \"ДатаТранзакции, КодТерминала\n"
+        "\tЗапрос = Новый Запрос;\n"
+        "\tЗапрос.УстановитьПараметр(\"Набор\", Набор);\n"
+        "\tОбщийМодуль.Сделать();\n"
+        "КонецПроцедуры\n"
+        "Процедура Вторая()\n"
+        "\tА = \"текст // не комментарий\"; // а это \"комментарий\n"
+        "\tТекст = \"ВЫБРАТЬ\n"
+        "\t|  // комментарий запроса \"\"в кавычках\"\"\n"
+        "\t|  Поле\";\n"
+        "\tДругой.Вызов();\n"
+        "КонецПроцедуры\n"
+    )
+
+    def test_code_after_quote_in_comment_survives(self):
+        pre = _preprocess(self.TEXT)
+        self.assertEqual(len(pre), len(self.TEXT))
+        self.assertEqual(pre.count("\n"), self.TEXT.count("\n"))
+        self.assertIn("Запрос = Новый Запрос;", pre)
+        self.assertIn("ОбщийМодуль.Сделать();", pre)
+        self.assertIn("Другой.Вызов();", pre)
+        self.assertNotIn("ДатаТранзакции", pre)
+        self.assertNotIn("не комментарий", pre)
+        self.assertNotIn("Поле", pre)
+        self.assertNotIn("ВЫБРАТЬ", pre)
+
+    def test_both_procedures_closed(self):
+        import bsl_parser
+        bsl_parser.UNCLOSED_DECLS.clear()
+        procs = parse_bsl_text(self.TEXT, source="x.bsl")
+        self.assertEqual([p.name for p in procs], ["Первая", "Вторая"])
+        self.assertEqual(bsl_parser.UNCLOSED_DECLS, [])
+        self.assertEqual((procs[0].line_start, procs[0].line_end), (1, 6))
+        calls = [c.method_name for c in iter_calls(procs[0].body_text, line_offset=procs[0].line_start)]
+        self.assertIn("Сделать", calls)
+
+
+class TestEndOnSameLineFix37(unittest.TestCase):
+    """FIX-37. `…; КонецПроцедуры` на одной строке с оператором — законный
+    BSL (боевой пример: ПередЗаписью в ОбъектыКВыгрузкеВКликХаус)."""
+
+    TEXT = (
+        "#Область ОбработчикиСобытий\n"
+        "Процедура ПриЗаписи(Отказ)\n"
+        "\tПодписки.ПриЗаписи_Справочник(ЭтотОбъект, Отказ);\n"
+        "КонецПроцедуры\n"
+        "\n"
+        "Процедура ПередЗаписью(Отказ)\n"
+        "\tЕсли ОбменДанными.Загрузка = Истина Тогда Возврат КонецЕсли;\n"
+        "\tПодписки.ПередЗаписьюПосле_Справочник(ЭтотОбъект, Отказ); КонецПроцедуры\n"
+        "\n"
+        "Функция Ф() Возврат 1; КонецФункции\n"
+        "Функция Г()\n"
+        "\tКонецПроцедурыДата = 1; Объект.КонецФункции = 2;\n"
+        "\tА = \"КонецФункции\"; // КонецФункции\n"
+        "\tВозврат КонецПроцедурыДата;\n"
+        "КонецФункции\n"
+        "#КонецОбласти\n"
+    )
+
+    def test_all_closed_with_right_bounds(self):
+        import bsl_parser
+        bsl_parser.UNCLOSED_DECLS.clear()
+        procs = parse_bsl_text(self.TEXT, source="x.bsl")
+        self.assertEqual(bsl_parser.UNCLOSED_DECLS, [])
+        got = [(p.name, p.line_start, p.line_end) for p in procs]
+        self.assertEqual(got, [("ПриЗаписи", 2, 4), ("ПередЗаписью", 6, 8),
+                               ("Ф", 10, 10), ("Г", 11, 15)])
+        calls = [c.method_name for c in iter_calls(procs[1].body_text,
+                                                    line_offset=procs[1].line_start)]
+        self.assertIn("ПередЗаписьюПосле_Справочник", calls)
+
+
+class TestCommentedLinesInsideQueryFix38(unittest.TestCase):
+    """FIX-38. Внутри многострочного литерала платформа допускает строки-
+    комментарии `//…`; кавычки в них литерал не закрывают (боевой пример:
+    ЗапросСкидкаПоРассрочке в ВыгрузкаКассыВБухгалтерию)."""
+
+    TEXT = (
+        "Функция Запрос(Дата)\n"                                  # 1
+        "\tЗапрос = Новый Запрос;\n"
+        "\tЗапрос.Текст =\n"
+        "\t\"ВЫБРАТЬ\n"
+        "\t|\t\"\"Организация\"\" В (&М)\n"                   # 5
+        "\t|;\n"
+        "\t//\"ВЫБРАТЬ\n"
+        "\t//|\t\tТОГДА \"\"КБТ\"\"\n"
+        "\t//|;\n"
+        "\t|\n"                                                 # 10
+        "\t|////////////////\n"
+        "\t|ВЫБРАТЬ\n"
+        "\t|\tДлинаСтроки(ЕстьNull(Х, \"\"\"\")) = 66\n"
+        "\t|ИТОГИ ПО\n"
+        "\t|\tДень\";\n"                                     # 15
+        "\tЗапрос.УстановитьПараметр(\"Дата1\", Дата);\n"
+        "\tПредставленияЗапросов.Заменить(Запрос.Текст);\n"
+        "\tВозврат Запрос;\n"
+        "КонецФункции\n"
+        "Процедура Следующая()\n"                                 # 20
+        "\tА = \"не закрыта;\n"
+        "\tМодуль.Вызов();\n"
+        "КонецПроцедуры\n"
+    )
+
+    def test_query_with_commented_lines(self):
+        import bsl_parser
+        bsl_parser.UNCLOSED_DECLS.clear()
+        procs = parse_bsl_text(self.TEXT, source="x.bsl")
+        self.assertEqual(bsl_parser.UNCLOSED_DECLS, [])
+        got = [(p.name, p.line_start, p.line_end) for p in procs]
+        self.assertEqual(got, [("Запрос", 1, 19), ("Следующая", 20, 23)])
+        body = procs[0].body_text
+        self.assertNotIn("ВЫБРАТЬ", body)
+        self.assertNotIn("КБТ", body)
+        self.assertNotIn("ДлинаСтроки", body)
+        calls = [c.method_name for c in iter_calls(body, line_offset=1)]
+        self.assertIn("УстановитьПараметр", calls)
+        self.assertIn("Заменить", calls)
+
+    def test_unclosed_quote_stays_on_its_line(self):
+        procs = parse_bsl_text(self.TEXT, source="x.bsl")
+        calls = [c.method_name for c in iter_calls(procs[1].body_text, line_offset=20)]
+        self.assertIn("Вызов", calls)
 
 
 if __name__ == "__main__":

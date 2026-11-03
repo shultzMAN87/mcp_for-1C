@@ -671,5 +671,20 @@ class TestEnumFormsAreParsed(unittest.TestCase):
         self.assertEqual(obj.forms, [])
 
 
+class TestUnknownKindDirsIgnoresExt(unittest.TestCase):
+    """LOG-2: корневой Ext/ — не вид объектов; настоящий незнакомый — виден."""
+
+    def test_ext_is_not_reported_but_unknown_is(self):
+        import tempfile
+        from metadata_xml import unknown_kind_dirs
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "Ext").mkdir()
+            (root / "Ext" / "HomePageWorkArea.xml").write_text("<x/>", encoding="utf-8")
+            (root / "НовыйВид").mkdir()
+            (root / "НовыйВид" / "Объект.xml").write_text("<x/>", encoding="utf-8")
+            self.assertEqual(unknown_kind_dirs(root), [("НовыйВид", 1)])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

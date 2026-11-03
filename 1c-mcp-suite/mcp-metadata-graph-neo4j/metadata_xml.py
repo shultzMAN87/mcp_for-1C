@@ -654,6 +654,14 @@ def _parse_object(path: Path, kind_eng: str, kind_ru: str, kind_ru_plural: str,
 
 # ─── Walker ───────────────────────────────────────────────────────────────
 
+# LOG-2. Каталоги корня выгрузки, которые видом объектов не являются и
+# потому в KINDS не нужны. `Ext/` — свойства самой конфигурации (рабочая
+# область начальной страницы, командный интерфейс, модули конфигурации и
+# т. п.). Без этого исключения детектор каждый прогон писал «Ext (7) — эти
+# объекты в граф НЕ попадут», и настоящее предупреждение тонуло бы в шуме.
+NOT_A_KIND_DIRS = frozenset({"Ext"})
+
+
 def unknown_kind_dirs(root: Path) -> list[tuple[str, int]]:
     """
     Каталоги верхнего уровня с XML внутри, которых нет в KINDS.
@@ -668,7 +676,7 @@ def unknown_kind_dirs(root: Path) -> list[tuple[str, int]]:
     Возвращает пары (имя каталога, число *.xml в нём), отсортированные по
     убыванию числа файлов.
     """
-    known = {dir_name for dir_name, *_ in KINDS}
+    known = {dir_name for dir_name, *_ in KINDS} | NOT_A_KIND_DIRS
     out: list[tuple[str, int]] = []
     if not root.is_dir():
         return out

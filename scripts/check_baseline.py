@@ -156,9 +156,10 @@ def main() -> int:
             "counts": {k: v for k, v in actual.items() if not k.startswith("_")},
             "fingerprints": actual["_fingerprints"],
         }
-        BASELINE.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8")
+        # newline="\n": на Windows write_text превращает \n в \r\n, а
+        # .gitattributes требует LF — git предупреждал при каждом add.
+        with open(BASELINE, "w", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
         print(f"База записана: {BASELINE.relative_to(ROOT)}")
         return 0
 

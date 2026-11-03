@@ -16,7 +16,7 @@
 
 .PHONY: help check-prereqs up down build restart logs clean lock v8std v8std-check \
         test test-full test-strict baseline-update eval-all eval-summary \
-        check-publish archive-index
+        check-publish archive-index graph-refresh
 
 help:
 	@echo "1C MCP Suite — доступные команды:"
@@ -40,8 +40,20 @@ help:
 	@echo "  make eval-all        — прогнать ВСЕ датасеты и показать сводку (EVAL-3)"
 	@echo "  make eval-summary    — сводка по последним отчётам, без прогона"
 	@echo ""
+	@echo "  make graph-refresh   — доиндексировать граф по изменениям выгрузки (SRC-12)"
+	@echo "                         ARGS=--dry-run | --reconcile | --full | --force-unlock"
+	@echo "                         на Windows: .\\scripts\\graph-refresh.ps1 [-DryRun|-Reconcile|-Full]"
+	@echo ""
 	@echo "  make check-publish   — что мешает выложить репозиторий наружу (DOC-2)"
 	@echo "  make archive-index   — пересобрать указатель docs/archive/README.md (DOC-3)"
+
+# SRC-12. Ручная доиндексация графа — то же, что watcher по таймеру и
+# metadata_refresh() из чата. Windows: .\scripts\graph-refresh.ps1
+#   make graph-refresh                      # доиндексировать изменившееся
+#   make graph-refresh ARGS=--dry-run       # показать план
+#   make graph-refresh ARGS=--reconcile     # сверка через git status
+graph-refresh:
+	docker compose run --rm --entrypoint python metadata-indexer /app/apply_changes.py $(ARGS)
 
 test:
 	@echo "CI-1: прогон всех наборов тестов"

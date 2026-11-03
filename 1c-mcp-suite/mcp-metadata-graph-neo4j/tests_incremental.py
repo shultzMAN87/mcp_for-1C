@@ -157,6 +157,93 @@ class TestNormRel(unittest.TestCase):
         self.assertIsInstance(out, str)
 
 
+class TestNormRelAgentPaths(unittest.TestCase):
+    """
+    SRC-4. Пути, которые присылает агент через `metadata_refresh`.
+
+    Главный случай — Windows. До правки `D:\\…\\src\\Catalogs\\…` после
+    замены слешей считался ОТНОСИТЕЛЬНЫМ и возвращался как есть: неверный
+    путь без единой ошибки. Тест на «не упало» выше этого не ловил.
+    """
+
+    def setUp(self):
+        self.root = Path("/data/repo/src")
+        self._saved = os.environ.pop("METADATA_CONFIG_SUBDIR", None)
+
+    def tearDown(self):
+        os.environ.pop("METADATA_CONFIG_SUBDIR", None)
+        if self._saved is not None:
+            os.environ["METADATA_CONFIG_SUBDIR"] = self._saved
+
+    def test_table(self):
+        cases = [
+            # Windows, абсолютный с буквой диска
+            (r"D:\projects\ubd_config\src\Catalogs\Х\Ext\ObjectModule.bsl",
+             "Catalogs/Х/Ext/ObjectModule.bsl"),
+            (r"d:/projects/ubd/src/CommonModules/Общий/Ext/Module.bsl",
+             "CommonModules/Общий/Ext/Module.bsl"),
+            # UNC (WSL)
+            (r"\\wsl$\Ubuntu\home\u\ubd\src\Documents\Д.xml",
+             "Documents/Д.xml"),
+            # от корня репозитория (так отдаёт git diff)
+            ("src/Catalogs/Х.xml", "Catalogs/Х.xml"),
+            # от корня конфигурации
+            ("Catalogs/Х.xml", "Catalogs/Х.xml"),
+            # смешанные слеши
+            ("src\\Catalogs/Х\\Forms/Ф/Ext/Form/Module.bsl",
+             "Catalogs/Х/Forms/Ф/Ext/Form/Module.bsl"),
+            # `..` внутри
+            ("Catalogs/../Catalogs/Х.xml", "Catalogs/Х.xml"),
+            # POSIX абсолютный внутри корня
+            ("/data/repo/src/Enums/П.xml", "Enums/П.xml"),
+            # пробелы по краям
+            ("  Catalogs/Х.xml  ", "Catalogs/Х.xml"),
+        ]
+        for given, expected in cases:
+            with self.subTest(given=given):
+                self.assertEqual(_norm_rel(self.root, given), expected)
+
+    def test_outside(self):
+        for given in ("../secret.bsl", "..", "", "   "):
+            with self.subTest(given=given):
+                self.assertIsNone(_norm_rel(self.root, given))
+
+    def test_files_outside_config_are_returned_as_is(self):
+        """
+        Служебные файлы репозитория (`AGENTS.md`, `openspec/…`) — не
+        выгрузка. `_norm_rel` возвращает их как есть, а отказ формулирует
+        тот, кто знает, что такой путь значит (`source_sync`).
+        """
+        self.assertEqual(_norm_rel(self.root, "AGENTS.md"), "AGENTS.md")
+        self.assertEqual(_norm_rel(self.root, "openspec/changes/a.md"),
+                         "openspec/changes/a.md")
+
+    def test_root_module_needs_the_subdir(self):
+        """
+        Корневой модуль (`src/Ext/SessionModule.bsl`) хвоста-каталога вида
+        не имеет — без `METADATA_CONFIG_SUBDIR` префикс не опознать.
+        """
+        self.assertEqual(_norm_rel(self.root, "src/Ext/SessionModule.bsl"),
+                         "src/Ext/SessionModule.bsl")
+        os.environ["METADATA_CONFIG_SUBDIR"] = "src"
+        self.assertEqual(_norm_rel(self.root, "src/Ext/SessionModule.bsl"),
+                         "Ext/SessionModule.bsl")
+
+    def test_ambiguous_kind_name_in_windows_prefix(self):
+        """
+        `D:\\Documents\\…` — `Documents` тоже вид метаданных. На реальном
+        диске побеждает тот хвост, который существует.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "Catalogs").mkdir()
+            (root / "Catalogs" / "Х.xml").write_text("x", encoding="utf-8")
+            self.assertEqual(
+                _norm_rel(root, r"D:\Documents\proj\src\Catalogs\Х.xml"),
+                "Catalogs/Х.xml")
+
+
 class TestClassifyXmlPath(unittest.TestCase):
 
     def test_toplevel_catalog_xml(self):
@@ -965,6 +1052,11 @@ class SmartFakeNeo4j:
         # Pre-flight: счётчик слоя 1.
         if "count(m) AS n" in c and "MetadataObject" in c:
             return [{"n": 100}]
+        # FIX-41: есть ли узел :Form у модуля формы. По умолчанию — есть.
+        if "MATCH (f:Form {id: $id})" in c:
+            known = getattr(self, "known_forms", None)
+            pid = (parameters or {}).get("id")
+            return [{"n": 1 if known is None or pid in known else 0}]
         # CommonModule props по id (для is_server/is_client конкретного модуля).
         if "properties_json AS props" in c and "$id" in c \
            and "MATCH (m:MetadataObject:CommonModule {id:" in c:
@@ -1094,6 +1186,40 @@ class TestRealWorkspaceUpsert(unittest.TestCase):
         # модуле — 1-3, потому что param-типы из других модулей уже
         # «зафиксированы» (read-only из живого графа).
         self.assertLessEqual(result["resolve"]["fixpoint_iterations"], 3)
+
+
+class TestOrphanFormFix41(unittest.TestCase):
+    """
+    FIX-41. Форма удалена из XML объекта, а `Forms/<Имя>/…` остались в
+    выгрузке: узла :Form нет, и процедуры модуля остались бы без владельца.
+    Точечное обновление пропускает такой модуль как ожидаемый случай.
+    """
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ws = Path(self.tmp.name)
+        for form in ("Живая", "Хвост"):
+            f = self.ws / f"DataProcessors/Обр/Forms/{form}/Ext/Form/Module.bsl"
+            f.parent.mkdir(parents=True)
+            f.write_text("&НаКлиенте\nПроцедура П()\nКонецПроцедуры\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_orphan_form_is_skipped_known_is_written(self):
+        neo = SmartFakeNeo4j()
+        neo.known_forms = {"DataProcessor.Обр.Form.Живая"}
+        r = upsert_bsl_file(neo, self.ws, "DataProcessors/Обр/Forms/Хвост/Ext/Form/Module.bsl")
+        self.assertEqual((r["status"], r["reason"]), ("skipped", "form_not_in_metadata"))
+        self.assertFalse([c for c in neo.calls if c[0] == "query" and "Callable" in c[1]],
+                         "для хвоста ничего не пишется")
+        r = upsert_bsl_file(neo, self.ws, "DataProcessors/Обр/Forms/Живая/Ext/Form/Module.bsl")
+        self.assertEqual(r["status"], "reindexed")
+
+    def test_expected_skip_for_sync(self):
+        from source_sync import EXPECTED_SKIPS
+        self.assertIn("form_not_in_metadata", EXPECTED_SKIPS)
 
 
 if __name__ == "__main__":
