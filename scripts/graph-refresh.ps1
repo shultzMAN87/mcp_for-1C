@@ -11,7 +11,7 @@
 #   .\scripts\graph-refresh.ps1               # доиндексировать изменившееся
 #   .\scripts\graph-refresh.ps1 -DryRun       # показать план, ничего не меняя
 #   .\scripts\graph-refresh.ps1 -Reconcile    # сверка: найти правки без сигнала
-#   .\scripts\graph-refresh.ps1 -Full         # полная индексация (часы)
+#   .\scripts\graph-refresh.ps1 -Full         # полная индексация (~10 минут)
 #   .\scripts\graph-refresh.ps1 -ForceUnlock  # снять аренду упавшего процесса
 #
 # Полный лог каждого запуска — logs\graph-refresh-<дата>.log (FIX-40);
@@ -38,7 +38,7 @@ if ($Reconcile)   { $py += "--reconcile" }
 if ($ForceUnlock) { $py += "--force-unlock" }
 if ($Full) {
     if (-not $Yes -and -not $PrintOnly) {
-        Write-Host "Полная индексация: на боевой выгрузке 1,5–2 часа." -ForegroundColor Yellow
+        Write-Host "Полная индексация: на боевой выгрузке около 10 минут." -ForegroundColor Yellow
         Write-Host "Граф всё это время отвечает по старым данным, watcher ждёт." -ForegroundColor Yellow
         $answer = Read-Host "Продолжить? [y/N]"
         if ($answer -notmatch '^(y|yes|д|да)$') {
