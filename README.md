@@ -254,7 +254,10 @@ MCP-серверы дают агенту данные, а правила и ск
 | антипаттерны кода 1С | `.cursor/rules/bsl-code.mdc` | при работе с `*.bsl` |
 | именование в коде 1С | `.cursor/rules/naming.mdc` | при работе с `*.bsl` |
 | скилл «запрос 1С»: от постановки до проверенного текста | `.cursor/skills/1c-query/` | когда просят написать, починить или ускорить запрос |
-| правило «граф свежий»: `metadata_refresh` после правок | `docs/agents/metadata-refresh.md` | вставить в AGENTS.md репозитория выгрузки |
+| скилл «правка кода»: имена из графа → контекст вызовов → правка → линтер и стандарты → `metadata_refresh` | `.cursor/skills/1c-code-change/` | когда просят написать или изменить код |
+| скилл «анализ влияния»: кто ссылается, кто вызывает, что сломается | `.cursor/skills/1c-impact/` | «что затронет», «где используется», «можно ли удалить» |
+| скилл «обзор и аудит»: подсистемы, объекты вне подсистем, процедуры без вызовов, пробелы графа, линтер по модулю | `.cursor/skills/1c-config-review/` | «найди мёртвый код», «аудит», «что в подсистеме» |
+| правило «граф свежий»: `metadata_refresh` после правок | `.cursor/rules/mcp-tools.mdc` (и отдельно — `docs/agents/metadata-refresh.md` для AGENTS.md, если правила Cursor не подключены) | всегда |
 
 Правила и скилл не привязаны к IDE: правило — markdown, скилл — папка с
 SKILL.md и фронтматтером `name` + `description` (общий формат Agent
@@ -275,7 +278,9 @@ Cursor читает правила из `.cursor/rules/` и скиллы из `.
 cd D:\projects\Cursor\ubd_for_ai
 New-Item -ItemType Directory -Force .cursor\skills | Out-Null
 New-Item -ItemType Junction -Path .cursor\rules            -Target D:\Docker\mcp_for-1C\.cursor\rules
-New-Item -ItemType Junction -Path .cursor\skills\1c-query  -Target D:\Docker\mcp_for-1C\.cursor\skills\1c-query
+foreach ($s in "1c-query","1c-code-change","1c-impact","1c-config-review") {
+  New-Item -ItemType Junction -Path .cursor\skills\$s -Target D:\Docker\mcp_for-1C\.cursor\skills\$s
+}
 ```
 
 Если в рабочем проекте уже есть свои `.cursor/rules`, делайте junction не на
@@ -294,7 +299,7 @@ OpenCode каталог `.cursor/skills` **не читает**. Скиллы о�
 | глобально, для всех проектов | `%USERPROFILE%\.config\opencode\skills\<имя>\SKILL.md` |
 
 Имя папки скилла обязано совпадать с `name` во фронтматтере и состоять из
-строчных латинских букв, цифр и дефисов — `1c-query` подходит.
+строчных латинских букв, цифр и дефисов — все четыре скилла проекта подходят.
 
 Правила Cursor OpenCode подключает полем `instructions` (поддерживает
 маски), AGENTS.md в корне проекта читает сам — правило `metadata_refresh`
@@ -303,7 +308,9 @@ OpenCode каталог `.cursor/skills` **не читает**. Скиллы о�
 ```powershell
 cd D:\projects\Cursor\ubd_for_ai
 New-Item -ItemType Directory -Force .agents\skills, .opencode | Out-Null
-New-Item -ItemType Junction -Path .agents\skills\1c-query -Target D:\Docker\mcp_for-1C\.cursor\skills\1c-query
+foreach ($s in "1c-query","1c-code-change","1c-impact","1c-config-review") {
+  New-Item -ItemType Junction -Path .agents\skills\$s -Target D:\Docker\mcp_for-1C\.cursor\skills\$s
+}
 New-Item -ItemType Junction -Path .opencode\rules          -Target D:\Docker\mcp_for-1C\.cursor\rules
 ```
 
