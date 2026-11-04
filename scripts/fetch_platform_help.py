@@ -53,6 +53,7 @@ import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from envfile import clean_env_value  # noqa: E402 — ENV-1, общий разбор .env
 
 # B-3/FAIL-2: печать не должна ронять скрипт в cp1251-консоли.
 for _stream in (sys.stdout, sys.stderr):
@@ -88,10 +89,7 @@ def read_env_value(name: str) -> str:
         key, _, value = line.partition("=")
         if key.strip() != name:
             continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-            value = value[1:-1]
-        return value
+        return clean_env_value(value)            # ENV-1
     return ""
 
 

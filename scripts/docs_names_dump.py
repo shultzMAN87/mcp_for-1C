@@ -38,6 +38,7 @@ import urllib.request
 from datetime import date
 from pathlib import Path
 from typing import Any, Iterable
+from envfile import clean_env_value  # noqa: E402 — ENV-1, общий разбор .env
 
 # B-3 / FAIL-2: защита потоков ровно в той форме, которую требует
 # scripts/tests_host_scripts.py. Не encoding="utf-8": подмена кодировки дала
@@ -81,7 +82,7 @@ def load_env(path: Path) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        os.environ.setdefault(key.strip(), clean_env_value(value))   # ENV-1
 
 
 def neo4j_rows(cypher: str, params: dict | None = None, timeout: int = 60) -> list[dict]:

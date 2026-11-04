@@ -110,27 +110,13 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def parse_env_file(path: Path) -> dict[str, str]:
     """
-    Парсит .env как простой словарь. Не поддерживает экспорт, подстановку
-    переменных и многострочные значения — нам такие и не нужны.
-    Пустые строки и комментарии (#) пропускаются.
+    Парсит .env по правилам docker compose: комментарий в конце строки
+    (`WORKSPACE_DIR=D:/x   # пояснение`) отрезается, кавычки снимаются.
+    Общий разбор — scripts/envfile.py (ENV-1): до него путь читался вместе
+    с комментарием, и проверка говорила «каталог не найден».
     """
-    result: dict[str, str] = {}
-    if not path.exists():
-        return result
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip()
-        # Срезаем внешние кавычки, если есть
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-            value = value[1:-1]
-        result[key] = value
-    return result
+    from envfile import parse_env_file as _parse
+    return _parse(path)
 
 
 def is_placeholder(value: str) -> bool:
@@ -340,18 +326,29 @@ def check_mcp_shared_secret(env_vars: dict[str, str]) -> CheckResult:
     return ok(f"MCP_SHARED_SECRET задан ({len(secret)} символов)")
 
 
-def check_cursor_config() -> CheckResult:
+def check_cursor_config(env_vars: dict[str, str] | None = None) -> CheckResult:
     """
     CFG-1. Конфиг подключения Cursor существует и в нём нет плейсхолдера.
 
-    Файл кладётся в корень рабочего проекта 1С, поэтому здесь проверяется
-    только копия в репозитории — если её нет, подключать Cursor нечем.
+    Файл живёт в корне рабочего проекта 1С (WORKSPACE_DIR), а в этом
+    репозитории он в .gitignore. Раньше смотрели только сюда — и на чистом
+    клоне проверка всегда предупреждала, даже когда в рабочем проекте всё
+    настроено, а подсказка отсылала к «архиву Захода 1», которого нет.
     """
-    path = ROOT / ".cursor" / "mcp.json"
-    if not path.is_file():
+    candidates = []
+    raw = (os.environ.get("WORKSPACE_DIR") or (env_vars or {}).get("WORKSPACE_DIR") or "").strip()
+    if raw:
+        ws = Path(raw)
+        if not ws.is_absolute():
+            ws = ROOT / ws
+        candidates.append(ws / ".cursor" / "mcp.json")
+    candidates.append(ROOT / ".cursor" / "mcp.json")
+    path = next((c for c in candidates if c.is_file()), None)
+    if path is None:
         return warn(
             ".cursor/mcp.json не найден — Cursor не к чему подключать",
-            "Файл идёт в архиве Захода 1; положите его в корень рабочего проекта 1С.",
+            "Положите его в корень рабочего проекта 1С (WORKSPACE_DIR): образец — "
+            "README.md, «5. Подключение Cursor». Для OpenCode — «6. Правила и скиллы».",
         )
     text = path.read_text(encoding="utf-8", errors="replace")
     if "ЗАМЕНИТЬ_НА_MCP_SHARED_SECRET" in text:
@@ -364,7 +361,7 @@ def check_cursor_config() -> CheckResult:
             ".cursor/mcp.json указывает на /sse — этого эндпоинта больше нет (TR-1)",
             "Замените /sse на /mcp во всех четырёх адресах.",
         )
-    return ok(".cursor/mcp.json заполнен")
+    return ok(f".cursor/mcp.json заполнен ({path})")
 
 
 def check_workspace(env_vars: dict[str, str]) -> CheckResult:
@@ -399,14 +396,30 @@ def check_workspace(env_vars: dict[str, str]) -> CheckResult:
             "(Конфигуратор → Конфигурация → Выгрузить конфигурацию в файлы) "
             "в этот каталог, либо поправьте WORKSPACE_DIR в .env.",
         )
-    if not _dir_has_files(path, (".xml", ".bsl")):
+    # SRC (PLAN-11): WORKSPACE_DIR — корень репозитория выгрузки (там .git),
+    # а сама конфигурация — в подкаталоге CONFIG_SUBDIR (обычно src). Раньше
+    # проверка этого не знала и на раскладке из README говорила «в корне нет
+    # ни .xml, ни .bsl» — про правильно настроенный клон.
+    sub = (os.environ.get("CONFIG_SUBDIR") or env_vars.get("CONFIG_SUBDIR") or "").strip().strip("/\\")
+    config = path / sub if sub else path
+    git_note = "git" if (path / ".git").exists() else "без git"
+    if sub and not config.is_dir():
         return fail(
-            f"{label}: в корне каталога нет ни .xml, ни .bsl",
-            "Граф метаданных будет пустым, bsl-checker не найдёт файлов. "
-            "WORKSPACE_DIR должен указывать на корень выгрузки — туда, где "
-            "лежит Configuration.xml, а не на каталог уровнем выше.",
+            f"{label}, CONFIG_SUBDIR={sub}: подкаталога {sub} нет",
+            f"Ожидалась конфигурация в {config}. Проверьте CONFIG_SUBDIR в .env "
+            "(пусто — если Configuration.xml лежит прямо в WORKSPACE_DIR).",
         )
-    return ok(f"{label}: выгрузка найдена ({path})")
+    if not (config / "Configuration.xml").is_file() and not _dir_has_files(config, (".xml", ".bsl")):
+        hint_sub = ("" if sub else
+                    " Если выгрузка лежит в подкаталоге репозитория (src), "
+                    "задайте CONFIG_SUBDIR=src.")
+        return fail(
+            f"{label}{', CONFIG_SUBDIR=' + sub if sub else ''}: нет Configuration.xml в {config}",
+            "Граф метаданных будет пустым, bsl-checker не найдёт файлов. "
+            "WORKSPACE_DIR — корень репозитория выгрузки (где .git), "
+            "CONFIG_SUBDIR — подкаталог с Configuration.xml." + hint_sub,
+        )
+    return ok(f"{label}: выгрузка найдена ({config}, {git_note})")
 
 
 def check_compose_file_separator(env_vars: dict[str, str]) -> CheckResult:
@@ -678,7 +691,7 @@ def run_all_checks() -> list[tuple[str, CheckResult]]:
     checks.append(("COMPOSE_FILE",     check_compose_file_separator(env_vars)))
     checks.append(("Neo4j пароль",     check_neo4j_password(env_vars)))
     checks.append(("MCP секрет",       check_mcp_shared_secret(env_vars)))
-    checks.append((".cursor/mcp.json", check_cursor_config()))
+    checks.append((".cursor/mcp.json", check_cursor_config(env_vars)))
     checks.append(("workspace/",       check_workspace(env_vars)))
     checks.append(("platform-help-data/", check_platform_help()))
     checks.append(("v8std-data/",       check_v8std_data()))

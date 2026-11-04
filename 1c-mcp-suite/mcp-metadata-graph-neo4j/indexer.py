@@ -67,13 +67,15 @@ from bsl_resolver import build_call_graph, build_index_from_neo4j
 try:
     from shortfall import TallyBook
     from graph_integrity import (
-        HAS_METHOD_COUNT_CYPHER, STATE_OK, log_ownership, ownership_report,
+        HAS_METHOD_COUNT_CYPHER, STATE_EMPTY, STATE_OK, log_ownership,
+        ownership_report,
     )
 except ImportError:  # pragma: no cover — путь только для локального запуска
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from shortfall import TallyBook
     from graph_integrity import (
-        HAS_METHOD_COUNT_CYPHER, STATE_OK, log_ownership, ownership_report,
+        HAS_METHOD_COUNT_CYPHER, STATE_EMPTY, STATE_OK, log_ownership,
+        ownership_report,
     )
 
 
@@ -562,6 +564,15 @@ def _git_decide(neo: Neo4j, ctx, store, forced: bool) -> "_GitRun":
     state = store.read()
     usable, why = state_usable(state, ctx)
     if not usable:
+        # FIX-43. Пустой граф (новый стек, `docker compose down -v`) нечего
+        # сверять с отпечатками: результат один — полная индексация. А подсчёт
+        # отпечатков на боевой выгрузке — 12 минут обхода 58 тысяч файлов через
+        # границу Docker (стенд 4 ноября, чистый подъём). Сразу полная.
+        if not check_ownership(neo).get("objects"):
+            log.info("Состояния источника нет, граф пуст — первая индексация, "
+                     "сразу полная (отпечатки выгрузки не нужны)")
+            run.plan, run.mark = "full", True
+            return run
         log.info("Состояния источника нет (%s) — проверяю граф прежним "
                  "способом, по отпечаткам выгрузки (один раз)", why)
         run.mark = True
@@ -841,6 +852,10 @@ def _run_phases(neo: Neo4j, src_dir: Path, cfg_name: str, *, force_xml: bool,
                         "Запускаю фазу 2 — она пересоберёт слой кода и связи "
                         "владения; выгрузка при этом не перечитывается.")
         bsl_needs_reindex = True
+    elif ownership["state"] == STATE_EMPTY:
+        # Пустой граф перед прогоном — первая индексация, а не авария; совет
+        # «METADATA_FORCE_BSL=true» здесь только сбивал с толку.
+        log.info("Граф пуст — первая индексация, так и должно быть")
     elif ownership["state"] != STATE_OK:
         # Прогон и так будет, но сказать о состоянии «до» стоит: по паре
         # строк «до» и «после» видно, починил прогон что-нибудь или нет.

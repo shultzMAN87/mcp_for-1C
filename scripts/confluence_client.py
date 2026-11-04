@@ -23,6 +23,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
+from envfile import clean_env_value  # noqa: E402 — ENV-1, общий разбор .env
 
 import httpx
 
@@ -74,7 +75,7 @@ def load_env(path: Path = REPO_ROOT / ".env") -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        os.environ.setdefault(key.strip(), clean_env_value(value))   # ENV-1
 
 
 class ConfluenceClient:

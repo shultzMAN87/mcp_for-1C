@@ -1,6 +1,7 @@
 import asyncio, sys
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
+from envfile import clean_env_value  # noqa: E402 — ENV-1, общий разбор .env
 
 # B-3/FAIL-2: печать не должна ронять то, что диагностирует. Консоль
 # PowerShell бывает cp1251, а в выводе стоит «←» — на нём скрипт падал бы с
@@ -24,7 +25,7 @@ SERVERS["v8std"] = 8765
 def secret():
     for line in open(".env", encoding="utf-8-sig"):
         if line.startswith("MCP_SHARED_SECRET="):
-            return line.split("=", 1)[1].strip()
+            return clean_env_value(line.split("=", 1)[1])   # ENV-1
     sys.exit("MCP_SHARED_SECRET не найден в .env")
 
 async def one(name, port, s):

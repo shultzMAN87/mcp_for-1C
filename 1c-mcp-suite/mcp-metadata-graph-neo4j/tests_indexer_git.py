@@ -374,5 +374,23 @@ class TestIndexerLeaseFix39(IndexerGitCase):
         self.assertEqual(self.store.lock_owner, "watcher", "чужую аренду не отпускаем")
 
 
+class TestEmptyGraphGoesFullFix43(IndexerGitCase):
+    """FIX-43. Чистый подъём стека 4 ноября: состояния нет, граф пуст — а
+    индексер 12 минут считал отпечатки выгрузки, чтобы прийти к той же
+    полной индексации."""
+
+    def test_empty_graph_no_state_is_full_without_fingerprints(self):
+        self.own = ownership(state="empty", objects=0)
+        run = indexer._git_start(FakeNeo(), forced=False)
+        self.assertEqual(run.plan, "full")
+        self.assertTrue(run.mark)
+        indexer._git_finish(FakeNeo(), run, 1)
+
+    def test_non_empty_graph_without_state_still_checks_fingerprints(self):
+        run = indexer._git_start(FakeNeo(), forced=False)
+        self.assertIsNone(run.plan, "граф не пуст — прежний путь, по отпечаткам")
+        indexer._git_finish(FakeNeo(), run, 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

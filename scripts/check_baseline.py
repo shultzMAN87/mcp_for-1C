@@ -28,6 +28,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from envfile import clean_env_value  # noqa: E402 — ENV-1, общий разбор .env
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "evals" / "baseline.json"
@@ -83,7 +84,7 @@ def env_chain() -> dict:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             k, v = line.split("=", 1)
-            out[k.strip()] = v.strip().strip('"').strip("'")
+            out[k.strip()] = clean_env_value(v)      # ENV-1
     out.update(os.environ)
     return out
 

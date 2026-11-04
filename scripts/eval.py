@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from envfile import clean_env_value  # noqa: E402 — ENV-1, общий разбор .env
 
 # B-3/FAIL-2: печать не должна ронять то, что диагностирует. Консоль
 # PowerShell бывает cp1251, а в выводе стоит «←» — на нём скрипт падал бы с
@@ -154,10 +155,7 @@ def load_env_file(path: Path) -> dict[str, str]:
         if "=" not in line:
             continue
         k, v = line.split("=", 1)
-        v = v.strip()
-        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
-            v = v[1:-1]
-        result[k.strip()] = v
+        result[k.strip()] = clean_env_value(v)       # ENV-1
     return result
 
 
